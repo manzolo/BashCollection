@@ -934,8 +934,8 @@ show_banner() {
     echo -e "${BLUE}"
     echo "╔══════════════════════════════════════════════════════════════════════════════╗"
     echo "║                               DOCKER MANAGER                                 ║"
-    echo "║                            Docker Management Script                         ║"
-    echo "║                                   v1.0                                      ║"
+    echo "║                            Docker Management Script                          ║"
+    echo "║                                   v1.0                                       ║"
     echo "╚══════════════════════════════════════════════════════════════════════════════╝"
     echo -e "${NC}"
     echo
