@@ -82,13 +82,11 @@ search_drivers() {
         return
     fi
 
-    local DRIVERS_MENU
-    readarray -t DRIVERS_MENU <<< "$DRIVER_LIST"
-
-    # Add empty strings for whiptail menu format
-    for i in "${!DRIVERS_MENU[@]}"; do
-        DRIVERS_MENU[$i]+=" "
-    done
+    # Create proper whiptail menu format (tag description pairs)
+    local DRIVERS_MENU=()
+    while IFS= read -r driver; do
+        DRIVERS_MENU+=("$driver" "NVIDIA Driver $driver")
+    done <<< "$DRIVER_LIST"
     
     CHOICE=$(whiptail --title "Available NVIDIA Drivers" --menu "Select a driver to install" 25 78 15 "${DRIVERS_MENU[@]}" 3>&1 1>&2 2>&3)
     
