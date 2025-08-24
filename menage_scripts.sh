@@ -17,7 +17,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # List of directories to scan for scripts
-SCRIPT_DIRS=("backup" "cleaner" "docker" "nvidia" "utils")
+SCRIPT_DIRS=("backup" "cleaner" "docker" "nvidia" "utils" "vm")
 
 install_scripts() {
     echo -e "${BLUE}>>> Installing scripts into: $INSTALL_DIR${NC}"
