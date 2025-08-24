@@ -91,8 +91,8 @@ mount_with_nbd() {
         format="raw"
     fi
     
-    if ! connect_nbd "$file" "$format"; then
-        whiptail --msgbox "NBD connection error." 8 50
+    if ! connect_nbd "$file" "$format" >> "$LOG_FILE" 2>&1; then
+        whiptail --msgbox "NBD connection error. Check $LOG_FILE for details." 8 50
         return 1
     fi
     
@@ -109,7 +109,8 @@ mount_with_nbd() {
     
     if [ ${#part_items[@]} -eq 0 ]; then
         whiptail --msgbox "No partitions found." 8 50
-        safe_nbd_disconnect "$NBD_DEVICE"
+        safe_nbd_disconnect "$NBD_DEVICE" >> "$LOG_FILE" 2>&1
+        NBD_DEVICE=""
         return 1
     fi
     
@@ -119,21 +120,22 @@ mount_with_nbd() {
     local choice=$(whiptail --title "NBD Mount" --menu "Select the partition to mount:" 18 70 10 "${part_items[@]}" 3>&1 1>&2 2>&3)
     
     if [ $? -ne 0 ]; then
-        safe_nbd_disconnect "$NBD_DEVICE"
+        safe_nbd_disconnect "$NBD_DEVICE" >> "$LOG_FILE" 2>&1
+        NBD_DEVICE=""
         return 1
     fi
     
     if [ "$choice" -eq "$analyze_option" ]; then
-        local analysis=$(analyze_partitions "$NBD_DEVICE")
+        local analysis=$(analyze_partitions "$NBD_DEVICE" 2>>"$LOG_FILE")
         local luks_info=""
-        local luks_parts=($(detect_luks "$NBD_DEVICE"))
+        local luks_parts=($(detect_luks "$NBD_DEVICE" 2>>"$LOG_FILE"))
         if [ ${#luks_parts[@]} -gt 0 ]; then
             luks_info="\n\n=== LUKS PARTITIONS ===\n"
             for part in "${luks_parts[@]}"; do
                 luks_info="$luks_info$(basename "$part")\n"
             done
         fi
-        safe_nbd_disconnect "$NBD_DEVICE"
+        safe_nbd_disconnect "$NBD_DEVICE" >> "$LOG_FILE" 2>&1
         NBD_DEVICE=""
         whiptail --title "Full Analysis" --msgbox "$analysis$luks_info" 20 80
         return 0
@@ -151,17 +153,19 @@ mount_with_nbd() {
     
     if [ -z "$selected_part" ]; then
         whiptail --msgbox "Selection error." 8 50
-        safe_nbd_disconnect "$NBD_DEVICE"
+        safe_nbd_disconnect "$NBD_DEVICE" >> "$LOG_FILE" 2>&1
+        NBD_DEVICE=""
         return 1
     fi
     
     if cryptsetup isLuks "$selected_part" 2>/dev/null; then
-        local luks_mapped=$(open_luks "$selected_part")
+        local luks_mapped=$(open_luks "$selected_part" 2>>"$LOG_FILE")
         if [ $? -eq 0 ] && [ -n "$luks_mapped" ]; then
             selected_part="$luks_mapped"
         else
-            whiptail --msgbox "Cannot open the LUKS partition." 8 50
-            safe_nbd_disconnect "$NBD_DEVICE"
+            whiptail --msgbox "Cannot open the LUKS partition. Check $LOG_FILE for details." 8 50
+            safe_nbd_disconnect "$NBD_DEVICE" >> "$LOG_FILE" 2>&1
+            NBD_DEVICE=""
             return 1
         fi
     fi
@@ -182,7 +186,9 @@ mount_with_nbd() {
         else
             mount_opts="$mount_opts umask=022"
         fi
-        mount "$mount_opts" "$selected_part" "$mount_point" 2>>"$LOG_FILE" || mount "$selected_part" "$mount_point" 2>>"$LOG_FILE"
+        if ! mount "$mount_opts" "$selected_part" "$mount_point" 2>>"$LOG_FILE"; then
+            mount "$selected_part" "$mount_point" 2>>"$LOG_FILE"
+        fi
         echo 100
         if [ $? -eq 0 ]; then
             echo "# Mounted successfully!"
@@ -196,7 +202,6 @@ mount_with_nbd() {
     
     if [ $? -eq 0 ]; then
         MOUNTED_PATHS+=("$mount_point")
-        sleep 1
         if [ -n "$original_uid" ] && [ -n "$original_gid" ]; then
             chmod 755 "$mount_point" 2>/dev/null || true
             chown "$original_uid:$original_gid" "$mount_point" 2>/dev/null || true
@@ -224,32 +229,50 @@ echo "Disk space:"
 df -h "$mount_point" 2>/dev/null
 echo ""
 echo "To navigate: cd $mount_point"
-echo "If you have permission issues: sudo -u $original_user bash"
+echo "To unmount: sudo umount $mount_point && sudo rmdir $mount_point"
+echo "To disconnect NBD: sudo qemu-nbd -d $NBD_DEVICE"
 EOF
         chmod +x "$helper_script"
         chown "$original_uid:$original_gid" "$helper_script" 2>/dev/null || true
-        log "Mounted $selected_part at $mount_point, access: $access_info"
-        whiptail --msgbox "Partition mounted!\n\nPartition: $(basename "$selected_part")\nPath: $mount_point\nSpace: $space_info$user_info\n\nUseful commands:\n- cd $mount_point\n- $helper_script\n- sudo -u $original_user ls -la $mount_point\n\nPress OK when you're done." 20 80
-        rm -f "$helper_script"
-        (
-            echo 0
-            echo "# Unmounting..."
-            umount "$mount_point" 2>/dev/null
+        
+        # Open interactive shell in current terminal
+        log "Opening interactive shell at $mount_point" >> "$LOG_FILE"
+        whiptail --msgbox "Starting shell at $mount_point\n\nUse 'exit' to return to the menu.\nTo unmount manually: sudo umount $mount_point && sudo rmdir $mount_point\nTo disconnect NBD: sudo qemu-nbd -d $NBD_DEVICE" 12 70
+        if [ -n "$original_user" ]; then
+            # Use setsid to avoid ioctl and job control issues
+            setsid bash --norc -c "cd $mount_point && exec bash" < /dev/tty 2>>"$LOG_FILE" || {
+                log "Failed to start shell with setsid for $original_user" >> "$LOG_FILE"
+                bash --norc -c "cd $mount_point && exec bash" < /dev/tty 2>>"$LOG_FILE"
+            }
+        else
+            setsid bash --norc -c "cd $mount_point && exec bash" < /dev/tty 2>>"$LOG_FILE"
+        fi
+        
+        # Ensure cleanup after shell exits
+        log "Shell exited, checking mount and NBD status" >> "$LOG_FILE"
+        if mountpoint -q "$mount_point" 2>/dev/null; then
+            umount "$mount_point" 2>>"$LOG_FILE" || log "Failed to unmount $mount_point" >> "$LOG_FILE"
             rmdir "$mount_point" 2>/dev/null
-            echo 100
-            echo "# Unmounted!"
-            sleep 1
-        ) | whiptail --gauge "Unmounting..." 8 50 0
-        MOUNTED_PATHS=("${MOUNTED_PATHS[@]/$mount_point}")
-        safe_nbd_disconnect "$NBD_DEVICE"
-        log "Unmounted $mount_point and disconnected NBD"
-        whiptail --msgbox "Unmounting completed." 8 50
+            MOUNTED_PATHS=("${MOUNTED_PATHS[@]/$mount_point}")
+            log "Unmounted $mount_point" >> "$LOG_FILE"
+        fi
+        if [ -n "$NBD_DEVICE" ] && [ -b "$NBD_DEVICE" ]; then
+            safe_nbd_disconnect "$NBD_DEVICE" >> "$LOG_FILE" 2>&1
+            NBD_DEVICE=""
+            log "Disconnected $NBD_DEVICE" >> "$LOG_FILE"
+        fi
+        
+        rm -f "$helper_script"
+        whiptail --msgbox "Shell closed and mount cleaned up." 8 50
         return 0
     else
         rmdir "$mount_point" 2>/dev/null
-        log "Mount failed for $selected_part"
+        log "Mount failed for $selected_part" >> "$LOG_FILE"
+        if [ -n "$NBD_DEVICE" ] && [ -b "$NBD_DEVICE" ]; then
+            safe_nbd_disconnect "$NBD_DEVICE" >> "$LOG_FILE" 2>&1
+            NBD_DEVICE=""
+        fi
         whiptail --msgbox "Error mounting $(basename "$selected_part").\nFilesystem may be corrupted or unsupported.\nCheck log: $LOG_FILE" 10 70
-        safe_nbd_disconnect "$NBD_DEVICE"
         return 1
     fi
 }
