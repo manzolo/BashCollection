@@ -103,7 +103,7 @@ main_menu() {
                         done
                     fi
                     
-                    safe_nbd_disconnect "$NBD_DEVICE"
+                    safe_nbd_disconnect "$NBD_DEVICE" >/dev/null 2>&1
                     NBD_DEVICE=""
                     
                     whiptail --title "Structure Analysis" --msgbox "$analysis$luks_info" 20 80
