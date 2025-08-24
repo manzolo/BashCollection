@@ -1084,7 +1084,8 @@ advanced_resize() {
         local part_dev="${NBD_DEVICE}p${part}"
         local fs_type=$(blkid -o value -s TYPE "$part_dev" 2>/dev/null || echo "Unknown FS")
         
-        # New: Get the used/free space using df (safe with NBD)
+        # New: Get the used/free/total space using df (safe with NBD)
+        local total_size="?"
         local used_size="?"
         local free_size="?"
         
@@ -1093,14 +1094,15 @@ advanced_resize() {
         mkdir -p "$tmp_mount"
         mount "$part_dev" "$tmp_mount" 2>/dev/null
         if [ $? -eq 0 ]; then
+            total_size=$(df -h --output=size "$tmp_mount" | sed '1d' | tr -d ' ')
             used_size=$(df -h --output=used "$tmp_mount" | sed '1d' | tr -d ' ')
             free_size=$(df -h --output=avail "$tmp_mount" | sed '1d' | tr -d ' ')
             umount "$tmp_mount"
         fi
         rmdir "$tmp_mount" 2>/dev/null
         
-        # Create a more concise label
-        local label="Partition $part | Used: $used_size | Free: $free_size | FS Type: $fs_type"
+        # Create a more concise label with total size
+        local label="Partition $part | Total: $total_size | Used: $used_size | Free: $free_size | FS Type: $fs_type"
         partition_items+=("$part" "$label")
     done
     
@@ -1110,10 +1112,11 @@ advanced_resize() {
         return 1
     fi
     
-    local partition_choice=$(whiptail --title "Select Partition" --menu "Select the partition to resize:" 20 80 12 "${partition_items[@]}" 3>&1 1>&2 2>&3)
-    
-    if [ $? -ne 0 ]; then
-        whiptail --msgbox "Partition selection cancelled." 8 60
+    local partition_choice
+    if ! partition_choice=$(whiptail --title "Select Partition" --menu "Select the partition to resize:" 20 80 12 "${partition_items[@]}" 3>&1 1>&2 2>&3); then
+        # This is the correct way to handle a canceled menu
+        whiptail --msgbox "Selezione partizione annullata. Lo script ora terminerà e farà pulizia." 10 60
+        log "Selezione partizione annullata dall'utente."
         safe_nbd_disconnect "$NBD_DEVICE"
         return 1
     fi
