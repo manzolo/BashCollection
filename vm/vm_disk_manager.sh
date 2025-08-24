@@ -22,7 +22,7 @@ CLEANUP_DONE=false
 LOG_FILE="/tmp/vm_image_manager_log_$$.txt"
 echo "Script started at $(date)" > "$LOG_FILE"
 
-# Funzione helper per log
+# Helper function for logging
 log() {
     echo "[$(date '+%H:%M:%S')] $1" >> "$LOG_FILE"
 }
@@ -428,7 +428,7 @@ connect_nbd() {
     local retries=3
     (
         for i in $(seq 1 $retries); do
-            echo $(( (i-1)*33 ))  # Progresso: 0%, 33%, 66%
+            echo $(( (i-1)*33 ))  # Progress: 0%, 33%, 66%
             echo "# Attempt $i/$retries: Connecting NBD..."
             log "Attempt $i/$retries: Connecting $NBD_DEVICE"
             if timeout 30 qemu-nbd --connect="$NBD_DEVICE" -f "$format" "$file" 2>>"$LOG_FILE"; then
@@ -500,7 +500,7 @@ detect_windows_image() {
         if [ -b "$part" ]; then
             local fs_type=$(blkid -o value -s TYPE "$part" 2>/dev/null)
             if [ "$fs_type" = "ntfs" ]; then
-                # Mount temporaneo per check file (read-only)
+                # Temporary mount for checking files (read-only)
                 local temp_mount="/tmp/win_check_$$"
                 mkdir -p "$temp_mount"
                 if mount -o ro "$part" "$temp_mount" 2>/dev/null; then
@@ -508,7 +508,7 @@ detect_windows_image() {
                         umount "$temp_mount"
                         rmdir "$temp_mount"
                         log "Windows image detected"
-                        return 0  # È Windows
+                        return 0  # Is Windows
                     fi
                     umount "$temp_mount"
                 fi
@@ -517,7 +517,7 @@ detect_windows_image() {
         fi
     done
     log "Not a Windows image"
-    return 1  # Non Windows
+    return 1  # Not Windows
 }
 
 # Function to analyze partitions
@@ -1005,9 +1005,9 @@ advanced_resize() {
     fi
     
     # Check free space before resizing
-	if ! check_free_space "$file" "$size"; then
-		return 1
-	fi
+    if ! check_free_space "$file" "$size"; then
+        return 1
+    fi
     
     # Resize the image with progress
     (
@@ -1115,8 +1115,8 @@ advanced_resize() {
     local partition_choice
     if ! partition_choice=$(whiptail --title "Select Partition" --menu "Select the partition to resize:" 20 80 12 "${partition_items[@]}" 3>&1 1>&2 2>&3); then
         # This is the correct way to handle a canceled menu
-        whiptail --msgbox "Selezione partizione annullata. Lo script ora terminerà e farà pulizia." 10 60
-        log "Selezione partizione annullata dall'utente."
+        whiptail --msgbox "Partition selection cancelled. The script will now terminate and perform cleanup." 10 60
+        log "Partition selection cancelled by the user."
         safe_nbd_disconnect "$NBD_DEVICE"
         return 1
     fi
