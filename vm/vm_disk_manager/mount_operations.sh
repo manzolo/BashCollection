@@ -174,19 +174,19 @@ mount_with_nbd() {
     mkdir -p "$mount_point"
     
     local original_user=${SUDO_USER:-$(who am i | awk '{print $1}')}
-    local original_uid=${SUDO_UID:-$(id -u "$original_user" 2>/dev/null)}
-    local original_gid=${SUDO_GID:-$(id -g "$original_user" 2>/dev/null)}
     
     (
         echo 0
         echo "# Mounting $selected_part..."
-        local mount_opts="-o"
-        if [ -n "$original_uid" ]; then
-            mount_opts="$mount_opts uid=$original_uid,gid=$original_gid,umask=022"
-        else
-            mount_opts="$mount_opts umask=022"
+        local mount_opts=""
+        if [ -n "$original_user" ]; then
+            local original_uid=$(id -u "$original_user" 2>/dev/null)
+            local original_gid=$(id -g "$original_user" 2>/dev/null)
+            if [ -n "$original_uid" ]; then
+                mount_opts="-o uid=$original_uid,gid=$original_gid,umask=022"
+            fi
         fi
-        if ! mount "$mount_opts" "$selected_part" "$mount_point" 2>>"$LOG_FILE"; then
+        if ! mount $mount_opts "$selected_part" "$mount_point" 2>>"$LOG_FILE"; then
             mount "$selected_part" "$mount_point" 2>>"$LOG_FILE"
         fi
         echo 100
@@ -202,53 +202,27 @@ mount_with_nbd() {
     
     if [ $? -eq 0 ]; then
         MOUNTED_PATHS+=("$mount_point")
-        if [ -n "$original_uid" ] && [ -n "$original_gid" ]; then
-            chmod 755 "$mount_point" 2>/dev/null || true
-            chown "$original_uid:$original_gid" "$mount_point" 2>/dev/null || true
-        fi
-        local access_info="OK"
         if [ -n "$original_user" ]; then
-            if ! su - "$original_user" -c "test -r '$mount_point'" 2>/dev/null; then
-                access_info="Limited - use sudo if necessary"
-                find "$mount_point" -maxdepth 1 -type d -exec chmod 755 {} \; 2>/dev/null || true
+            local original_uid=$(id -u "$original_user" 2>/dev/null)
+            local original_gid=$(id -g "$original_user" 2>/dev/null)
+            if [ -n "$original_uid" ] && [ -n "$original_gid" ]; then
+                chmod 755 "$mount_point" 2>/dev/null || true
+                chown "$original_uid:$original_gid" "$mount_point" 2>/dev/null || true
             fi
         fi
-        local space_info=$(df -h "$mount_point" 2>/dev/null | tail -1)
-        local user_info=""
-        if [ -n "$original_user" ]; then
-            user_info="\nUser: $original_user\nAccess: $access_info"
-        fi
-        local helper_script="/tmp/mount_helper_$$"
-        cat > "$helper_script" << EOF
-#!/bin/bash
-echo "=== Mount Point: $mount_point ==="
-echo "Contents:"
-ls -la "$mount_point" 2>/dev/null || echo "Access denied, try with sudo"
-echo ""
-echo "Disk space:"
-df -h "$mount_point" 2>/dev/null
-echo ""
-echo "To navigate: cd $mount_point"
-echo "To unmount: sudo umount $mount_point && sudo rmdir $mount_point"
-echo "To disconnect NBD: sudo qemu-nbd -d $NBD_DEVICE"
-EOF
-        chmod +x "$helper_script"
-        chown "$original_uid:$original_gid" "$helper_script" 2>/dev/null || true
         
-        # Open interactive shell in current terminal
-        log "Opening interactive shell at $mount_point" >> "$LOG_FILE"
-        whiptail --msgbox "Starting shell at $mount_point\n\nUse 'exit' to return to the menu.\nTo unmount manually: sudo umount $mount_point && sudo rmdir $mount_point\nTo disconnect NBD: sudo qemu-nbd -d $NBD_DEVICE" 12 70
+        log "Mounted $selected_part at $mount_point" >> "$LOG_FILE"
+        
+        whiptail --msgbox "Partition mounted!\n\nPath: $mount_point\n\nUse the 'exit' command to return to the menu.\n" 12 70
+        
+        # Open interactive shell in current terminal, waiting for user to exit
         if [ -n "$original_user" ]; then
-            # Use setsid to avoid ioctl and job control issues
-            setsid bash --norc -c "cd $mount_point && exec bash" < /dev/tty 2>>"$LOG_FILE" || {
-                log "Failed to start shell with setsid for $original_user" >> "$LOG_FILE"
-                bash --norc -c "cd $mount_point && exec bash" < /dev/tty 2>>"$LOG_FILE"
-            }
+            sudo -u "$original_user" bash -c "cd '$mount_point' && exec bash -i"
         else
-            setsid bash --norc -c "cd $mount_point && exec bash" < /dev/tty 2>>"$LOG_FILE"
+            bash -c "cd '$mount_point' && exec bash -i"
         fi
         
-        # Ensure cleanup after shell exits
+        # Cleanup is now correctly placed AFTER the shell exits
         log "Shell exited, checking mount and NBD status" >> "$LOG_FILE"
         if mountpoint -q "$mount_point" 2>/dev/null; then
             umount "$mount_point" 2>>"$LOG_FILE" || log "Failed to unmount $mount_point" >> "$LOG_FILE"
@@ -262,7 +236,6 @@ EOF
             log "Disconnected $NBD_DEVICE" >> "$LOG_FILE"
         fi
         
-        rm -f "$helper_script"
         whiptail --msgbox "Shell closed and mount cleaned up." 8 50
         return 0
     else
