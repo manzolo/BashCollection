@@ -93,3 +93,27 @@ cleanup() {
     log "Cleanup completed"
     echo "Cleanup completed."
 }
+
+# Function to cleanup orphaned NBD devices
+cleanup_nbd_devices() {
+    log "Starting NBD device cleanup"
+    local nbd_devices=$(ls -1 /dev/nbd* 2>/dev/null)
+    local cleaned_count=0
+    
+    if [ -z "$nbd_devices" ]; then
+        whiptail --msgbox "Nessun dispositivo NBD trovato da pulire." 8 60
+        return 0
+    fi
+    
+    for dev in $nbd_devices; do
+        if [[ "$dev" =~ nbd[0-9]+$ ]]; then
+            log "Attempting to disconnect $dev"
+            if sudo qemu-nbd --disconnect "$dev" >/dev/null 2>&1; then
+                log "Successfully disconnected $dev"
+                ((cleaned_count++))
+            fi
+        fi
+    done
+    
+    whiptail --msgbox "Pulizia dei dispositivi NBD completata.\n\nDisconnessi: $cleaned_count" 10 60
+}
