@@ -972,6 +972,7 @@ check_free_space() {
 }
 
 # Function for advanced image resizing
+# Function for advanced image resizing
 advanced_resize() {
     local file=$1
     local size=$2
@@ -1066,7 +1067,7 @@ advanced_resize() {
     
     # Use parted to get partition information with timeout
     log "Analyzing partitions with parted"
-    local parted_output=$(timeout 30 parted "$NBD_DEVICE" print 2>>"$LOG_FILE")
+    local parted_output=$(timeout 30 parted -s "$NBD_DEVICE" print 2>>"$LOG_FILE")
     if [ $? -ne 0 ]; then
         log "Parted failed: $(tail -n 1 "$LOG_FILE")"
         whiptail --msgbox "Error while reading partitions with parted.\n\nDetails:\n$parted_output\nCheck log: $LOG_FILE" 15 70
@@ -1186,155 +1187,168 @@ advanced_resize() {
         fi
     fi
     
-    # Handle LUKS if present
-    local luks_parts=($(detect_luks "$NBD_DEVICE"))
-    local luks_device=""
+    # --- START OF MODIFIED SECTION ---
     
-    if [ ${#luks_parts[@]} -gt 0 ]; then
-        (
-            echo 0
-            echo "# Processing LUKS partitions..."
-            for luks_part in "${luks_parts[@]}"; do
-                luks_device=$(open_luks "$luks_part")
-                if [ $? -eq 0 ] && [ -n "$luks_device" ]; then
-                    echo 100
-                    echo "# LUKS opened!"
-                    sleep 1
-                    break
-                fi
-            done
-        ) | whiptail --gauge "Processing LUKS..." 8 50 0
-    fi
+    log "Preparing to resize filesystem"
     
-    # Handle LVM if present
-    local lvm_resized=false
-    if command -v vgs &> /dev/null; then
-        (
-            echo 0
-            echo "# Scanning for LVM..."
-            local lvm_vg=$(handle_lvm)
-            if [ $? -eq 0 ] && [ -n "$lvm_vg" ]; then
-                echo 50
-                echo "# Resizing LVM..."
-                if resize_lvm "$lvm_vg" "$luks_device"; then
-                    lvm_resized=true
-                fi
+    # Identify all potential resize targets (partitions and LUKS/LVM devices)
+    local resize_targets=()
+    local counter=1
+    
+    # Add partitions
+    for part_num in "${partitions[@]}"; do
+        local part_dev="${NBD_DEVICE}p${part_num}"
+        if [ -b "$part_dev" ]; then
+            local fs_type=$(blkid -o value -s TYPE "$part_dev" 2>/dev/null)
+            if [ -n "$fs_type" ]; then
+                resize_targets+=("$counter" "Partition ${part_num} (${fs_type})")
+                ((counter++))
             fi
-            echo 100
-            echo "# Done!"
-            sleep 1
-        ) | whiptail --gauge "Scanning LVM..." 8 50 0
+        fi
+    done
+    
+    # Add LUKS mapped devices
+    for luks_dev in "${LUKS_MAPPED[@]}"; do
+        if [ -b "/dev/mapper/$luks_dev" ]; then
+            local fs_type=$(blkid -o value -s TYPE "/dev/mapper/$luks_dev" 2>/dev/null)
+            if [ -n "$fs_type" ]; then
+                resize_targets+=("$counter" "LUKS Mapped /dev/mapper/${luks_dev} (${fs_type})")
+                ((counter++))
+            fi
+        fi
+    done
+    
+    # Add LVM logical volumes
+    if command -v vgs &> /dev/null; then
+        local lvs=($(lvs --noheadings -o lv_path,vg_name 2>/dev/null))
+        for lv_path in "${lvs[@]}"; do
+            if [[ "$lv_path" =~ "$NBD_DEVICE" ]] || [[ "$lv_path" =~ "${LUKS_MAPPED[@]}" ]]; then
+                local fs_type=$(blkid -o value -s TYPE "$lv_path" 2>/dev/null)
+                resize_targets+=("$counter" "LVM Logical Volume ${lv_path} (${fs_type})")
+                ((counter++))
+            fi
+        done
     fi
     
-    # Resize the filesystem if not LVM
-    if [ "$lvm_resized" = false ] && [ -n "$selected_partition" ]; then
-        local target_partition="${NBD_DEVICE}p${selected_partition}"
+    if [ ${#resize_targets[@]} -gt 0 ]; then
+        local resize_choice=$(whiptail --title "Resize Filesystem" --menu "Select the filesystem to resize:" 20 80 12 "${resize_targets[@]}" 3>&1 1>&2 2>&3)
         
-        # If LUKS is present, use the mapped device
-        if [ -n "$luks_device" ]; then
-            target_partition="$luks_device"
-        fi
-        
-        if [ -b "$target_partition" ]; then
-            local fs_type=$(blkid -o value -s TYPE "$target_partition" 2>/dev/null)
+        if [ $? -ne 0 ]; then
+            whiptail --msgbox "Filesystem resize cancelled. The partition has been extended but the filesystem has not. You may need to do it manually." 12 70
+        else
+            local selected_target="${resize_targets[$((resize_choice*2-1))]}"
+            local target_dev=""
             
-            case "$fs_type" in
-                "ext2"|"ext3"|"ext4")
-                    resize_ext_filesystem "$target_partition"
-                    ;;
-                "ntfs")
-					if command -v ntfsresize &> /dev/null && command -v ntfsfix &> /dev/null; then
-						(
-							echo 0
-							echo "# Checking NTFS consistency..."
-							ntfsfix --clear-dirty "$target_partition" >/dev/null 2>&1
-							
-							echo 30
-							echo "# Running chkdsk equivalent..."
-							ntfsfix --no-action "$target_partition" >/tmp/ntfs_check_$$.log 2>&1
-							
-							echo 60
-							echo "# Resizing NTFS..."
-							local ntfs_output=$(ntfsresize --force --no-action "$target_partition" 2>&1)
-							
-							# Check if simulation was successful
-							if echo "$ntfs_output" | grep -q "successfully would be resized"; then
-								echo 80
-								echo "# Applying resize..."
-								local final_output=$(ntfsresize --force "$target_partition" 2>&1)
-								echo 100
-								if [ $? -eq 0 ]; then
-									echo "# NTFS resized successfully!"
-									log "NTFS resize successful: $final_output"
-									sleep 1
-								else
-									echo "# NTFS resize failed"
-									log "NTFS resize failed: $final_output"
-									sleep 2
-									exit 1
-								fi
-							else
-								echo 100
-								echo "# NTFS resize simulation failed"
-								log "NTFS simulation failed: $ntfs_output"
-								sleep 2
-								exit 1
-							fi
-						) | whiptail --gauge "Resizing NTFS filesystem..." 8 50 0
-						
-						if [ $? -eq 0 ]; then
-							whiptail --msgbox "NTFS resized successfully!" 8 60
-						else
-							local error_log=$(cat /tmp/ntfs_check_$$.log 2>/dev/null)
-							rm -f /tmp/ntfs_check_$$.log
-							whiptail --msgbox "Error resizing NTFS.\n\nDetails:\n$ntfs_output\n\nTry booting in Windows and running:\nchkdsk /f C:\n\nOr use GParted Live." 15 70
-						fi
-						rm -f /tmp/ntfs_check_$$.log
-					else
-						log "ntfs-3g tools missing"
-						whiptail --msgbox "ntfs-3g tools missing. Install with:\nsudo apt install ntfs-3g" 10 60
-					fi
-					;;
-                "xfs")
-                    log "XFS detected, manual resize needed"
-                    whiptail --msgbox "XFS detected. The partition has been extended, but the filesystem still needs to be resized.\n\nTo complete, use the 'Advanced Mount (NBD)' option, mount the partition, and run 'xfs_growfs <mount_point>'.\n\nAlternatively, you can boot the image with GParted Live to do it graphically." 20 80
-                    ;;
-                *)
-                    if [ -n "$fs_type" ]; then
-                        log "Unsupported filesystem: $fs_type"
-                        whiptail --msgbox "Filesystem '$fs_type' is not supported for automatic resizing. You may need to use GParted Live." 10 70
-                    else
-                        log "Filesystem not recognized"
-                        whiptail --msgbox "Filesystem not recognized. You may need to use GParted Live to verify and resize manually." 10 70
-                    fi
-                    ;;
-                "btrfs")
-					if command -v btrfs &> /dev/null; then
-						(
-							echo 0
-							echo "# Checking btrfs filesystem..."
-							btrfs check --repair --force "$target_partition" >/dev/null 2>&1 || true
-							echo 50
-							echo "# Resizing btrfs filesystem..."
-							btrfs filesystem resize max "$target_partition" >/dev/null 2>&1
-							echo 100
-							echo "# Btrfs resize completed!"
-							sleep 1
-						) | whiptail --gauge "Resizing btrfs filesystem..." 8 50 0
-						if [ $? -eq 0 ]; then
-							whiptail --msgbox "Btrfs filesystem resized successfully!" 8 60
-						else
-							whiptail --msgbox "Error resizing btrfs. Try manual resize with:\nbtrfs filesystem resize max /mount/point" 10 60
-						fi
-					else
-						whiptail --msgbox "btrfs tools not found. Install with:\nsudo apt install btrfs-progs" 10 60
-					fi
-					;;
-
-				"xfs")
-					whiptail --msgbox "XFS detected. The partition has been extended.\n\nTo resize the filesystem:\n1. Mount the partition\n2. Run: xfs_growfs /mount/point\n\nOr use GParted Live for graphical resize." 12 70
-					;;
-            esac
+            # Map selection back to device path
+            if [[ "$selected_target" =~ "Partition" ]]; then
+                local part_num=$(echo "$selected_target" | grep -oP '(?<=Partition )\d+')
+                target_dev="${NBD_DEVICE}p${part_num}"
+            elif [[ "$selected_target" =~ "LUKS Mapped" ]]; then
+                local luks_name=$(echo "$selected_target" | grep -oP '(?<=/dev/mapper/)[^ ]+')
+                target_dev="/dev/mapper/$luks_name"
+            elif [[ "$selected_target" =~ "LVM Logical Volume" ]]; then
+                local lv_path=$(echo "$selected_target" | grep -oP '(?<=Logical Volume )[^ ]+')
+                target_dev="$lv_path"
+            fi
+            
+            if [ -n "$target_dev" ] && [ -b "$target_dev" ]; then
+                local fs_type=$(blkid -o value -s TYPE "$target_dev" 2>/dev/null)
+                
+                case "$fs_type" in
+                    "ext2"|"ext3"|"ext4")
+                        resize_ext_filesystem "$target_dev"
+                        ;;
+                    "ntfs")
+                        if command -v ntfsresize &> /dev/null && command -v ntfsfix &> /dev/null; then
+                            (
+                                echo 0
+                                echo "# Checking NTFS consistency..."
+                                ntfsfix --clear-dirty "$target_dev" >/dev/null 2>&1
+                                
+                                echo 30
+                                echo "# Running chkdsk equivalent..."
+                                ntfsfix --no-action "$target_dev" >/tmp/ntfs_check_$$.log 2>&1
+                                
+                                echo 60
+                                echo "# Resizing NTFS..."
+                                local ntfs_output=$(ntfsresize --force --no-action "$target_dev" 2>&1)
+                                
+                                # Check if simulation was successful
+                                if echo "$ntfs_output" | grep -q "successfully would be resized"; then
+                                    echo 80
+                                    echo "# Applying resize..."
+                                    local final_output=$(ntfsresize --force "$target_dev" 2>&1)
+                                    echo 100
+                                    if [ $? -eq 0 ]; then
+                                        echo "# NTFS resized successfully!"
+                                        log "NTFS resize successful: $final_output"
+                                        sleep 1
+                                    else
+                                        echo "# NTFS resize failed"
+                                        log "NTFS resize failed: $final_output"
+                                        sleep 2
+                                        exit 1
+                                    fi
+                                else
+                                    echo 100
+                                    echo "# NTFS resize simulation failed"
+                                    log "NTFS simulation failed: $ntfs_output"
+                                    sleep 2
+                                    exit 1
+                                fi
+                            ) | whiptail --gauge "Resizing NTFS filesystem..." 8 50 0
+                            
+                            if [ $? -eq 0 ]; then
+                                whiptail --msgbox "NTFS resized successfully!" 8 60
+                            else
+                                local error_log=$(cat /tmp/ntfs_check_$$.log 2>/dev/null)
+                                rm -f /tmp/ntfs_check_$$.log
+                                whiptail --msgbox "Error resizing NTFS.\n\nDetails:\n$ntfs_output\n\nTry booting in Windows and running:\nchkdsk /f C:\n\nOr use GParted Live." 15 70
+                            fi
+                            rm -f /tmp/ntfs_check_$$.log
+                        else
+                            log "ntfs-3g tools missing"
+                            whiptail --msgbox "ntfs-3g tools missing. Install with:\nsudo apt install ntfs-3g" 10 60
+                        fi
+                        ;;
+                    "btrfs")
+                        if command -v btrfs &> /dev/null; then
+                            (
+                                echo 0
+                                echo "# Checking btrfs filesystem..."
+                                btrfs check --repair --force "$target_dev" >/dev/null 2>&1 || true
+                                echo 50
+                                echo "# Resizing btrfs filesystem..."
+                                btrfs filesystem resize max "$target_dev" >/dev/null 2>&1
+                                echo 100
+                                echo "# Btrfs resize completed!"
+                                sleep 1
+                            ) | whiptail --gauge "Resizing btrfs filesystem..." 8 50 0
+                            if [ $? -eq 0 ]; then
+                                whiptail --msgbox "Btrfs filesystem resized successfully!" 8 60
+                            else
+                                whiptail --msgbox "Error resizing btrfs. Try manual resize with:\nbtrfs filesystem resize max /mount/point" 10 60
+                            fi
+                        else
+                            whiptail --msgbox "btrfs tools not found. Install with:\nsudo apt install btrfs-progs" 10 60
+                        fi
+                        ;;
+                    "xfs")
+                        whiptail --msgbox "XFS detected. The partition has been extended, but the filesystem still needs to be resized.\n\nTo complete, use the 'Advanced Mount (NBD)' option, mount the partition, and run 'xfs_growfs <mount_point>'.\n\nAlternatively, you can boot the image with GParted Live to do it graphically." 20 80
+                        ;;
+                    *)
+                        if [ -n "$fs_type" ]; then
+                            log "Unsupported filesystem: $fs_type"
+                            whiptail --msgbox "Filesystem '$fs_type' is not supported for automatic resizing. You may need to use GParted Live." 10 70
+                        else
+                            log "Filesystem not recognized"
+                            whiptail --msgbox "Filesystem not recognized. You may need to use GParted Live to verify and resize manually." 10 70
+                        fi
+                        ;;
+                esac
+            else
+                whiptail --msgbox "Error: Could not find the selected device. Check log: $LOG_FILE" 8 50
+            fi
         fi
     fi
     
