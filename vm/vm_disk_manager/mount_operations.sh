@@ -148,7 +148,7 @@ cleanup_chroot_environment() {
     done
 }
 
-# Function to mount with NBD (enhanced with chroot option)
+# Function to mount with NBD
 mount_with_nbd() {
     local file=$1
     local format=$(qemu-img info "$file" 2>/dev/null | grep "file format:" | awk '{print $3}')
@@ -301,11 +301,6 @@ mount_with_nbd() {
                 if setup_chroot_environment "$mount_point"; then
                     whiptail --msgbox "Entering chroot environment.\n\nYou are now in the VM's filesystem as root.\nNetworking and some services may not work.\n\nUse 'exit' to return to the menu.\n\nWarning: Be careful with system modifications!" 15 70
                     
-                    # Copy resolv.conf for network resolution
-                    if [ -f "/etc/resolv.conf" ]; then
-                        cp /etc/resolv.conf "$mount_point/etc/resolv.conf" 2>/dev/null || true
-                    fi
-                    
                     # Enter chroot
                     chroot "$mount_point" /bin/bash -l || chroot "$mount_point" /usr/bin/bash -l
                     
@@ -332,9 +327,6 @@ mount_with_nbd() {
         
         # Cleanup after shell/chroot exits
         log "Shell/chroot exited, cleaning up mount and NBD" >> "$LOG_FILE"
-        
-        # Clean up any remaining chroot mounts
-        cleanup_chroot_environment "$mount_point"
         
         # Unmount main partition
         if mountpoint -q "$mount_point" 2>/dev/null; then
