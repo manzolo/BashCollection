@@ -37,12 +37,16 @@ connect_nbd() {
             echo $(( (i-1)*33 ))
             echo "# Attempt $i/$retries: Connecting NBD..."
             log "Attempt $i/$retries: Connecting $NBD_DEVICE"
-            if timeout 30 qemu-nbd --connect="$NBD_DEVICE" -f "$format" "$file" 2>>"$LOG_FILE"; then
+            local qemu_pid
+            timeout 30 qemu-nbd --connect="$NBD_DEVICE" -f "$format" "$file" 2>>"$LOG_FILE" &
+            qemu_pid=$!
+            wait $qemu_pid
+            if [ $? -eq 0 ]; then
                 sleep 3
-                if [ -b "$NBD_DEVICE" ]; then
+                if [ -b "$NBD_DEVICE" ] && [ -s "/sys/block/$(basename "$NBD_DEVICE")/pid" ]; then
                     echo 100
                     echo "# Connected successfully!"
-                    log "NBD connected successfully"
+                    log "NBD connected successfully, PID: $(cat /sys/block/$(basename "$NBD_DEVICE")/pid)"
                     sleep 1
                     exit 0
                 fi
@@ -62,6 +66,7 @@ connect_nbd() {
         return 0
     else
         whiptail --msgbox "NBD connection failed after retries. Check log: $LOG_FILE" 8 50
+        NBD_DEVICE=""
         return 1
     fi
 }
@@ -76,11 +81,34 @@ safe_nbd_disconnect() {
     
     log "Disconnecting NBD device $device"
     
-    for mount in $(mount | grep "$device" | awk '{print $3}'); do
-        umount "$mount" 2>/dev/null || umount -f "$mount" 2>/dev/null
+    # Unmount any associated partitions
+    for part in "${device}"p*; do
+        if [ -b "$part" ]; then
+            for mount in $(mount | grep "$part" | awk '{print $3}'); do
+                log "Unmounting $mount from $part"
+                umount "$mount" 2>/dev/null || umount -f "$mount" 2>/dev/null || umount -l "$mount" 2>/dev/null
+            done
+        fi
     done
     
-    for i in {1..5}; do
+    # Unmount main device mounts
+    for mount in $(mount | grep "$device" | awk '{print $3}'); do
+        log "Unmounting $mount from $device"
+        umount "$mount" 2>/dev/null || umount -f "$mount" 2>/dev/null || umount -l "$mount" 2>/dev/null
+    done
+    
+    # Check for processes using the device
+    if lsof "$device" >/dev/null 2>&1; then
+        log "Processes using $device found, attempting to terminate"
+        lsof "$device" | tail -n +2 | awk '{print $2}' | sort -u | while read pid; do
+            kill "$pid" 2>/dev/null
+            sleep 1
+            kill -9 "$pid" 2>/dev/null
+        done
+    fi
+    
+    # Retry disconnection
+    for i in {1..10}; do
         if qemu-nbd --disconnect "$device" 2>/dev/null; then
             sleep 1
             if [ ! -s "/sys/block/$(basename "$device")/pid" ] 2>/dev/null; then
@@ -88,11 +116,11 @@ safe_nbd_disconnect() {
                 return 0
             fi
         fi
-        sleep 1
+        sleep 2
     done
     
     log "Failed to disconnect $device"
-    whiptail --msgbox "Warning: Could not completely disconnect $device.\nA reboot may be required." 10 60
+    whiptail --msgbox "Warning: Could not disconnect $device.\nA reboot may be required." 10 60
     return 1
 }
 

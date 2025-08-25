@@ -7,13 +7,8 @@ log() {
 
 # Comprehensive cleanup function
 cleanup() {
-    if [ "$CLEANUP_DONE" = true ]; then
-        return 0
-    fi
-    
     log "Starting cleanup"
     echo "Cleaning up..."
-    CLEANUP_DONE=true
     
     # Terminate QEMU if active
     if [ -n "$QEMU_PID" ] && kill -0 "$QEMU_PID" 2>/dev/null; then
@@ -29,7 +24,15 @@ cleanup() {
         if mountpoint -q "$path" 2>/dev/null; then
             log "Unmounting $path"
             echo "Unmounting $path..."
-            umount "$path" 2>/dev/null || fusermount -u "$path" 2>/dev/null
+            for i in {1..3}; do
+                if umount "$path" 2>/dev/null || umount -f "$path" 2>/dev/null; then
+                    break
+                fi
+                sleep 1
+            done
+            if mountpoint -q "$path" 2>/dev/null; then
+                umount -l "$path" 2>/dev/null
+            fi
             rmdir "$path" 2>/dev/null
         fi
     done
@@ -55,76 +58,112 @@ cleanup() {
         cryptsetup luksClose "$luks" 2>/dev/null
     done
     
-    # Disconnect NBD with retries
-    if [ -n "$NBD_DEVICE" ] && [ -b "$NBD_DEVICE" ]; then
-        log "Disconnecting $NBD_DEVICE"
-        echo "Disconnecting $NBD_DEVICE..."
-        for i in {1..3}; do
-            if qemu-nbd --disconnect "$NBD_DEVICE" 2>/dev/null; then
-                break
-            fi
-            sleep 1
-        done
-    fi
-    
-    # Disconnect all active NBD devices
-    for nbd in /dev/nbd*; do
-        if [ -b "$nbd" ] && [ -s "/sys/block/$(basename "$nbd")/pid" ] 2>/dev/null; then
-            log "Disconnecting $nbd"
-            echo "Disconnecting $nbd..."
-            qemu-nbd --disconnect "$nbd" 2>/dev/null
-        fi
-    done
+    # Disconnect all NBD devices
+    cleanup_nbd_devices
     
     # Remove NBD module if possible
     sleep 2
     if lsmod | grep -q nbd; then
-        rmmod nbd 2>/dev/null
-    fi
-    
-    # Remove installed packages if requested
-    if [ ${#INSTALLED_PACKAGES[@]} -gt 0 ]; then
-        if whiptail --title "Package Cleanup" --yesno "Do you want to remove the packages automatically installed by this script?\n\nPackages: ${INSTALLED_PACKAGES[*]}" 10 70; then
-            apt-get remove -y "${INSTALLED_PACKAGES[@]}" 2>/dev/null
-            apt-get autoremove -y 2>/dev/null
-        fi
+        rmmod nbd 2>/dev/null || log "Failed to remove nbd module"
     fi
     
     log "Cleanup completed"
     echo "Cleanup completed."
+    CLEANUP_DONE=true
 }
 
 # Function to cleanup orphaned NBD devices
 cleanup_nbd_devices() {
     log "Starting NBD device cleanup"
-    local nbd_devices=$(ls -1 /dev/nbd* 2>/dev/null)
-    local cleaned_count=0
-    local failed_list=""
-    
-    if [ -z "$nbd_devices" ]; then
-        whiptail --msgbox "No NBD devices found to clean up." 8 60
-        return 0
-    fi
-    
-    for dev in $nbd_devices; do
-        if [[ "$dev" =~ nbd[0-9]+$ ]]; then
-            log "Attempting to disconnect $dev"
-            # Attempt to disconnect and check the exit code
-            if sudo qemu-nbd --disconnect "$dev" >/dev/null 2>&1; then
-                log "Successfully disconnected $dev"
-                ((cleaned_count++))
-            else
-                log "Failed to disconnect $dev. It might be in use."
-                failed_list+="\n- $dev (in use)"
+    local cleaned=0
+    local failed=()
+
+    # Helper: detach one NBD device robustly
+    _detach_one_nbd() {
+        local dev="$1"            # e.g. /dev/nbd0
+        [ -b "$dev" ] || return 0
+
+        log "Detaching $dev"
+
+        # 1) Unmount anything on its partitions (hard → lazy)
+        local m
+        while read -r m; do
+            [ -n "$m" ] || continue
+            log "Unmounting $m"
+            umount "$m" 2>/dev/null || umount -f "$m" 2>/dev/null || umount -l "$m" 2>/dev/null
+        done < <(mount | awk -v d="^${dev}p[0-9]+$" '$1 ~ d {print $3}')
+
+        # 2) Kill any process using the mounts or the block device
+        #    (ignore errors if fuser not available)
+        command -v fuser >/dev/null 2>&1 && {
+            # partitions
+            for p in "${dev}"p*; do
+                [ -b "$p" ] && fuser -km "$p" 2>/dev/null || true
+            done
+            # device itself
+            fuser -km "$dev" 2>/dev/null || true
+        }
+
+        # 3) Try to disconnect repeatedly
+        local i
+        for i in $(seq 1 10); do
+            if qemu-nbd --disconnect "$dev" >/dev/null 2>&1; then
+                # Wait until the kernel drops the pid file (if present)
+                local base; base=$(basename "$dev")
+                local pidf="/sys/block/${base}/pid"
+                local j
+                for j in $(seq 1 10); do
+                    if [ ! -e "$pidf" ] || ! ps -p "$(cat "$pidf" 2>/dev/null)" >/dev/null 2>&1; then
+                        break
+                    fi
+                    sleep 0.3
+                done
+                # Double-check not mounted anymore
+                if ! mount | grep -q "^$dev"; then
+                    log "Successfully disconnected $dev"
+                    cleaned=$((cleaned+1))
+                    return 0
+                fi
+            fi
+            sleep 0.5
+        done
+
+        # 4) Fallback with kernel tool if available
+        if command -v nbd-client >/dev/null 2>&1; then
+            if nbd-client -d "$dev" >/dev/null 2>&1; then
+                log "Disconnected $dev via nbd-client"
+                cleaned=$((cleaned+1))
+                return 0
             fi
         fi
-    done
-    
-    local message="NBD device cleanup complete.\n\nDisconnected: $cleaned_count"
-    
-    if [ -n "$failed_list" ]; then
-        message+="\n\nThe following devices could not be disconnected:$failed_list"
+
+        log "Failed to disconnect $dev"
+        failed+=("$dev")
+        return 1
+    }
+
+    # Prefer the tracked device first
+    if [ -n "$NBD_DEVICE" ] && [ -b "$NBD_DEVICE" ]; then
+        _detach_one_nbd "$NBD_DEVICE" || true
+        NBD_DEVICE=""
     fi
-    
-    whiptail --msgbox "$message" 15 60
+
+    # Then handle any other orphaned /dev/nbdN still around
+    local d
+    for d in /dev/nbd[0-9]*; do
+        [ -e "$d" ] || break
+        # Skip if already detached (no pid and no mounts)
+        if ! mount | grep -q "^$d" && [ ! -e "/sys/block/$(basename "$d")/pid" ]; then
+            continue
+        fi
+        _detach_one_nbd "$d" || true
+    done
+
+    local msg="NBD cleanup finished.\n\nDisconnected: $cleaned"
+    if [ ${#failed[@]} -gt 0 ]; then
+        msg="$msg\n\nStill in use (could not disconnect):"
+        for f in "${failed[@]}"; do msg="$msg\n- $f"; done
+        msg="$msg\n\nTip: if this persists after chroot, something is still running from the chroot (e.g., udev/dbus)."
+    fi
+    whiptail --msgbox "$msg" 16 70
 }

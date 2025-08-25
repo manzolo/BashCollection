@@ -224,10 +224,13 @@ mount_with_nbd() {
         return 1
     fi
     
+    local luks_name=""
     if cryptsetup isLuks "$selected_part" 2>/dev/null; then
         local luks_mapped=$(open_luks "$selected_part" 2>>"$LOG_FILE")
         if [ $? -eq 0 ] && [ -n "$luks_mapped" ]; then
             selected_part="$luks_mapped"
+            luks_name=$(basename "$luks_mapped")
+            LUKS_MAPPED+=("$luks_name")
         else
             whiptail --msgbox "Cannot open the LUKS partition. Check $LOG_FILE for details." 8 50
             safe_nbd_disconnect "$NBD_DEVICE" >> "$LOG_FILE" 2>&1
@@ -279,7 +282,6 @@ mount_with_nbd() {
         
         log "Mounted $selected_part at $mount_point" >> "$LOG_FILE"
         
-        # Ask user what they want to do
         local action_options=(
             "1" "Interactive shell in mount directory"
             "2" "Chroot into filesystem (Linux only)"
@@ -298,16 +300,11 @@ mount_with_nbd() {
                 fi
                 ;;
             2)
-                if setup_chroot_environment "$mount_point"; then
-                    whiptail --msgbox "Entering chroot environment.\n\nYou are now in the VM's filesystem as root.\nNetworking and some services may not work.\n\nUse 'exit' to return to the menu.\n\nWarning: Be careful with system modifications!" 15 70
-                    
-                    # Enter chroot
-                    chroot "$mount_point" /bin/bash -l || chroot "$mount_point" /usr/bin/bash -l
-                    
-                    # Cleanup chroot environment
-                    cleanup_chroot_environment "$mount_point"
+                if [ -d "$mount_point" ]; then
+                    whiptail --msgbox "Entering isolated chroot environment.\n\nYou are now in the VM's filesystem as root.\nNetworking and some services may not work.\n\nUse 'exit' to return to the menu.\n\nWarning: Be careful with system modifications!" 15 70
+                    run_chroot_isolated "$mount_point"
                 else
-                    whiptail --msgbox "Failed to setup chroot environment.\nFalling back to regular shell." 10 60
+                    whiptail --msgbox "Invalid mount point.\nFalling back to regular shell." 10 60
                     if [ -n "$original_user" ]; then
                         sudo -u "$original_user" bash -c "cd '$mount_point' && exec bash -i"
                     else
@@ -326,33 +323,91 @@ mount_with_nbd() {
         esac
         
         # Cleanup after shell/chroot exits
-        log "Shell/chroot exited, cleaning up mount and NBD" >> "$LOG_FILE"
+        log "Shell/chroot exited, cleaning up mount and NBD"
+        
+        # Unmount any partitions
+        for part in "${NBD_DEVICE}"p*; do
+            if [ -b "$part" ]; then
+                for mnt in $(mount | grep "$part" | awk '{print $3}'); do
+                    log "Unmounting $mnt from $part"
+                    for i in {1..3}; do
+                        if umount "$mnt" 2>>"$LOG_FILE" || umount -f "$mnt" 2>>"$LOG_FILE"; then
+                            break
+                        fi
+                        log "Failed to unmount $mnt, retrying ($i/3)"
+                        sleep 1
+                    done
+                    if mountpoint -q "$mnt" 2>/dev/null; then
+                        log "Resorting to lazy unmount for $mnt"
+                        umount -l "$mnt" 2>>"$LOG_FILE"
+                    fi
+                    MOUNTED_PATHS=("${MOUNTED_PATHS[@]/$mnt}")
+                done
+            fi
+        done
         
         # Unmount main partition
         if mountpoint -q "$mount_point" 2>/dev/null; then
-            umount "$mount_point" 2>>"$LOG_FILE" || log "Failed to unmount $mount_point" >> "$LOG_FILE"
+            for i in {1..3}; do
+                if umount "$mount_point" 2>>"$LOG_FILE" || umount -f "$mount_point" 2>>"$LOG_FILE"; then
+                    break
+                fi
+                log "Failed to unmount $mount_point, retrying ($i/3)"
+                sleep 1
+            done
+            if mountpoint -q "$mount_point" 2>/dev/null; then
+                log "Resorting to lazy unmount for $mount_point"
+                umount -l "$mount_point" 2>>"$LOG_FILE"
+            fi
             rmdir "$mount_point" 2>/dev/null
             MOUNTED_PATHS=("${MOUNTED_PATHS[@]/$mount_point}")
-            log "Unmounted $mount_point" >> "$LOG_FILE"
+            log "Unmounted $mount_point"
+        fi
+        
+        # Close LUKS mapping if it exists
+        if [ -n "$luks_name" ] && [ -b "/dev/mapper/$luks_name" ]; then
+            log "Closing LUKS mapping $luks_name"
+            cryptsetup luksClose "$luks_name" 2>>"$LOG_FILE" || log "Failed to close LUKS $luks_name"
+            LUKS_MAPPED=("${LUKS_MAPPED[@]/$luks_name}")
+        fi
+        
+        # Check for processes using the NBD device
+        if [ -n "$NBD_DEVICE" ] && lsof -e /run/user/*/gvfs -e /run/user/*/doc -e /tmp/.mount_* "$NBD_DEVICE" >/dev/null 2>&1; then
+            log "Processes using $NBD_DEVICE found, attempting to terminate"
+            lsof -e /run/user/*/gvfs -e /run/user/*/doc -e /tmp/.mount_* "$NBD_DEVICE" | tail -n +2 | awk '{print $2}' | sort -u | while read pid; do
+                log "Terminating PID $pid holding $NBD_DEVICE"
+                kill "$pid" 2>/dev/null
+                sleep 1
+                kill -9 "$pid" 2>/dev/null
+            done
         fi
         
         # Disconnect NBD
         if [ -n "$NBD_DEVICE" ] && [ -b "$NBD_DEVICE" ]; then
             safe_nbd_disconnect "$NBD_DEVICE" >> "$LOG_FILE" 2>&1
             NBD_DEVICE=""
-            log "Disconnected $NBD_DEVICE" >> "$LOG_FILE"
+            log "Disconnected $NBD_DEVICE"
         fi
         
         whiptail --msgbox "Mount and NBD cleaned up successfully." 8 50
         return 0
     else
+        # Cleanup on mount failure
+        if [ -n "$luks_name" ] && [ -b "/dev/mapper/$luks_name" ]; then
+            log "Closing LUKS mapping $luks_name on mount failure"
+            cryptsetup luksClose "$luks_name" 2>>"$LOG_FILE" || log "Failed to close LUKS $luks_name"
+            LUKS_MAPPED=("${LUKS_MAPPED[@]/$luks_name}")
+        fi
+        if mountpoint -q "$mount_point" 2>/dev/null; then
+            umount "$mount_point" 2>>"$LOG_FILE" || umount -l "$mount_point" 2>>"$LOG_FILE"
+            MOUNTED_PATHS=("${MOUNTED_PATHS[@]/$mount_point}")
+        fi
         rmdir "$mount_point" 2>/dev/null
-        log "Mount failed for $selected_part" >> "$LOG_FILE"
         if [ -n "$NBD_DEVICE" ] && [ -b "$NBD_DEVICE" ]; then
             safe_nbd_disconnect "$NBD_DEVICE" >> "$LOG_FILE" 2>&1
             NBD_DEVICE=""
         fi
-        whiptail --msgbox "Error mounting $(basename "$selected_part").\nFilesystem may be corrupted or unsupported.\nCheck log: $LOG_FILE" 10 70
+        whiptail --msgbox "Mount failed. Check $LOG_FILE for details." 8 50
         return 1
     fi
 }
@@ -450,4 +505,42 @@ fix_mount_permissions() {
     done
     
     whiptail --msgbox "Permissions fixed for $fixed_count mount points.\n\nUser: $original_user\n\nNow you can try:\ncd $mount_point\nls -la $mount_point" 12 70
+}
+
+# Run a chroot in an isolated mount namespace
+run_chroot_isolated() {
+    local root="$1"
+
+    if [ ! -d "$root" ]; then
+        whiptail --msgbox "Invalid root directory: $root" 8 60
+        return 1
+    fi
+
+    if ! command -v unshare >/dev/null 2>&1; then
+        whiptail --msgbox "'unshare' command not found.\nPlease install util-linux." 10 60
+        return 1
+    fi
+
+    unshare -m bash -c "
+        set -e
+        mount --make-rprivate /
+
+        # Bind required filesystems
+        mount -t proc  proc  '$root/proc'
+        mount -t sysfs sys   '$root/sys'
+        mount --bind /dev    '$root/dev'
+        mount --bind /run    '$root/run'
+
+        # Ensure cleanup on exit
+        cleanup_mounts() {
+            umount -l '$root/proc' 2>/dev/null || true
+            umount -l '$root/sys'  2>/dev/null || true
+            umount -l '$root/dev'  2>/dev/null || true
+            umount -l '$root/run'  2>/dev/null || true
+        }
+        trap cleanup_mounts EXIT
+
+        echo 'Entering isolated chroot...'
+        chroot '$root' /bin/bash
+    "
 }
