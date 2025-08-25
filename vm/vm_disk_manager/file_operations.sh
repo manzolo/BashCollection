@@ -104,7 +104,15 @@ get_file_prefix() {
 
 # Function to select a file or directory
 select_file() {
-    local current_dir=$(pwd)
+    local current_dir
+
+    if [ -f "$LAST_DIR_FILE" ]; then
+        current_dir=$(cat "$LAST_DIR_FILE")
+        [ -d "$current_dir" ] || current_dir=$(pwd)
+    else
+        current_dir=$(pwd)
+    fi
+
     local show_hidden=false
     local show_all_files=false
 
@@ -190,6 +198,9 @@ select_file() {
         choice=$(whiptail --title "$title" --menu "Select an item:" 25 90 $h "${items[@]}" 3>&1 1>&2 2>&3)
 
         local rc=$?
+
+        echo "$current_dir" > "$LAST_DIR_FILE"
+
         if [ $rc -ne 0 ]; then
             log "File selection cancelled"
             return 1
@@ -287,6 +298,7 @@ select_file() {
         esac
     done
 
+    echo "$current_dir" > "$LAST_DIR_FILE"
     return 1
 }
 

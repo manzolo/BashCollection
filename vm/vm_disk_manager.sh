@@ -24,6 +24,8 @@ QEMU_PID=""
 INSTALLED_PACKAGES=()
 CLEANUP_DONE=false
 LOG_FILE="/tmp/vm_image_manager_log_$$.txt"
+LAST_DIR_FILE="/tmp/vm_disk_manager_last_dir"
+
 echo "Script started at $(date)" > "$LOG_FILE"
 
 # Source helper scripts from vm_disk_manager directory relative to script location

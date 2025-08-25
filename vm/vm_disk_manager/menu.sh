@@ -16,7 +16,7 @@ handle_change_image() {
         log "Changing image to: $new_file"
         cleanup_all_state
         current_file="$new_file"
-        whiptail --msgbox "Image changed successfully!\n\nNew image: $(basename "$new_file")" 10 60
+        #whiptail --msgbox "Image changed successfully!\n\nNew image: $(basename "$new_file")" 10 60
     else
         whiptail --msgbox "Selection cancelled. Staying on the current image." 8 60
     fi

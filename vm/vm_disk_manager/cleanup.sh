@@ -150,11 +150,12 @@ cleanup_nbd_devices() {
         _detach_one_nbd "$d" || true
     done
 
-    local msg="NBD cleanup finished.\n\nDisconnected: $cleaned"
+    local msg="NBD cleanup finished. Disconnected: $cleaned"
     if [ ${#failed[@]} -gt 0 ]; then
-        msg="$msg\n\nStill in use (could not disconnect):"
-        for f in "${failed[@]}"; do msg="$msg\n- $f"; done
-        msg="$msg\n\nTip: if this persists after chroot, something is still running from the chroot (e.g., udev/dbus)."
+        msg="$msg. Still in use (could not disconnect):"
+        for f in "${failed[@]}"; do msg="$msg $f"; done
+        msg="$msg. Tip: if this persists after chroot, something is still running from the chroot (e.g., udev/dbus)."
+        whiptail --msgbox "$msg" 16 70
     fi
-    whiptail --msgbox "$msg" 16 70
+    log "$msg"
 }
