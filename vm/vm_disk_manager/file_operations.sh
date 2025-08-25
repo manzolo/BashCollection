@@ -51,7 +51,7 @@ is_vm_image() {
     local basename_file=$(basename "$file")
     
     # Check by extension
-    if [[ "$basename_file" =~ \.(img|raw|qcow2|vmdk|vdi|iso|vhd|qed|vpc|parallels)$ ]]; then
+    if [[ "$basename_file" =~ \.(img|raw|qcow2|vmdk|vdi|iso|vhd|vtoy|qed|vpc|parallels)$ ]]; then
         return 0
     fi
     
