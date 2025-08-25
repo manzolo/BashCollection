@@ -102,6 +102,7 @@ get_file_prefix() {
     fi
 }
 
+# Function to select a file or directory
 select_file() {
     local current_dir=$(pwd)
     local show_hidden=false
@@ -110,68 +111,79 @@ select_file() {
     while true; do
         local items=()
         local paths=()
-        local counter=1
 
-        # Navigation
+        # Add navigation and special options to the paths array first
         if [ "$current_dir" != "/" ]; then
-            items+=("$counter" "⬆️  .. (Parent Directory)")
             paths+=("GO_PARENT")
-            ((counter++))
         fi
-
-        items+=("$counter" "📍 Current: $(basename "$current_dir")")
         paths+=("INFO")
-        ((counter++))
-
-        items+=("$counter" "⚙️  Options...")
         paths+=("OPTIONS")
-        ((counter++))
-
-        items+=("$counter" "📝 Enter path manually...")
         paths+=("MANUAL")
-        ((counter++))
-
-        items+=("$counter" "🔗 Quick locations...")
         paths+=("QUICK")
-        ((counter++))
-
-        # Separator
-        items+=("$counter" "─────────────────────")
         paths+=("SEP")
-        ((counter++))
 
-        # List directories and files
+        # Find and sort directories and files
         local find_args=("$current_dir" "-maxdepth" "1")
         [ "$show_hidden" = false ] && find_args+=("!" "-name" ".*")
 
         local sorted_items=()
-        # Find directories and files, then sort them
         while IFS= read -r -d '' item; do
             [ "$item" != "$current_dir" ] && sorted_items+=("$item")
         done < <(find "${find_args[@]}" \( -type d -o -type f \) -print0 2>/dev/null | sort -z)
-
+        
+        # Add sorted items to the paths array
         for item in "${sorted_items[@]}"; do
-            local base=$(basename "$item")
-            local prefix=$(get_file_prefix "$item")
             if [ -d "$item" ]; then
-                local n=$(find "$item" -maxdepth 1 -type f 2>/dev/null | wc -l)
-                items+=("$counter" "$prefix $base/ ($n files)")
                 paths+=("$item")
             else
                 if [ "$show_all_files" = true ] || is_vm_image "$item"; then
-                    local size=$(stat -c%s "$item" 2>/dev/null || echo 0)
-                    local human=$(format_size "$size")
-                    local mod=$(stat -c%y "$item" 2>/dev/null | cut -d' ' -f1)
-                    items+=("$counter" "$prefix $base ($human) [$mod]")
                     paths+=("$item")
                 fi
             fi
+        done
+
+        # Now, build the items array for whiptail from the paths array
+        local counter=1
+        for p in "${paths[@]}"; do
+            case "$p" in
+                "GO_PARENT")
+                    items+=("$counter" "⬆️  .. (Parent Directory)")
+                    ;;
+                "INFO")
+                    items+=("$counter" "📍 Current: $(basename "$current_dir")")
+                    ;;
+                "OPTIONS")
+                    items+=("$counter" "⚙️  Options...")
+                    ;;
+                "MANUAL")
+                    items+=("$counter" "📝 Enter path manually...")
+                    ;;
+                "QUICK")
+                    items+=("$counter" "🔗 Quick locations...")
+                    ;;
+                "SEP")
+                    items+=("$counter" "─────────────────────")
+                    ;;
+                *)
+                    # This is a file or a directory
+                    local base=$(basename "$p")
+                    local prefix=$(get_file_prefix "$p")
+                    if [ -d "$p" ]; then
+                        local n=$(find "$p" -maxdepth 1 -type f 2>/dev/null | wc -l)
+                        items+=("$counter" "$prefix $base/ ($n files)")
+                    else
+                        local size=$(stat -c%s "$p" 2>/dev/null || echo 0)
+                        local human=$(format_size "$size")
+                        local mod=$(stat -c%y "$p" 2>/dev/null | cut -d' ' -f1)
+                        items+=("$counter" "$prefix $base ($human) [$mod]")
+                    fi
+                    ;;
+            esac
             ((counter++))
         done
 
         # Menu height and title
-        local status="Hidden: $([ "$show_hidden" = true ] && echo ON || echo OFF)  |  Filter: $([ "$show_all_files" = true ] && echo 'All files' || echo 'VM only')"
-        local title="File Browser - $(basename "$current_dir")\n$status"
+        local title="File Browser - $(basename "$current_dir")"
         local h=$((${#items[@]} / 2)); (( h<8 )) && h=8; (( h>15 )) && h=15
 
         local choice
@@ -180,11 +192,6 @@ select_file() {
         local rc=$?
         if [ $rc -ne 0 ]; then
             log "File selection cancelled"
-            return 1
-        fi
-
-        if ! [[ "$choice" =~ ^[0-9]+$ ]]; then
-            log "Invalid selection value: '$choice'"
             return 1
         fi
 

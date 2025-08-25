@@ -8,11 +8,11 @@ test_vm_qemu() {
     fi
     
     local qemu_options=(
-        "1" "Avvio MBR (Legacy)"
-        "2" "Avvio UEFI/EFI (con 2GB RAM)"
-        "3" "Avvio UEFI/EFI (con 4GB RAM)"
-        "4" "Headless (solo MBR)"
-        "5" "Avvio Personalizzato"
+        "1" "MBR Boot (Legacy)"
+        "2" "UEFI/EFI Boot (with 2GB RAM)"
+        "3" "UEFI/EFI Boot (with 4GB RAM)"
+        "4" "Headless (MBR only)"
+        "5" "Custom Boot"
     )
     
     local choice=$(whiptail --title "Test VM with QEMU" --menu "Select boot mode:" 15 60 5 "${qemu_options[@]}" 3>&1 1>&2 2>&3)
@@ -26,33 +26,33 @@ test_vm_qemu() {
     
     case $choice in
         1)
-            # Avvio MBR (Legacy) - questo è l'avvio predefinito
+            # MBR Boot (Legacy) - this is the default boot
             qemu_args=("-hda" "$file" "-m" "2048" "-enable-kvm")
             ;;
         2)
-            # Avvio UEFI/EFI
+            # UEFI/EFI Boot
             if [ ! -f "/usr/share/ovmf/OVMF.fd" ]; then
-                whiptail --msgbox "Il firmware OVMF non è stato trovato.\nInstalla il pacchetto 'ovmf' con 'sudo apt install ovmf'." 12 70
+                whiptail --msgbox "OVMF firmware not found.\nPlease install the 'ovmf' package with 'sudo apt install ovmf'." 12 70
                 return 1
             fi
             qemu_args=("-hda" "$file" "-m" "2048" "-enable-kvm" "-bios" "/usr/share/ovmf/OVMF.fd")
             ;;
         3)
-            # Avvio UEFI/EFI con 4GB di RAM
+            # UEFI/EFI Boot with 4GB RAM
             if [ ! -f "/usr/share/ovmf/OVMF.fd" ]; then
-                whiptail --msgbox "Il firmware OVMF non è stato trovato.\nInstalla il pacchetto 'ovmf' con 'sudo apt install ovmf'." 12 70
+                whiptail --msgbox "OVMF firmware not found.\nPlease install the 'ovmf' package with 'sudo apt install ovmf'." 12 70
                 return 1
             fi
             qemu_args=("-hda" "$file" "-m" "4096" "-enable-kvm" "-bios" "/usr/share/ovmf/OVMF.fd")
             ;;
         4)
-            # Headless (solo MBR)
+            # Headless (MBR only)
             qemu_args=("-hda" "$file" "-m" "1024" "-nographic" "-enable-kvm")
-            whiptail --msgbox "Modalità headless.\nPremi Ctrl+A, X per uscire da QEMU." 10 60
+            whiptail --msgbox "Headless mode.\nPress Ctrl+A, X to exit QEMU." 10 60
             ;;
         5)
-            # Avvio Personalizzato
-            local custom_args=$(whiptail --title "Opzioni Personalizzate" --inputbox "Inserisci argomenti aggiuntivi per QEMU:" 10 70 "-m 2048 -enable-kvm" 3>&1 1>&2 2>&3)
+            # Custom Boot
+            local custom_args=$(whiptail --title "Custom Options" --inputbox "Enter additional arguments for QEMU:" 10 70 "-m 2048 -enable-kvm" 3>&1 1>&2 2>&3)
             if [ $? -eq 0 ] && [ -n "$custom_args" ]; then
                 qemu_args=("-hda" "$file")
                 IFS=' ' read -ra ADDR <<< "$custom_args"
@@ -67,19 +67,23 @@ test_vm_qemu() {
         return 1
     fi
     
+    # Start QEMU in the background and capture the PID immediately
+    log "Attempting to start QEMU with command: $qemu_cmd ${qemu_args[*]}"
+    "$qemu_cmd" "${qemu_args[@]}" </dev/null &>/dev/null &
+    QEMU_PID=$!
+
+    # Check if the process started correctly using a gauge
     (
         echo 0
-        echo "# Starting QEMU..."
-        "$qemu_cmd" "${qemu_args[@]}" </dev/null &>/dev/null &
-        QEMU_PID=$!
-        sleep 3
+        echo "# Waiting for QEMU to start..."
+        sleep 2
         if kill -0 "$QEMU_PID" 2>/dev/null; then
             echo 100
-            echo "# QEMU started!"
+            echo "# QEMU process found. Success!"
             sleep 1
         else
             echo 100
-            echo "# QEMU failed to start"
+            echo "# QEMU process not found."
             sleep 2
             exit 1
         fi
@@ -87,10 +91,10 @@ test_vm_qemu() {
     
     if [ $? -eq 0 ]; then
         log "QEMU started: PID $QEMU_PID, Command: $qemu_cmd ${qemu_args[*]}"
-        whiptail --msgbox "QEMU started successfully!\n\nPID: $QEMU_PID\nCommand: $qemu_cmd ${qemu_args[*]}\n\nClose the QEMU window or use the menu to terminate." 15 80
+        whiptail --msgbox "QEMU started successfully!\n\nPID: $QEMU_PID\n\nClose the QEMU window or use the menu to terminate." 15 80
     else
         log "QEMU start failed"
-        whiptail --msgbox "Error starting QEMU." 8 50
+        whiptail --msgbox "Error starting QEMU. Check $LOG_FILE for details." 8 50
         QEMU_PID=""
         return 1
     fi

@@ -1,5 +1,3 @@
-#!/bin/bash
-
 # Helper function for logging
 log() {
     echo "[$(date '+%H:%M:%S')] $1" >> "$LOG_FILE"
@@ -8,12 +6,10 @@ log() {
 # Comprehensive cleanup function
 cleanup() {
     log "Starting cleanup"
-    echo "Cleaning up..."
     
     # Terminate QEMU if active
     if [ -n "$QEMU_PID" ] && kill -0 "$QEMU_PID" 2>/dev/null; then
         log "Terminating QEMU (PID: $QEMU_PID)"
-        echo "Terminating QEMU (PID: $QEMU_PID)..."
         kill "$QEMU_PID" 2>/dev/null
         sleep 2
         kill -9 "$QEMU_PID" 2>/dev/null
@@ -23,7 +19,6 @@ cleanup() {
     for path in "${MOUNTED_PATHS[@]}"; do
         if mountpoint -q "$path" 2>/dev/null; then
             log "Unmounting $path"
-            echo "Unmounting $path..."
             for i in {1..3}; do
                 if umount "$path" 2>/dev/null || umount -f "$path" 2>/dev/null; then
                     break
@@ -40,21 +35,18 @@ cleanup() {
     # Deactivate LVM
     for lv in "${LVM_ACTIVE[@]}"; do
         log "Deactivating LV $lv"
-        echo "Deactivating LV $lv..."
         lvchange -an "$lv" 2>/dev/null
     done
     
     # Deactivate VG
     for vg in "${VG_DEACTIVATED[@]}"; do
         log "Deactivating VG $vg"
-        echo "Deactivating VG $vg..."
         vgchange -an "$vg" 2>/dev/null
     done
     
     # Close LUKS
     for luks in "${LUKS_MAPPED[@]}"; do
         log "Closing LUKS $luks"
-        echo "Closing LUKS $luks..."
         cryptsetup luksClose "$luks" 2>/dev/null
     done
     
@@ -68,7 +60,6 @@ cleanup() {
     fi
     
     log "Cleanup completed"
-    echo "Cleanup completed."
     CLEANUP_DONE=true
 }
 
