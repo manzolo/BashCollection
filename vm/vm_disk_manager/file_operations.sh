@@ -110,96 +110,90 @@ select_file() {
     
     while true; do
         local items=()
+        local paths=()
+        
         local counter=1
         
         # Navigation options
         if [ "$current_dir" != "/" ]; then
             items+=("$counter" "⬆️  .. (Parent Directory)")
+            paths+=("..")
             ((counter++))
         fi
         
         items+=("$counter" "📍 Current: $(basename "$current_dir")")
+        paths+=("current_dir_info") # Special token
         local current_indicator=$counter
         ((counter++))
         
         items+=("$counter" "⚙️  Options...")
+        paths+=("options_menu") # Special token
         local options_item=$counter
         ((counter++))
         
         items+=("$counter" "📝 Enter path manually...")
+        paths+=("manual_entry") # Special token
         local manual_option=$counter
         ((counter++))
         
         items+=("$counter" "🔗 Quick locations...")
+        paths+=("quick_locations") # Special token
         local quick_option=$counter
         ((counter++))
         
         # Add separator
         items+=("$counter" "─────────────────────")
+        paths+=("separator")
         ((counter++))
         
         # List directories first, then files
-        local dir_items=()
-        local file_items=()
-        
-        # Prepare find arguments based on options
-        local find_args=("$current_dir" "-maxdepth" "1")
+        local find_args=("$current_dir" "-maxdepth" "1" "-print0")
         if [ "$show_hidden" = false ]; then
             find_args+=("!" "-name" ".*")
         fi
         
-        # Read directories and files
+        local sorted_items=()
         while IFS= read -r -d '' item; do
-            if [ "$item" = "$current_dir" ]; then
-                continue  # Skip the current directory itself
+            if [ "$item" != "$current_dir" ]; then
+                sorted_items+=("$item")
             fi
-            
+        done < <(find "${find_args[@]}" \( -type d -o -type f \) 2>/dev/null | sort -z)
+        
+        # Categorize and populate menu items
+        for item in "${sorted_items[@]}"; do
             local basename_item=$(basename "$item")
             local prefix=$(get_file_prefix "$item")
             
             if [ -d "$item" ]; then
-                local item_count=""
-                local dir_size=""
-                if [ -r "$item" ]; then
-                    local count=$(find "$item" -maxdepth 1 -type f 2>/dev/null | wc -l)
-                    item_count=" ($count files)"
-                fi
-                dir_items+=("$counter" "$prefix $basename_item/$item_count")
+                local item_count=$(find "$item" -maxdepth 1 -type f 2>/dev/null | wc -l)
+                items+=("$counter" "$prefix $basename_item/ ($item_count files)")
+                paths+=("$item")
                 ((counter++))
             elif [ -f "$item" ]; then
-                local size=$(stat -c%s "$item" 2>/dev/null || echo "0")
-                local size_formatted=$(format_size "$size")
-                local modified=$(stat -c%y "$item" 2>/dev/null | cut -d' ' -f1 || echo "?")
-                
-                # Filter files based on current mode
                 if [ "$show_all_files" = true ] || is_vm_image "$item"; then
-                    file_items+=("$counter" "$prefix $basename_item ($size_formatted) [$modified]")
+                    local size=$(stat -c%s "$item" 2>/dev/null || echo "0")
+                    local size_formatted=$(format_size "$size")
+                    local modified=$(stat -c%y "$item" 2>/dev/null | cut -d' ' -f1 || echo "?")
+                    
+                    items+=("$counter" "$prefix $basename_item ($size_formatted) [$modified]")
+                    paths+=("$item")
                     ((counter++))
                 fi
             fi
-        done < <(find "${find_args[@]}" \( -type d -o -type f \) -print0 2>/dev/null | sort -z)
+        done
         
-        # Add all items to menu
-        items+=("${dir_items[@]}")
-        items+=("${file_items[@]}")
-        
-        # Show status information
+        # Show status information and calculate menu height
         local status_info=""
         if [ "$show_hidden" = true ]; then
-            status_info+="Hidden files: ON  "
+            status_info+="Hidden: ON  "
         fi
         if [ "$show_all_files" = true ]; then
-            status_info+="All files: ON  "
+            status_info+="All files: ON"
         else
-            status_info+="VM images only: ON  "
+            status_info+="VM images only: ON"
         fi
         
-        local title_text="File Browser - $(basename "$current_dir")"
-        if [ -n "$status_info" ]; then
-            title_text+="\n$status_info"
-        fi
-        
-        # Calculate menu height based on number of items
+        local title_text="File Browser - $(basename "$current_dir")\n$status_info"
         local menu_height=$((${#items[@]} / 2))
         if [ $menu_height -gt 15 ]; then
             menu_height=15
@@ -209,157 +203,117 @@ select_file() {
         
         local choice=$(whiptail --title "$title_text" --menu "Select file or navigate:" 25 90 $menu_height "${items[@]}" 3>&1 1>&2 2>&3)
         
-        # Handle selection cancellation
         if [ $? -ne 0 ]; then
             log "File selection cancelled"
             return 1
         fi
         
-        # Handle special options
-        if [ "$choice" -eq "$current_indicator" ]; then
-            # Current directory indicator - show info
-            local dir_info="Current Directory: $current_dir\n\n"
-            dir_info+="Permissions: $(ls -ld "$current_dir" 2>/dev/null | cut -d' ' -f1 || echo "?")\n"
-            dir_info+="Owner: $(ls -ld "$current_dir" 2>/dev/null | awk '{print $3":"$4}' || echo "?")\n"
-            local dir_size=$(du -sh "$current_dir" 2>/dev/null | cut -f1 || echo "?")
-            dir_info+="Size: $dir_size\n"
-            local file_count=$(find "$current_dir" -maxdepth 1 -type f 2>/dev/null | wc -l)
-            local dir_count=$(find "$current_dir" -maxdepth 1 -type d 2>/dev/null | wc -l)
-            dir_info+="Contents: $file_count files, $((dir_count - 1)) directories"
-            
-            whiptail --title "Directory Information" --msgbox "$dir_info" 15 70
-            continue
-            
-        elif [ "$choice" -eq "$options_item" ]; then
-            # Options menu
-            local option_items=(
-                "1" "Toggle hidden files: $([ "$show_hidden" = true ] && echo "ON" || echo "OFF")"
-                "2" "Toggle file filter: $([ "$show_all_files" = true ] && echo "All files" || echo "VM images only")"
-                "3" "Refresh directory"
-                "4" "Show directory tree"
-                "5" "Back to browser"
-            )
-            
-            local opt_choice=$(whiptail --title "Browser Options" --menu "Select option:" 15 60 5 "${option_items[@]}" 3>&1 1>&2 2>&3)
-            
-            case $opt_choice in
-                1)
-                    show_hidden=$([ "$show_hidden" = true ] && echo "false" || echo "true")
-                    ;;
-                2)
-                    show_all_files=$([ "$show_all_files" = true ] && echo "false" || echo "true")
-                    ;;
-                3)
-                    # Just continue the loop to refresh
-                    ;;
-                4)
-                    if command -v tree >/dev/null 2>&1; then
-                        local tree_output=$(tree -L 2 "$current_dir" 2>/dev/null | head -30)
-                        whiptail --title "Directory Tree" --msgbox "$tree_output" 20 80
-                    else
-                        local simple_tree=$(find "$current_dir" -maxdepth 2 -type d 2>/dev/null | head -20 | sed "s|$current_dir|.|" | sort)
-                        whiptail --title "Directory Structure" --msgbox "$simple_tree" 20 60
-                    fi
-                    ;;
-                5|*)
-                    ;;
-            esac
-            continue
-            
-        elif [ "$choice" -eq "$manual_option" ]; then
-            local manual_file=$(whiptail --title "Enter Path" --inputbox "Enter the full path to the file or directory:" 10 80 "$current_dir" 3>&1 1>&2 2>&3)
-            if [ $? -eq 0 ] && [ -n "$manual_file" ]; then
-                if [ -f "$manual_file" ]; then
-                    log "Manually selected file: $manual_file"
-                    echo "$manual_file"
-                    return 0
-                elif [ -d "$manual_file" ]; then
-                    current_dir="$manual_file"
-                else
-                    whiptail --msgbox "Path does not exist: $manual_file" 8 60
-                fi
-            fi
-            continue
-            
-        elif [ "$choice" -eq "$quick_option" ]; then
-            local quick_dirs=(
-                "1" "/var/lib/libvirt/images (Libvirt VMs)"
-                "2" "/home (User directories)"
-                "3" "$HOME (Your home)"
-                "4" "/tmp (Temporary files)"
-                "5" "/mnt (Mount points)"
-                "6" "/media (Removable media)"
-                "7" "/ (Root directory)"
-                "8" "$(dirname "$current_dir") (Parent of current)"
-                "9" "Back to browser"
-            )
-            local quick_choice=$(whiptail --title "Quick Locations" --menu "Go to:" 18 70 9 "${quick_dirs[@]}" 3>&1 1>&2 2>&3)
-            case $quick_choice in
-                1) current_dir="/var/lib/libvirt/images" ;;
-                2) current_dir="/home" ;;
-                3) current_dir="$HOME" ;;
-                4) current_dir="/tmp" ;;
-                5) current_dir="/mnt" ;;
-                6) current_dir="/media" ;;
-                7) current_dir="/" ;;
-                8) current_dir="$(dirname "$current_dir")" ;;
-                *) continue ;;
-            esac
-            if [ ! -d "$current_dir" ]; then
-                whiptail --msgbox "Directory does not exist: $current_dir\nStaying in current location." 8 70
-                current_dir=$(pwd)
-            fi
-            continue
-        fi
+        # Map choice to path
+        local selected_path=${paths[$choice - 1]}
         
-        # Handle parent directory navigation
-        if [ "$current_dir" != "/" ] && [ "$choice" -eq 1 ]; then
-            current_dir=$(dirname "$current_dir")
-            continue
-        fi
-        
-        # Handle file/directory selection
-        local selected_item=""
-        local current_counter=1
-        
-        # Skip navigation items
-        if [ "$current_dir" != "/" ]; then
-            ((current_counter++))  # Skip parent dir
-        fi
-        current_counter=$((current_counter + 5))  # Skip other navigation items
-        
-        # Find the selected item
-        while IFS= read -r -d '' item; do
-            if [ "$item" = "$current_dir" ]; then
-                continue
-            fi
-            
-            if [ "$choice" -eq "$current_counter" ]; then
-                selected_item="$item"
-                break
-            fi
-            ((current_counter++))
-        done < <(find "$current_dir" -maxdepth 1 \( -type d -o -type f \) $([ "$show_hidden" = false ] && echo "! -name .*") -print0 2>/dev/null | sort -z)
-        
-        # Process the selection
-        if [ -n "$selected_item" ]; then
-            if [ -d "$selected_item" ]; then
-                current_dir="$selected_item"
-                continue
-            elif [ -f "$selected_item" ]; then
-                # Confirm file selection if it's not a VM image
-                if [ "$show_all_files" = true ] && ! is_vm_image "$selected_item"; then
-                    if ! whiptail --title "Confirm Selection" --yesno "Selected file doesn't appear to be a VM image:\n\n$(basename "$selected_item")\n\nDo you want to proceed anyway?" 12 70; then
-                        continue
-                    fi
-                fi
+        # Handle special choices
+        case "$selected_path" in
+            "options_menu")
+                # ... (options menu logic, unchanged) ...
+                local option_items=(
+                    "1" "Toggle hidden files: $([ "$show_hidden" = true ] && echo "ON" || echo "OFF")"
+                    "2" "Toggle file filter: $([ "$show_all_files" = true ] && echo "All files" || echo "VM images only")"
+                    "3" "Refresh directory"
+                    "4" "Show directory tree"
+                    "5" "Back to browser"
+                )
                 
-                log "Selected file: $selected_item"
-                echo "$selected_item"
-                return 0
-            fi
-        fi
-        
+                local opt_choice=$(whiptail --title "Browser Options" --menu "Select option:" 15 60 5 "${option_items[@]}" 3>&1 1>&2 2>&3)
+                
+                case $opt_choice in
+                    1) show_hidden=$([ "$show_hidden" = true ] && echo "false" || echo "true");;
+                    2) show_all_files=$([ "$show_all_files" = true ] && echo "false" || echo "true");;
+                    3) ;;
+                    4)
+                        if command -v tree >/dev/null 2>&1; then
+                            local tree_output=$(tree -L 2 "$current_dir" 2>/dev/null | head -30)
+                            whiptail --title "Directory Tree" --msgbox "$tree_output" 20 80
+                        else
+                            local simple_tree=$(find "$current_dir" -maxdepth 2 -type d 2>/dev/null | head -20 | sed "s|$current_dir|.|")
+                            whiptail --title "Directory Structure" --msgbox "$simple_tree" 20 60
+                        fi
+                        ;;
+                    *) ;;
+                esac
+                continue
+                ;;
+            "manual_entry")
+                # ... (manual entry logic, unchanged) ...
+                local manual_file=$(whiptail --title "Enter Path" --inputbox "Enter the full path to the file or directory:" 10 80 "$current_dir" 3>&1 1>&2 2>&3)
+                if [ $? -eq 0 ] && [ -n "$manual_file" ]; then
+                    if [ -f "$manual_file" ]; then
+                        log "Manually selected file: $manual_file"
+                        echo "$manual_file"
+                        return 0
+                    elif [ -d "$manual_file" ]; then
+                        current_dir="$manual_file"
+                    else
+                        whiptail --msgbox "Path does not exist: $manual_file" 8 60
+                    fi
+                fi
+                continue
+                ;;
+            "quick_locations")
+                # ... (quick locations logic, unchanged) ...
+                local quick_dirs=(
+                    "1" "/var/lib/libvirt/images (Libvirt VMs)"
+                    "2" "/home (User directories)"
+                    "3" "$HOME (Your home)"
+                    "4" "/tmp (Temporary files)"
+                    "5" "/mnt (Mount points)"
+                    "6" "/media (Removable media)"
+                    "7" "/ (Root directory)"
+                    "8" "$(dirname "$current_dir") (Parent of current)"
+                    "9" "Back to browser"
+                )
+                local quick_choice=$(whiptail --title "Quick Locations" --menu "Go to:" 18 70 9 "${quick_dirs[@]}" 3>&1 1>&2 2>&3)
+                case $quick_choice in
+                    1) current_dir="/var/lib/libvirt/images" ;;
+                    2) current_dir="/home" ;;
+                    3) current_dir="$HOME" ;;
+                    4) current_dir="/tmp" ;;
+                    5) current_dir="/mnt" ;;
+                    6) current_dir="/media" ;;
+                    7) current_dir="/" ;;
+                    8) current_dir="$(dirname "$current_dir")" ;;
+                    *) continue ;;
+                esac
+                if [ ! -d "$current_dir" ]; then
+                    whiptail --msgbox "Directory does not exist: $current_dir\nStaying in current location." 8 70
+                    current_dir=$(pwd)
+                fi
+                continue
+                ;;
+            "separator"|"current_dir_info")
+                continue # Ignore these
+                ;;
+            ".." )
+                current_dir=$(dirname "$current_dir")
+                continue
+                ;;
+            *)
+                # Handle file or directory selection
+                if [ -d "$selected_path" ]; then
+                    current_dir="$selected_path"
+                    continue
+                elif [ -f "$selected_path" ]; then
+                    if [ "$show_all_files" = true ] && ! is_vm_image "$selected_path"; then
+                        if ! whiptail --title "Confirm Selection" --yesno "Selected file doesn't appear to be a VM image:\n\n$(basename "$selected_path")\n\nDo you want to proceed anyway?" 12 70; then
+                            continue
+                        fi
+                    fi
+                    
+                    log "Selected file: $selected_path"
+                    echo "$selected_path"
+                    return 0
+                fi
+                ;;
+        esac
     done
 }
 

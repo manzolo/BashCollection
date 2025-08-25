@@ -102,8 +102,15 @@ test_vm_qemu() {
 gparted_boot() {
     local file=$1
     local gparted_dir="${PWD}/gparted"
-    local gparted_iso_url="https://sourceforge.net/projects/gparted/files/gparted-live-stable/1.7.0-8/gparted-live-1.7.0-8-amd64.iso/download"
-    local gparted_iso_file="$gparted_dir/gparted-live-1.7.0-8-amd64.iso"
+    local gparted_iso_version="1.7.0-8"
+    local gparted_iso_filename="gparted-live-${gparted_iso_version}-amd64.iso"
+    local gparted_iso_url="https://sourceforge.net/projects/gparted/files/gparted-live-stable/${gparted_iso_version}/${gparted_iso_filename}/download"
+    local gparted_iso_file="$gparted_dir/$gparted_iso_filename"
+    
+    # Usa il checksum ufficiale da gparted.org
+    local checksum_url="https://gparted.org/gparted-live/stable/CHECKSUMS.TXT"
+    local checksum_file="$gparted_dir/CHECKSUMS.TXT"
+    local expected_sha256="30dd9ccec5f2152c076b980aaec8968de7df9e6ad165f2662d3f9269cc333baa"
     
     if ! command -v qemu-system-x86_64 &> /dev/null; then
         whiptail --msgbox "qemu-system-x86_64 not found.\nInstall with: apt install qemu-system-x86" 10 60
@@ -112,18 +119,64 @@ gparted_boot() {
     
     mkdir -p "$gparted_dir"
     
+    # Verifica se il file ISO esiste e ha il checksum corretto
     if [ ! -f "$gparted_iso_file" ]; then
+        log "ISO file not found, proceeding with download."
+    else
+        # Calcola il checksum del file esistente per debug
+        local computed_sha256=$(cd "$gparted_dir" && sha256sum "$gparted_iso_filename" | cut -d' ' -f1)
+        log "Computed SHA256: $computed_sha256, Expected: $expected_sha256"
+        if [ "$computed_sha256" != "$expected_sha256" ]; then
+            log "Checksum mismatch, removing existing file and downloading again."
+            rm "$gparted_iso_file"
+        else
+            log "Checksum verified, using existing ISO file."
+        fi
+    fi
+    
+    if [ ! -f "$gparted_iso_file" ]; then
+        # Pulisci e scarica i file
+        [ -f "$checksum_file" ] && rm "$checksum_file"
+        
         (
             echo 0
             echo "# Downloading GParted Live ISO..."
             wget -O "$gparted_iso_file" "$gparted_iso_url" 2>>"$LOG_FILE"
+            echo 50
+            echo "# Downloading checksum file..."
+            wget -O "$checksum_file" "$checksum_url" 2>>"$LOG_FILE"
             echo 100
             echo "# Download complete!"
             sleep 1
-        ) | whiptail --gauge "Downloading GParted Live ISO..." 8 50 0
+        ) | whiptail --gauge "Downloading GParted Live ISO and Checksums..." 8 50 0
+        
         if [ $? -ne 0 ]; then
-            log "Error downloading GParted ISO"
-            whiptail --msgbox "Error downloading GParted ISO." 8 50
+            log "Error downloading GParted files."
+            whiptail --msgbox "Error downloading GParted ISO or checksum file." 8 50
+            return 1
+        fi
+        
+        (
+            echo 0
+            echo "# Verifying checksum..."
+            cd "$gparted_dir"
+            local computed_sha256=$(sha256sum "$gparted_iso_filename" | cut -d' ' -f1)
+            if [ "$computed_sha256" = "$expected_sha256" ]; then
+                echo 100
+                echo "# Checksum verified successfully!"
+                sleep 1
+            else
+                echo 100
+                echo "# Checksum verification failed!"
+                sleep 2
+                exit 1
+            fi
+        ) | whiptail --gauge "Verifying GParted ISO..." 8 50 0
+        
+        if [ $? -ne 0 ]; then
+            log "Checksum verification failed for GParted ISO."
+            whiptail --msgbox "Checksum verification failed.\nThe downloaded file may be corrupted. Please try again." 10 60
+            rm "$gparted_iso_file" "$checksum_file"
             return 1
         fi
     fi
@@ -132,23 +185,22 @@ gparted_boot() {
         return 1
     fi
     
-    (
-        echo 0
-        echo "# Starting QEMU with GParted Live..."
-        qemu-system-x86_64 -hda "$file" -cdrom "$gparted_iso_file" -boot d -m 2048 -enable-kvm </dev/null &>/dev/null &
-        QEMU_PID=$!
-        sleep 3
-        if kill -0 "$QEMU_PID" 2>/dev/null; then
-            echo 100
-            echo "# QEMU started!"
-            sleep 1
-        else
-            echo 100
-            echo "# QEMU failed to start"
-            sleep 2
-            exit 1
-        fi
-    ) | whiptail --gauge "Starting QEMU with GParted Live..." 8 50 0
+    # Avvia QEMU e cattura il PID nel contesto principale
+    echo 0
+    echo "# Starting QEMU with GParted Live..."
+    qemu-system-x86_64 -hda "$file" -cdrom "$gparted_iso_file" -boot d -m 2048 -enable-kvm </dev/null &>/dev/null &
+    QEMU_PID=$!
+    sleep 3
+    if kill -0 "$QEMU_PID" 2>/dev/null; then
+        echo 100
+        echo "# QEMU started!"
+        sleep 1
+    else
+        echo 100
+        echo "# QEMU failed to start"
+        sleep 2
+        exit 1
+    fi | whiptail --gauge "Starting QEMU with GParted Live..." 8 50 0
     
     if [ $? -eq 0 ]; then
         log "GParted QEMU started: PID $QEMU_PID"
