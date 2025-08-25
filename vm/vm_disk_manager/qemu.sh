@@ -1,4 +1,4 @@
-# Function to test the VM with QEMU
+# Main QEMU test function
 test_vm_qemu() {
     local file=$1
     
@@ -9,57 +9,89 @@ test_vm_qemu() {
     
     local qemu_options=(
         "1" "MBR Boot (Legacy)"
-        "2" "UEFI/EFI Boot (with 2GB RAM)"
-        "3" "UEFI/EFI Boot (with 4GB RAM)"
-        "4" "Headless (MBR only)"
-        "5" "Custom Boot"
+        "2" "UEFI/EFI Boot"
+        "3" "Headless Mode (SSH via port 2222)"
+        "4" "Custom Boot Configuration"
+        "5" "Debug Mode (verbose logging)"
     )
     
-    local choice=$(whiptail --title "Test VM with QEMU" --menu "Select boot mode:" 15 60 5 "${qemu_options[@]}" 3>&1 1>&2 2>&3)
+    local choice=$(whiptail --title "Test VM with QEMU" --menu "Select boot mode:" 16 70 6 "${qemu_options[@]}" 3>&1 1>&2 2>&3)
     
     if [ $? -ne 0 ]; then
         return 1
     fi
     
-    local qemu_cmd="qemu-system-x86_64"
+    # Detect file format and KVM support
+    local file_format=$(detect_file_format "$file")
+    local kvm_option=$(check_kvm_support)
+    
+    log "Detected file format: $file_format for file: $file" >> "$LOG_FILE"
+    
     local qemu_args=()
+    local boot_description=""
     
     case $choice in
         1)
-            # MBR Boot (Legacy) - this is the default boot
-            qemu_args=("-hda" "$file" "-m" "2048" "-enable-kvm")
+            # Enhanced MBR Boot with options
+            local prefs=$(get_user_preferences 2048)
+            if [ $? -ne 0 ]; then return 1; fi
+            local memory="${prefs%%|*}"
+            local network="${prefs#*|}"
+            local audio="${network#*|}"
+            network="${network%%|*}"
+            
+            qemu_args=($(configure_mbr_boot "$file" "$file_format" "$kvm_option" "$memory" "$network" "$audio"))
+            boot_description="Enhanced MBR Boot (${memory}MB RAM, Network: $network, Audio: $audio)"
             ;;
         2)
             # UEFI/EFI Boot
-            if [ ! -f "/usr/share/ovmf/OVMF.fd" ]; then
-                whiptail --msgbox "OVMF firmware not found.\nPlease install the 'ovmf' package with 'sudo apt install ovmf'." 12 70
-                return 1
-            fi
-            qemu_args=("-hda" "$file" "-m" "2048" "-enable-kvm" "-bios" "/usr/share/ovmf/OVMF.fd")
+            local prefs=$(get_user_preferences 2048)
+            if [ $? -ne 0 ]; then return 1; fi
+            local memory="${prefs%%|*}"
+            local network="${prefs#*|}"
+            local audio="${network#*|}"
+            network="${network%%|*}"
+            
+            qemu_args=($(configure_uefi_boot "$file" "$file_format" "$kvm_option" "$memory" "$network" "$audio"))
+            if [ $? -ne 0 ]; then return 1; fi
+            boot_description="UEFI/EFI Boot (${memory}MB RAM, Network: $network, Audio: $audio)"
             ;;
         3)
-            # UEFI/EFI Boot with 4GB RAM
-            if [ ! -f "/usr/share/ovmf/OVMF.fd" ]; then
-                whiptail --msgbox "OVMF firmware not found.\nPlease install the 'ovmf' package with 'sudo apt install ovmf'." 12 70
-                return 1
-            fi
-            qemu_args=("-hda" "$file" "-m" "4096" "-enable-kvm" "-bios" "/usr/share/ovmf/OVMF.fd")
+            # Headless Mode
+            local prefs=$(get_user_preferences 1024)
+            if [ $? -ne 0 ]; then return 1; fi
+            local memory="${prefs%%|*}"
+            local network="${prefs#*|}"
+            local audio="${network#*|}"
+            network="${network%%|*}"
+            
+            qemu_args=($(configure_headless_boot "$file" "$file_format" "$kvm_option" "$memory" "$network"))
+            boot_description="Headless Mode (${memory}MB RAM, Network: $network, Audio: disabled)"
+            whiptail --msgbox "Headless mode starting.\n\nSSH Access: ssh -p 2222 user@localhost\nMonitor: telnet localhost 4444\n\nTo exit QEMU:\n- Use 'quit' in monitor console\n- Or press Ctrl+A, then X" 14 60
             ;;
         4)
-            # Headless (MBR only)
-            qemu_args=("-hda" "$file" "-m" "1024" "-nographic" "-enable-kvm")
-            whiptail --msgbox "Headless mode.\nPress Ctrl+A, X to exit QEMU." 10 60
-            ;;
-        5)
             # Custom Boot
-            local custom_args=$(whiptail --title "Custom Options" --inputbox "Enter additional arguments for QEMU:" 10 70 "-m 2048 -enable-kvm" 3>&1 1>&2 2>&3)
+            local custom_args=$(whiptail --title "Custom Options" --inputbox "Enter QEMU arguments (file will be added automatically):" 12 70 "-m 2048 $kvm_option -vga virtio" 3>&1 1>&2 2>&3)
             if [ $? -eq 0 ] && [ -n "$custom_args" ]; then
-                qemu_args=("-hda" "$file")
+                qemu_args=(-drive "file=$file,format=$file_format,if=virtio")
                 IFS=' ' read -ra ADDR <<< "$custom_args"
                 qemu_args+=("${ADDR[@]}")
+                boot_description="Custom Boot"
             else
                 return 1
             fi
+            ;;
+        5)
+            # Debug Mode
+            local prefs=$(get_user_preferences 2048)
+            if [ $? -ne 0 ]; then return 1; fi
+            local memory="${prefs%%|*}"
+            local network="${prefs#*|}"
+            local audio="${network#*|}"
+            network="${network%%|*}"
+            
+            qemu_args=($(configure_debug_boot "$file" "$file_format" "$kvm_option" "$memory" "$network" "$audio"))
+            boot_description="Debug Mode (${memory}MB RAM, Network: $network, Audio: $audio)"
             ;;
     esac
     
@@ -67,174 +99,104 @@ test_vm_qemu() {
         return 1
     fi
     
-    # Start QEMU in the background and capture the PID immediately
-    log "Attempting to start QEMU with command: $qemu_cmd ${qemu_args[*]}"
-    "$qemu_cmd" "${qemu_args[@]}" </dev/null &>/dev/null &
-    QEMU_PID=$!
-
-    # Check if the process started correctly using a gauge
-    (
-        echo 0
-        echo "# Waiting for QEMU to start..."
-        sleep 2
-        if kill -0 "$QEMU_PID" 2>/dev/null; then
-            echo 100
-            echo "# QEMU process found. Success!"
-            sleep 1
+    # Start QEMU
+    log "Attempting to start QEMU with: $boot_description" >> "$LOG_FILE"
+    log "Command: qemu-system-x86_64 ${qemu_args[*]}" >> "$LOG_FILE"
+    
+    local error_log="/tmp/qemu-error-$$.log"
+    
+    # Handle different execution modes
+    if [[ "${qemu_args[*]}" == *"-nographic"* ]]; then
+        # Headless mode - run in foreground
+        qemu-system-x86_64 "${qemu_args[@]}" 2>>"$error_log"
+        local qemu_exit_code=$?
+        log "QEMU exited with code: $qemu_exit_code" >> "$LOG_FILE"
+        
+        if [ $qemu_exit_code -eq 0 ]; then
+            whiptail --msgbox "QEMU session completed successfully." 8 50
         else
-            echo 100
-            echo "# QEMU process not found."
+            whiptail --msgbox "QEMU exited with error code: $qemu_exit_code" 8 50
+        fi
+        return $qemu_exit_code
+    else
+        # GUI mode - run in background
+        qemu-system-x86_64 "${qemu_args[@]}" </dev/null 2>"$error_log" &
+        QEMU_PID=$!
+        log "QEMU started with PID: $QEMU_PID, Error log: $error_log" >> "$LOG_FILE"
+    fi
+
+    # Check if the process started correctly
+    (
+        echo 10; echo "# Starting QEMU process..."
+        sleep 1
+        echo 30; echo "# Checking process status (PID: $QEMU_PID)..."
+        sleep 2
+        
+        if kill -0 "$QEMU_PID" 2>/dev/null; then
+            echo 60; echo "# QEMU process is running..."
+            sleep 1
+            echo 80; echo "# Waiting for initialization..."
             sleep 2
-            exit 1
+            
+            if kill -0 "$QEMU_PID" 2>/dev/null; then
+                echo 100; echo "# QEMU started successfully!"
+                sleep 1
+            else
+                echo 100; echo "# QEMU process died during startup"
+                sleep 2; exit 1
+            fi
+        else
+            echo 100; echo "# Error: QEMU process failed to start"
+            sleep 2; exit 1
         fi
     ) | whiptail --gauge "Starting QEMU..." 8 50 0
     
     if [ $? -eq 0 ]; then
-        log "QEMU started: PID $QEMU_PID, Command: $qemu_cmd ${qemu_args[*]}"
-        whiptail --msgbox "QEMU started successfully!\n\nPID: $QEMU_PID\n\nClose the QEMU window or use the menu to terminate." 15 80
-    else
-        log "QEMU start failed"
-        whiptail --msgbox "Error starting QEMU. Check $LOG_FILE for details." 8 50
-        QEMU_PID=""
-        return 1
-    fi
-    
-    return 0
-}
-
-# Function to boot GParted Live ISO with QEMU
-gparted_boot() {
-    local file=$1
-    local gparted_dir="${SCRIPT_DIR}/gparted"  # Use fixed script dir instead of PWD
-    local gparted_iso_version="1.7.0-8"
-    local gparted_iso_filename="gparted-live-${gparted_iso_version}-amd64.iso"
-    local gparted_iso_url="https://sourceforge.net/projects/gparted/files/gparted-live-stable/${gparted_iso_version}/${gparted_iso_filename}/download"
-    local gparted_iso_file="$gparted_dir/$gparted_iso_filename"
-    
-    # Checksum file from gparted.org
-    local checksum_url="https://gparted.org/gparted-live/stable/CHECKSUMS.TXT"
-    local checksum_file="$gparted_dir/CHECKSUMS.TXT"
-    
-    if ! command -v qemu-system-x86_64 &> /dev/null; then
-        whiptail --msgbox "qemu-system-x86_64 not found.\nInstall with: apt install qemu-system-x86" 10 60
-        return 1
-    fi
-    
-    mkdir -p "$gparted_dir"
-    log "Gparted location: $gparted_dir"
-    
-    # Ensure checksum file exists (download if missing)
-    if [ ! -f "$checksum_file" ]; then
-        log "Downloading checksum file..."
-        wget -O "$checksum_file" "$checksum_url" 2>>"$LOG_FILE"
-        if [ $? -ne 0 ]; then
-            log "Error downloading checksum file."
-            whiptail --msgbox "Error downloading checksum file." 8 50
-            return 1
-        fi
-    fi
-    
-    # Extract expected SHA256 from checksum file (under ### SHA256SUMS:)
-    local expected_sha256=$(awk '
-        /### SHA256SUMS:/ {found=1; next}
-        found && /^###/ {found=0; next}
-        found && $2 == "'"$gparted_iso_filename"'" {print $1; exit}
-    ' "$checksum_file")
-    
-    if [ -z "$expected_sha256" ]; then
-        log "Could not extract SHA256 for $gparted_iso_filename from checksum file."
-        whiptail --msgbox "Could not find SHA256 checksum in file. It may be corrupted or mismatched." 10 60
-        rm "$checksum_file"
-        return 1
-    fi
-    log "Expected SHA256 from checksum file: $expected_sha256"
-    
-    # Verify if ISO exists and matches checksum
-    if [ ! -f "$gparted_iso_file" ]; then
-        log "ISO file not found, proceeding with download."
-    else
-        # Compute checksum of existing file
-        local computed_sha256=$(cd "$gparted_dir" && sha256sum "$gparted_iso_filename" | cut -d' ' -f1)
-        log "Computed SHA256: $computed_sha256, Expected: $expected_sha256"
-        if [ "$computed_sha256" != "$expected_sha256" ]; then
-            log "Checksum mismatch, removing existing file and downloading again."
-            rm "$gparted_iso_file"
-        else
-            log "Checksum verified, using existing ISO file."
-        fi
-    fi
-    
-    if [ ! -f "$gparted_iso_file" ]; then
-        # Download ISO (checksum is already handled)
-        (
-            echo 0
-            echo "# Downloading GParted Live ISO..."
-            wget -O "$gparted_iso_file" "$gparted_iso_url" 2>>"$LOG_FILE"
-            echo 100
-            echo "# Download complete!"
-            sleep 1
-        ) | whiptail --gauge "Downloading GParted Live ISO..." 8 50 0
+        log "QEMU started successfully: PID $QEMU_PID, Mode: $boot_description" >> "$LOG_FILE"
         
-        if [ $? -ne 0 ]; then
-            log "Error downloading GParted ISO."
-            whiptail --msgbox "Error downloading GParted ISO." 8 50
-            rm "$checksum_file"  # Clean up
-            return 1
+        # Success message with relevant information
+        local info_msg="QEMU started successfully!\n\nMode: $boot_description\nPID: $QEMU_PID"
+        
+        # Add mode-specific information
+        case $choice in
+            1|2|3|5)
+                info_msg+="\n\nFeatures:\n- VirtIO disk and network for better performance\n- SSH forwarding: ssh -p 2222 user@localhost (virtio-net)\n- SSH forwarding: ssh -p 2223 user@localhost (e1000)"
+                ;;
+            4)
+                info_msg+="\n\nAccess:\n- SSH: ssh -p 2222 user@localhost\n- Monitor: telnet localhost 4444"
+                ;;
+        esac
+        
+        if [[ "$choice" == "2" || "$choice" == "3" ]]; then
+            info_msg+="\n\nEFI Boot:\n- UEFI boot screen may take a moment\n- Serial log: /tmp/qemu-serial-$QEMU_PID.log"
         fi
-    fi
-    
-    # Verify checksum after download (or re-verify existing)
-    (
-        echo 0
-        echo "# Verifying checksum..."
-        cd "$gparted_dir"
-        local computed_sha256=$(sha256sum "$gparted_iso_filename" | cut -d' ' -f1)
-        if [ "$computed_sha256" = "$expected_sha256" ]; then
-            echo 100
-            echo "# Checksum verified successfully!"
-            sleep 1
-        else
-            echo 100
-            echo "# Checksum verification failed!"
-            sleep 2
-            exit 1
+        
+        if [[ "$choice" == "5" ]]; then
+            info_msg+="\n\nDebug files:\n- Serial: /tmp/qemu-debug-$QEMU_PID.log\n- Trace: /tmp/qemu-trace-$QEMU_PID.log"
         fi
-    ) | whiptail --gauge "Verifying GParted ISO..." 8 50 0
-    
-    if [ $? -ne 0 ]; then
-        log "Checksum verification failed for GParted ISO."
-        whiptail --msgbox "Checksum verification failed.\nThe downloaded file may be corrupted. Please try again." 10 60
-        rm "$gparted_iso_file" "$checksum_file"
-        return 1
-    fi
-    
-    if ! check_file_lock "$file"; then
-        return 1
-    fi
-    
-    # Start QEMU and capture PID
-    echo 0
-    echo "# Starting QEMU with GParted Live..."
-    qemu-system-x86_64 -hda "$file" -cdrom "$gparted_iso_file" -boot d -m 2048 -enable-kvm </dev/null &>/dev/null &
-    QEMU_PID=$!
-    sleep 3
-    if kill -0 "$QEMU_PID" 2>/dev/null; then
-        echo 100
-        echo "# QEMU started!"
-        sleep 1
+        
+        info_msg+="\n\nClose the QEMU window to terminate.\nIf network is not detected, check VirtIO or e1000 drivers in the guest OS."
+        
+        whiptail --msgbox "$info_msg" 20 80
+        rm -f "$error_log"
     else
-        echo 100
-        echo "# QEMU failed to start"
-        sleep 2
-        exit 1
-    fi | whiptail --gauge "Starting QEMU with GParted Live..." 8 50 0
-    
-    if [ $? -eq 0 ]; then
-        log "GParted QEMU started: PID $QEMU_PID"
-        whiptail --msgbox "QEMU started successfully!\n\nPID: $QEMU_PID\n\nYou can now use GParted Live to resize the partitions inside the VM.\nLogin password: live" 15 80
-    else
-        log "GParted QEMU start failed"
-        whiptail --msgbox "Error starting QEMU." 8 50
+        log "QEMU start failed" >> "$LOG_FILE"
+        
+        local error_details=""
+        if [ -f "$error_log" ] && [ -s "$error_log" ]; then
+            error_details=$(head -10 "$error_log" | tr '\n' ' ')
+            log "QEMU error output: $error_details" >> "$LOG_FILE"
+        fi
+        
+        local error_msg="Error starting QEMU.\n\nMode: $boot_description\nPID: $QEMU_PID"
+        
+        if [ -n "$error_details" ]; then
+            error_msg+="\n\nError details:\n${error_details:0:200}"
+        fi
+        
+        error_msg+="\n\nCheck logs:\n- Main: $LOG_FILE\n- Errors: $error_log"
+        
+        whiptail --msgbox "$error_msg" 18 80
         QEMU_PID=""
         return 1
     fi
