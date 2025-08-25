@@ -82,7 +82,73 @@ mount_with_guestmount() {
     fi
 }
 
-# Function to mount with NBD
+# Function to setup chroot environment
+setup_chroot_environment() {
+    local mount_point=$1
+    
+    log "Setting up chroot environment at $mount_point"
+    
+    # Check if this looks like a Linux root filesystem
+    if [ ! -f "$mount_point/bin/bash" ] && [ ! -f "$mount_point/usr/bin/bash" ]; then
+        whiptail --msgbox "This doesn't appear to be a Linux root filesystem.\nMissing /bin/bash or /usr/bin/bash\n\nChroot requires a complete Linux filesystem." 12 70
+        return 1
+    fi
+    
+    # Mount necessary virtual filesystems for chroot
+    local vfs_mounts=("/proc" "/sys" "/dev" "/dev/pts" "/run")
+    local mounted_vfs=()
+    
+    for vfs in "${vfs_mounts[@]}"; do
+        if [ -d "$mount_point$vfs" ]; then
+            case "$vfs" in
+                "/proc")
+                    mount -t proc proc "$mount_point/proc" 2>>"$LOG_FILE" && mounted_vfs+=("$mount_point/proc")
+                    ;;
+                "/sys")
+                    mount -t sysfs sysfs "$mount_point/sys" 2>>"$LOG_FILE" && mounted_vfs+=("$mount_point/sys")
+                    ;;
+                "/dev")
+                    mount --bind /dev "$mount_point/dev" 2>>"$LOG_FILE" && mounted_vfs+=("$mount_point/dev")
+                    ;;
+                "/dev/pts")
+                    if [ -d "$mount_point/dev/pts" ]; then
+                        mount -t devpts devpts "$mount_point/dev/pts" 2>>"$LOG_FILE" && mounted_vfs+=("$mount_point/dev/pts")
+                    fi
+                    ;;
+                "/run")
+                    mount --bind /run "$mount_point/run" 2>>"$LOG_FILE" && mounted_vfs+=("$mount_point/run")
+                    ;;
+            esac
+        else
+            log "Warning: $mount_point$vfs directory does not exist"
+        fi
+    done
+    
+    # Store mounted VFS for cleanup
+    MOUNTED_PATHS+=("${mounted_vfs[@]}")
+    
+    return 0
+}
+
+# Function to cleanup chroot environment
+cleanup_chroot_environment() {
+    local mount_point=$1
+    
+    log "Cleaning up chroot environment"
+    
+    # Unmount VFS in reverse order
+    local vfs_cleanup=("/run" "/dev/pts" "/dev" "/sys" "/proc")
+    for vfs in "${vfs_cleanup[@]}"; do
+        if mountpoint -q "$mount_point$vfs" 2>/dev/null; then
+            log "Unmounting $mount_point$vfs"
+            umount "$mount_point$vfs" 2>>"$LOG_FILE" || umount -l "$mount_point$vfs" 2>>"$LOG_FILE"
+            # Remove from MOUNTED_PATHS
+            MOUNTED_PATHS=("${MOUNTED_PATHS[@]/$mount_point$vfs}")
+        fi
+    done
+}
+
+# Function to mount with NBD (enhanced with chroot option)
 mount_with_nbd() {
     local file=$1
     local format=$(qemu-img info "$file" 2>/dev/null | grep "file format:" | awk '{print $3}')
@@ -213,30 +279,79 @@ mount_with_nbd() {
         
         log "Mounted $selected_part at $mount_point" >> "$LOG_FILE"
         
-        whiptail --msgbox "Partition mounted!\n\nPath: $mount_point\n\nUse the 'exit' command to return to the menu.\n" 12 70
+        # Ask user what they want to do
+        local action_options=(
+            "1" "Interactive shell in mount directory"
+            "2" "Chroot into filesystem (Linux only)"
+            "3" "Just mount and return to menu"
+        )
         
-        # Open interactive shell in current terminal, waiting for user to exit
-        if [ -n "$original_user" ]; then
-            sudo -u "$original_user" bash -c "cd '$mount_point' && exec bash -i"
-        else
-            bash -c "cd '$mount_point' && exec bash -i"
-        fi
+        local action_choice=$(whiptail --title "Mount Action" --menu "Partition mounted at $mount_point\nWhat would you like to do?" 15 70 3 "${action_options[@]}" 3>&1 1>&2 2>&3)
         
-        # Cleanup is now correctly placed AFTER the shell exits
-        log "Shell exited, checking mount and NBD status" >> "$LOG_FILE"
+        case $action_choice in
+            1)
+                whiptail --msgbox "Opening shell in mount directory.\n\nPath: $mount_point\n\nUse 'exit' to return to the menu." 12 70
+                if [ -n "$original_user" ]; then
+                    sudo -u "$original_user" bash -c "cd '$mount_point' && exec bash -i"
+                else
+                    bash -c "cd '$mount_point' && exec bash -i"
+                fi
+                ;;
+            2)
+                if setup_chroot_environment "$mount_point"; then
+                    whiptail --msgbox "Entering chroot environment.\n\nYou are now in the VM's filesystem as root.\nNetworking and some services may not work.\n\nUse 'exit' to return to the menu.\n\nWarning: Be careful with system modifications!" 15 70
+                    
+                    # Copy resolv.conf for network resolution
+                    if [ -f "/etc/resolv.conf" ]; then
+                        cp /etc/resolv.conf "$mount_point/etc/resolv.conf" 2>/dev/null || true
+                    fi
+                    
+                    # Enter chroot
+                    chroot "$mount_point" /bin/bash -l || chroot "$mount_point" /usr/bin/bash -l
+                    
+                    # Cleanup chroot environment
+                    cleanup_chroot_environment "$mount_point"
+                else
+                    whiptail --msgbox "Failed to setup chroot environment.\nFalling back to regular shell." 10 60
+                    if [ -n "$original_user" ]; then
+                        sudo -u "$original_user" bash -c "cd '$mount_point' && exec bash -i"
+                    else
+                        bash -c "cd '$mount_point' && exec bash -i"
+                    fi
+                fi
+                ;;
+            3)
+                whiptail --msgbox "Partition mounted at: $mount_point\n\nReturning to menu. Use 'Active Mount Points' to manage." 10 70
+                return 0
+                ;;
+            *)
+                whiptail --msgbox "No action selected. Returning to menu.\n\nMount point: $mount_point" 10 70
+                return 0
+                ;;
+        esac
+        
+        # Cleanup after shell/chroot exits
+        log "Shell/chroot exited, cleaning up mount and NBD" >> "$LOG_FILE"
+        
+        # Clean up any remaining chroot mounts
+        cleanup_chroot_environment "$mount_point"
+        
+        # Unmount main partition
         if mountpoint -q "$mount_point" 2>/dev/null; then
             umount "$mount_point" 2>>"$LOG_FILE" || log "Failed to unmount $mount_point" >> "$LOG_FILE"
             rmdir "$mount_point" 2>/dev/null
             MOUNTED_PATHS=("${MOUNTED_PATHS[@]/$mount_point}")
             log "Unmounted $mount_point" >> "$LOG_FILE"
         fi
+        
+        # Disconnect NBD
         if [ -n "$NBD_DEVICE" ] && [ -b "$NBD_DEVICE" ]; then
             safe_nbd_disconnect "$NBD_DEVICE" >> "$LOG_FILE" 2>&1
             NBD_DEVICE=""
             log "Disconnected $NBD_DEVICE" >> "$LOG_FILE"
         fi
         
-        whiptail --msgbox "Shell closed and mount cleaned up." 8 50
+        whiptail --msgbox "Mount and NBD cleaned up successfully." 8 50
         return 0
     else
         rmdir "$mount_point" 2>/dev/null
