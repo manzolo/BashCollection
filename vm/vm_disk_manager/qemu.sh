@@ -101,16 +101,15 @@ test_vm_qemu() {
 # Function to boot GParted Live ISO with QEMU
 gparted_boot() {
     local file=$1
-    local gparted_dir="${PWD}/gparted"
+    local gparted_dir="${SCRIPT_DIR}/gparted"  # Use fixed script dir instead of PWD
     local gparted_iso_version="1.7.0-8"
     local gparted_iso_filename="gparted-live-${gparted_iso_version}-amd64.iso"
     local gparted_iso_url="https://sourceforge.net/projects/gparted/files/gparted-live-stable/${gparted_iso_version}/${gparted_iso_filename}/download"
     local gparted_iso_file="$gparted_dir/$gparted_iso_filename"
     
-    # Usa il checksum ufficiale da gparted.org
+    # Checksum file from gparted.org
     local checksum_url="https://gparted.org/gparted-live/stable/CHECKSUMS.TXT"
     local checksum_file="$gparted_dir/CHECKSUMS.TXT"
-    local expected_sha256="30dd9ccec5f2152c076b980aaec8968de7df9e6ad165f2662d3f9269cc333baa"
     
     if ! command -v qemu-system-x86_64 &> /dev/null; then
         whiptail --msgbox "qemu-system-x86_64 not found.\nInstall with: apt install qemu-system-x86" 10 60
@@ -118,12 +117,39 @@ gparted_boot() {
     fi
     
     mkdir -p "$gparted_dir"
+    log "Gparted location: $gparted_dir"
     
-    # Verifica se il file ISO esiste e ha il checksum corretto
+    # Ensure checksum file exists (download if missing)
+    if [ ! -f "$checksum_file" ]; then
+        log "Downloading checksum file..."
+        wget -O "$checksum_file" "$checksum_url" 2>>"$LOG_FILE"
+        if [ $? -ne 0 ]; then
+            log "Error downloading checksum file."
+            whiptail --msgbox "Error downloading checksum file." 8 50
+            return 1
+        fi
+    fi
+    
+    # Extract expected SHA256 from checksum file (under ### SHA256SUMS:)
+    local expected_sha256=$(awk '
+        /### SHA256SUMS:/ {found=1; next}
+        found && /^###/ {found=0; next}
+        found && $2 == "'"$gparted_iso_filename"'" {print $1; exit}
+    ' "$checksum_file")
+    
+    if [ -z "$expected_sha256" ]; then
+        log "Could not extract SHA256 for $gparted_iso_filename from checksum file."
+        whiptail --msgbox "Could not find SHA256 checksum in file. It may be corrupted or mismatched." 10 60
+        rm "$checksum_file"
+        return 1
+    fi
+    log "Expected SHA256 from checksum file: $expected_sha256"
+    
+    # Verify if ISO exists and matches checksum
     if [ ! -f "$gparted_iso_file" ]; then
         log "ISO file not found, proceeding with download."
     else
-        # Calcola il checksum del file esistente per debug
+        # Compute checksum of existing file
         local computed_sha256=$(cd "$gparted_dir" && sha256sum "$gparted_iso_filename" | cut -d' ' -f1)
         log "Computed SHA256: $computed_sha256, Expected: $expected_sha256"
         if [ "$computed_sha256" != "$expected_sha256" ]; then
@@ -135,57 +161,54 @@ gparted_boot() {
     fi
     
     if [ ! -f "$gparted_iso_file" ]; then
-        # Pulisci e scarica i file
-        [ -f "$checksum_file" ] && rm "$checksum_file"
-        
+        # Download ISO (checksum is already handled)
         (
             echo 0
             echo "# Downloading GParted Live ISO..."
             wget -O "$gparted_iso_file" "$gparted_iso_url" 2>>"$LOG_FILE"
-            echo 50
-            echo "# Downloading checksum file..."
-            wget -O "$checksum_file" "$checksum_url" 2>>"$LOG_FILE"
             echo 100
             echo "# Download complete!"
             sleep 1
-        ) | whiptail --gauge "Downloading GParted Live ISO and Checksums..." 8 50 0
+        ) | whiptail --gauge "Downloading GParted Live ISO..." 8 50 0
         
         if [ $? -ne 0 ]; then
-            log "Error downloading GParted files."
-            whiptail --msgbox "Error downloading GParted ISO or checksum file." 8 50
+            log "Error downloading GParted ISO."
+            whiptail --msgbox "Error downloading GParted ISO." 8 50
+            rm "$checksum_file"  # Clean up
             return 1
         fi
-        
-        (
-            echo 0
-            echo "# Verifying checksum..."
-            cd "$gparted_dir"
-            local computed_sha256=$(sha256sum "$gparted_iso_filename" | cut -d' ' -f1)
-            if [ "$computed_sha256" = "$expected_sha256" ]; then
-                echo 100
-                echo "# Checksum verified successfully!"
-                sleep 1
-            else
-                echo 100
-                echo "# Checksum verification failed!"
-                sleep 2
-                exit 1
-            fi
-        ) | whiptail --gauge "Verifying GParted ISO..." 8 50 0
-        
-        if [ $? -ne 0 ]; then
-            log "Checksum verification failed for GParted ISO."
-            whiptail --msgbox "Checksum verification failed.\nThe downloaded file may be corrupted. Please try again." 10 60
-            rm "$gparted_iso_file" "$checksum_file"
-            return 1
+    fi
+    
+    # Verify checksum after download (or re-verify existing)
+    (
+        echo 0
+        echo "# Verifying checksum..."
+        cd "$gparted_dir"
+        local computed_sha256=$(sha256sum "$gparted_iso_filename" | cut -d' ' -f1)
+        if [ "$computed_sha256" = "$expected_sha256" ]; then
+            echo 100
+            echo "# Checksum verified successfully!"
+            sleep 1
+        else
+            echo 100
+            echo "# Checksum verification failed!"
+            sleep 2
+            exit 1
         fi
+    ) | whiptail --gauge "Verifying GParted ISO..." 8 50 0
+    
+    if [ $? -ne 0 ]; then
+        log "Checksum verification failed for GParted ISO."
+        whiptail --msgbox "Checksum verification failed.\nThe downloaded file may be corrupted. Please try again." 10 60
+        rm "$gparted_iso_file" "$checksum_file"
+        return 1
     fi
     
     if ! check_file_lock "$file"; then
         return 1
     fi
     
-    # Avvia QEMU e cattura il PID nel contesto principale
+    # Start QEMU and capture PID
     echo 0
     echo "# Starting QEMU with GParted Live..."
     qemu-system-x86_64 -hda "$file" -cdrom "$gparted_iso_file" -boot d -m 2048 -enable-kvm </dev/null &>/dev/null &
