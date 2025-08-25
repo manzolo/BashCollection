@@ -94,8 +94,90 @@ cleanup_all_state() {
     log "State cleanup complete."
 }
 
+handle_mount_menu() {
+    local file=$1
+    while true; do
+        local menu_title="Mount/Unmount Options for $(basename "$file")"
+        local menu_items=(
+            "1" "🗂️  Safe Mount (guestmount)"
+            "2" "💾 Advanced Mount (NBD)"
+            "3" "📋 Active Mount Points"
+            "4" "🧹 NBD Cleaner"
+            "5" "🚪 Back to Main Menu"
+        )
+        local choice=$(whiptail --title "$menu_title" --menu "Select a mounting option:" 20 70 12 "${menu_items[@]}" 3>&1 1>&2 2>&3)
 
-# Main menu function (now much cleaner)
+        case $choice in
+            1)
+                mount_with_guestmount "$file"
+                ;;
+            2)
+                mount_with_nbd "$file"
+                ;;
+            3)
+                show_active_mounts
+                ;;
+            4)
+                cleanup_nbd_devices
+                ;;
+            5|"")
+                return
+                ;;
+        esac
+    done
+}
+
+handle_disk_ops_menu() {
+    local file=$1
+    while true; do
+        local menu_title="Disk Operations for $(basename "$file")"
+        local menu_items=(
+            "1" "📏 Resize Image"
+            "2" "🔧 Launch GParted Live"
+            "3" "🚪 Back to Main Menu"
+        )
+        local choice=$(whiptail --title "$menu_title" --menu "Select a disk operation:" 20 70 12 "${menu_items[@]}" 3>&1 1>&2 2>&3)
+
+        case $choice in
+            1)
+                handle_resize_image
+                ;;
+            2)
+                gparted_boot "$file"
+                ;;
+            3|"")
+                return
+                ;;
+        esac
+    done
+}
+
+handle_analysis_menu() {
+    local file=$1
+    while true; do
+        local menu_title="Analysis and Info for $(basename "$file")"
+        local menu_items=(
+            "1" "🔍 Analyze Structure"
+            "2" "ℹ️  Detailed File Information"
+            "3" "🚪 Back to Main Menu"
+        )
+        local choice=$(whiptail --title "$menu_title" --menu "Select an analysis option:" 20 70 12 "${menu_items[@]}" 3>&1 1>&2 2>&3)
+
+        case $choice in
+            1)
+                handle_analyze_structure
+                ;;
+            2)
+                show_detailed_info "$file"
+                ;;
+            3|"")
+                return
+                ;;
+        esac
+    done
+}
+
+# --- Funzione del Menu Principale ---
 main_menu() {
     local file=$1
     local current_file="$file"
@@ -127,16 +209,11 @@ main_menu() {
         
         local menu_items=(
             "1" "🖼️  Change Image"
-            "2" "📏 Resize Image"
-            "3" "🗂️  Safe Mount (guestmount)"
-            "4" "💾 Advanced Mount (NBD)"
-            "5" "🔍 Analyze Structure"
-            "6" "🚀 Test with QEMU"
-            "7" "🔧 Launch GParted Live"
-            "8" "ℹ️  Detailed File Information"
-            "9" "🧹 NBD cleaner"
-            "10" "📋 Active Mount Points"
-            "11" "🚪 Exit"
+            "2" "📁 Mount/Unmount Options"
+            "3" "🔧 Disk Operations"
+            "4" "🚀 Test with QEMU"
+            "5" "🔍 Analysis and Info"
+            "6" "🚪 Exit"
         )
         
         local temp_text_file=$(mktemp)
@@ -148,7 +225,7 @@ main_menu() {
         
         echo -e "\n\nWhat would you like to do?" >> "$temp_text_file"
         
-        local choice=$(whiptail --title "$SCRIPT_NAME" --menu "$(cat "$temp_text_file")" 20 70 12 "${menu_items[@]}" 3>&1 1>&2 2>&3)
+        local choice=$(whiptail --title "Disk Image Manager" --menu "$(cat "$temp_text_file")" 20 70 12 "${menu_items[@]}" 3>&1 1>&2 2>&3)
         
         rm "$temp_text_file"
 
@@ -157,33 +234,18 @@ main_menu() {
                 handle_change_image
                 ;;
             2)
-                handle_resize_image
+                handle_mount_menu "$current_file"
                 ;;
             3)
-                mount_with_guestmount "$current_file"
+                handle_disk_ops_menu "$current_file"
                 ;;
             4)
-                mount_with_nbd "$current_file"
-                ;;
-            5)
-                handle_analyze_structure
-                ;;
-            6)
                 test_vm_qemu "$current_file"
                 ;;
-            7)
-                gparted_boot "$current_file"
+            5)
+                handle_analysis_menu "$current_file"
                 ;;
-            8)
-                show_detailed_info "$current_file"
-                ;;
-            9)
-                cleanup_nbd_devices
-                ;;
-            10)
-                show_active_mounts
-                ;;
-            11|"")
+            6|"")
                 break
                 ;;
         esac
