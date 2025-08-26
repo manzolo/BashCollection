@@ -30,7 +30,7 @@ echo "Script started at $(date)" > "$LOG_FILE"
 
 shopt -s globstar
 
-# Scansiona e "sorgenta" ogni file .sh nella directory e nelle sottodirectory.
+# Scan and "source" .sh file recursive.
 for script in "$SCRIPT_DIR/vm_disk_manager/"**/*.sh; do
     if [ -f "$script" ]; then
         source "$script"
@@ -41,15 +41,6 @@ for script in "$SCRIPT_DIR/vm_disk_manager/"**/*.sh; do
 done
 
 shopt -u globstar
-
-
-# Verify that all required helper scripts are sourced
-for required_script in cleanup.sh dependencies.sh file_operations.sh image_management.sh mount_operations.sh menu.sh; do
-    if [ ! -f "$SCRIPT_DIR/vm_disk_manager/$required_script" ]; then
-        echo "Error: Required helper script $required_script not found in $SCRIPT_DIR/vm_disk_manager/"
-        exit 1
-    fi
-done
 
 configure_lsof_environment
 
