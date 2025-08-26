@@ -151,50 +151,6 @@ detect_windows_image() {
     return 1
 }
 
-# Function to analyze partitions
-analyze_partitions() {
-    local device=$1
-    
-    if [ ! -b "$device" ]; then
-        log "Device $device not available"
-        echo "Device $device not available"
-        return 1
-    fi
-    
-    log "Analyzing partitions on $device"
-    echo "=== PARTITION ANALYSIS ==="
-    parted "$device" print 2>/dev/null || {
-        log "Error analyzing partitions"
-        echo "Error analyzing partitions"
-        return 1
-    }
-    
-    echo ""
-    echo "=== FILESYSTEMS ==="
-    for part in "${device}"p*; do
-        if [ -b "$part" ]; then
-            local fs_info=$(blkid "$part" 2>/dev/null || echo "Unknown")
-            echo "$(basename "$part"): $fs_info"
-        fi
-    done
-    
-    return 0
-}
-
-# Function to detect LUKS
-detect_luks() {
-    local device=$1
-    local luks_parts=()
-    
-    for part in "${device}"p*; do
-        if [ -b "$part" ] && cryptsetup isLuks "$part" 2>/dev/null; then
-            luks_parts+=("$part")
-        fi
-    done
-    
-    printf '%s\n' "${luks_parts[@]}"
-}
-
 # Function to open LUKS
 open_luks() {
     local luks_part=$1
@@ -409,22 +365,47 @@ resize_ext_filesystem() {
     fi
 }
 
-# Function for advanced image resizing
+# Funzione principale semplificata
 advanced_resize() {
     local file=$1
     local size=$2
     
     log "Starting advanced_resize for $file to $size"
     
+    # Controlli preliminari
     if ! check_file_lock "$file"; then
         log "File lock failed"
         return 1
     fi
     
-    local format=$(qemu-img info "$file" 2>/dev/null | grep "file format:" | awk '{print $3}')
-    if [ -z "$format" ]; then
-        format="raw"
+    # Backup
+    if ! handle_backup "$file"; then
+        return 1
     fi
+    
+    # Controllo spazio
+    if ! check_free_space "$file" "$size"; then
+        return 1
+    fi
+    
+    # Resize dell'immagine
+    if ! resize_disk_image "$file" "$size"; then
+        return 1
+    fi
+    
+    # Connessione NBD e resize partizioni
+    if ! resize_partitions "$file"; then
+        return 1
+    fi
+    
+    log "Resize completed for $file to $size"
+    whiptail --msgbox "Resizing completed!\n\nFile: $(basename "$file")\nNew size: $size\n\nVerify the result with analysis or QEMU test." 12 70
+    return 0
+}
+
+# Gestione backup
+handle_backup() {
+    local file=$1
     
     if whiptail --title "Backup" --yesno "Do you want to create a backup before resizing?\n(Highly recommended)" 10 60; then
         (
@@ -435,15 +416,24 @@ advanced_resize() {
             echo "# Backup created!"
             sleep 1
         ) | whiptail --gauge "Creating backup..." 8 50 0
+        
         if [ $? -ne 0 ]; then
             log "Error creating backup"
             whiptail --msgbox "Error creating backup." 8 50
             return 1
         fi
     fi
+    return 0
+}
+
+# Resize dell'immagine disco
+resize_disk_image() {
+    local file=$1
+    local size=$2
     
-    if ! check_free_space "$file" "$size"; then
-        return 1
+    local format=$(qemu-img info "$file" 2>/dev/null | grep "file format:" | awk '{print $3}')
+    if [ -z "$format" ]; then
+        format="raw"
     fi
     
     (
@@ -468,6 +458,16 @@ advanced_resize() {
         whiptail --msgbox "Error resizing the image. Check log: $LOG_FILE" 8 50
         return 1
     fi
+    return 0
+}
+
+# Gestione connessione NBD e resize partizioni
+resize_partitions() {
+    local file=$1
+    local format=$(qemu-img info "$file" 2>/dev/null | grep "file format:" | awk '{print $3}')
+    if [ -z "$format" ]; then
+        format="raw"
+    fi
     
     if ! connect_nbd "$file" "$format"; then
         whiptail --msgbox "NBD connection error." 8 50
@@ -483,73 +483,120 @@ advanced_resize() {
         return 1
     fi
     
+    # Controllo Windows e selezione partizione
+    if ! handle_windows_detection_and_partition_selection; then
+        safe_nbd_disconnect "$NBD_DEVICE"
+        return 1
+    fi
+    
+    # Resize partizione e filesystem
+    if ! resize_selected_partition; then
+        safe_nbd_disconnect "$NBD_DEVICE"
+        return 1
+    fi
+    
+    safe_nbd_disconnect "$NBD_DEVICE"
+    NBD_DEVICE=""
+    return 0
+}
+
+# Gestione rilevamento Windows e selezione partizione
+handle_windows_detection_and_partition_selection() {
     if detect_windows_image "$NBD_DEVICE"; then
         log "Windows image warning shown"
         if whiptail --title "Windows Detected" --yesno "This appears to be a Windows image with potentially complex partitions (e.g., recovery at end).\nAutomatic resize may fail.\n\nProceed anyway, or use GParted Live?" 12 70; then
             echo "continue"
         else
             log "User chose GParted for Windows image"
-            safe_nbd_disconnect "$NBD_DEVICE"
             gparted_boot "$file"
             return 1
         fi
     fi
     
+    if ! analyze_and_select_partition; then
+        return 1
+    fi
+    
+    return 0
+}
+
+# Analisi partizioni e selezione
+analyze_and_select_partition() {
     log "Analyzing partitions with parted"
     local parted_output=$(timeout 30 parted -s "$NBD_DEVICE" print 2>>"$LOG_FILE")
     if [ $? -ne 0 ]; then
         log "Parted failed: $(tail -n 1 "$LOG_FILE")"
         whiptail --msgbox "Error while reading partitions with parted.\n\nDetails:\n$parted_output\nCheck log: $LOG_FILE" 15 70
-        safe_nbd_disconnect "$NBD_DEVICE"
         return 1
     fi
     log "Parted output: $parted_output"
     
     local partitions=($(echo "$parted_output" | grep "^ " | awk '{print $1}'))
     local partition_items=()
+    
+    # Costruzione lista partizioni con informazioni
     for part in "${partitions[@]}"; do
-        local part_info=$(echo "$parted_output" | grep "^ $part " | sed 's/^[[:space:]]*//')
-        local part_dev="${NBD_DEVICE}p${part}"
-        local fs_type=$(blkid -o value -s TYPE "$part_dev" 2>/dev/null || echo "Unknown FS")
-        local tmp_mount="/mnt/tmp_resize_check_$$"
-        mkdir -p "$tmp_mount"
-        local total_size="?"
-        local used_size="?"
-        local free_size="?"
-        if mount "$part_dev" "$tmp_mount" 2>/dev/null; then
-            total_size=$(df -h --output=size "$tmp_mount" | sed '1d' | tr -d ' ')
-            used_size=$(df -h --output=used "$tmp_mount" | sed '1d' | tr -d ' ')
-            free_size=$(df -h --output=avail "$tmp_mount" | sed '1d' | tr -d ' ')
-            umount "$tmp_mount"
+        if ! build_partition_info "$part" "$parted_output" partition_items; then
+            continue
         fi
-        rmdir "$tmp_mount" 2>/dev/null
-        local label="Partition $part | Total: $total_size | Used: $used_size | Free: $free_size | FS Type: $fs_type"
-        partition_items+=("$part" "$label")
     done
     
     if [ ${#partition_items[@]} -eq 0 ]; then
-        whiptail --msgbox "No partitions were found on the disk. The `parted` command output was:\n\n$parted_output" 15 70
-        safe_nbd_disconnect "$NBD_DEVICE"
+        whiptail --msgbox "No partitions were found on the disk. The parted command output was:\n\n$parted_output" 15 70
         return 1
     fi
     
-    local partition_choice
-    if ! partition_choice=$(whiptail --title "Select Partition" --menu "Select the partition to resize:" 20 80 12 "${partition_items[@]}" 3>&1 1>&2 2>&3); then
+    # Selezione partizione
+    if ! selected_partition=$(whiptail --title "Select Partition" --menu "Select the partition to resize:" 20 80 12 "${partition_items[@]}" 3>&1 1>&2 2>&3); then
         whiptail --msgbox "Partition selection cancelled. The script will now terminate and perform cleanup." 10 60
         log "Partition selection cancelled by the user."
-        safe_nbd_disconnect "$NBD_DEVICE"
         return 1
     fi
     
-    local selected_partition="$partition_choice"
-    local is_last_partition=false
+    # Controllo se è l'ultima partizione
+    is_last_partition=false
     if [ "$selected_partition" = "${partitions[-1]}" ]; then
         is_last_partition=true
     fi
     
+    return 0
+}
+
+# Costruzione informazioni partizione
+build_partition_info() {
+    local part=$1
+    local parted_output=$2
+    local -n partition_items_ref=$3
+    
+    local part_info=$(echo "$parted_output" | grep "^ $part " | sed 's/^[[:space:]]*//')
+    local part_dev="${NBD_DEVICE}p${part}"
+    local fs_type=$(blkid -o value -s TYPE "$part_dev" 2>/dev/null || echo "Unknown FS")
+    local tmp_mount="/mnt/tmp_resize_check_$$"
+    
+    mkdir -p "$tmp_mount"
+    local total_size="?"
+    local used_size="?"
+    local free_size="?"
+    
+    if mount "$part_dev" "$tmp_mount" 2>/dev/null; then
+        total_size=$(df -h --output=size "$tmp_mount" | sed '1d' | tr -d ' ')
+        used_size=$(df -h --output=used "$tmp_mount" | sed '1d' | tr -d ' ')
+        free_size=$(df -h --output=avail "$tmp_mount" | sed '1d' | tr -d ' ')
+        umount "$tmp_mount"
+    fi
+    rmdir "$tmp_mount" 2>/dev/null
+    
+    local label="Partition $part | Total: $total_size | Used: $used_size | Free: $free_size | FS Type: $fs_type"
+    partition_items_ref+=("$part" "$label")
+    return 0
+}
+
+# Resize partizione selezionata
+resize_selected_partition() {
     (
         echo 0
         echo "# Resizing partition $selected_partition..."
+        
         if [ "$is_last_partition" = false ] && detect_windows_image "$NBD_DEVICE"; then
             echo 100
             echo "# Non-last partition in Windows image, needs GParted"
@@ -558,83 +605,95 @@ advanced_resize() {
             exit 2
         fi
         
-        local resize_success=false
-        local partition_table=""
-        if echo "$parted_output" | grep -q "gpt"; then
-            partition_table="gpt"
-        elif echo "$parted_output" | grep -q "msdos"; then
-            partition_table="msdos"
-        fi
-        
-        if [ "$partition_table" = "gpt" ] && command -v sgdisk &> /dev/null; then
-            log "Using sgdisk for GPT"
-            echo 50
-            echo "# Resizing GPT partition..."
-            sgdisk --move-second-header "$NBD_DEVICE" 2>>"$LOG_FILE"
-            sgdisk --delete="$selected_partition" --new="$selected_partition":0:0 --typecode="$selected_partition":0700 "$NBD_DEVICE" 2>>"$LOG_FILE"
-            if [ $? -eq 0 ]; then
-                resize_success=true
-            fi
-        fi
-        
-        if [ "$resize_success" = false ]; then
-            log "Fallback to parted resizepart"
-            echo 50
-            echo "# Fallback to parted..."
-            parted --script "$NBD_DEVICE" resizepart "$selected_partition" 100% 2>>"$LOG_FILE"
-            if [ $? -eq 0 ]; then
-                resize_success=true
-            fi
-        fi
-        
-        if [ "$resize_success" = true ]; then
-            echo 75
-            echo "# Updating partition table..."
-            partprobe "$NBD_DEVICE" 2>/dev/null
-            sleep 2
-            log "Partition resize success"
-            echo 100
-            echo "# Partition resized!"
-            sleep 1
-        else
+        if ! resize_partition_table; then
             log "Partition resize failed: $(tail -n 1 "$LOG_FILE")"
             echo 100
             echo "# Partition resize failed"
             sleep 2
             exit 1
         fi
+        
+        echo 100
+        echo "# Partition resized!"
+        sleep 1
     ) | whiptail --gauge "Resizing partition..." 8 50 0
     
     local part_result=$?
     if [ $part_result -eq 2 ]; then
         whiptail --title "Complex Layout" --yesno "Selected partition is not the last one in a Windows image.\nUse GParted Live to move partitions?" 10 60
         if [ $? -eq 0 ]; then
-            safe_nbd_disconnect "$NBD_DEVICE"
             gparted_boot "$file"
-            return 1
-        else
-            safe_nbd_disconnect "$NBD_DEVICE"
-            return 1
         fi
+        return 1
     elif [ $part_result -ne 0 ]; then
         whiptail --title "WARNING: Partition Resize Failed" --yesno "Automatic resizing failed (common for Windows layouts).\n\nLaunch GParted Live to resize manually?" 12 80
         if [ $? -eq 0 ]; then
-            safe_nbd_disconnect "$NBD_DEVICE"
             gparted_boot "$file"
-            return 1
-        else
-            safe_nbd_disconnect "$NBD_DEVICE"
-            return 1
+        fi
+        return 1
+    fi
+    
+    # Resize filesystem
+    if ! resize_filesystem_on_partition; then
+        return 1
+    fi
+    
+    return 0
+}
+
+# Resize tabella partizioni
+resize_partition_table() {
+    local resize_success=false
+    local partition_table=""
+    local parted_output=$(timeout 30 parted -s "$NBD_DEVICE" print 2>>"$LOG_FILE")
+    
+    if echo "$parted_output" | grep -q "gpt"; then
+        partition_table="gpt"
+    elif echo "$parted_output" | grep -q "msdos"; then
+        partition_table="msdos"
+    fi
+    
+    if [ "$partition_table" = "gpt" ] && command -v sgdisk &> /dev/null; then
+        log "Using sgdisk for GPT"
+        echo 50
+        echo "# Resizing GPT partition..."
+        sgdisk --move-second-header "$NBD_DEVICE" 2>>"$LOG_FILE"
+        sgdisk --delete="$selected_partition" --new="$selected_partition":0:0 --typecode="$selected_partition":0700 "$NBD_DEVICE" 2>>"$LOG_FILE"
+        if [ $? -eq 0 ]; then
+            resize_success=true
         fi
     fi
     
+    if [ "$resize_success" = false ]; then
+        log "Fallback to parted resizepart"
+        echo 50
+        echo "# Fallback to parted..."
+        parted --script "$NBD_DEVICE" resizepart "$selected_partition" 100% 2>>"$LOG_FILE"
+        if [ $? -eq 0 ]; then
+            resize_success=true
+        fi
+    fi
+    
+    if [ "$resize_success" = true ]; then
+        echo 75
+        echo "# Updating partition table..."
+        partprobe "$NBD_DEVICE" 2>/dev/null
+        sleep 2
+        log "Partition resize success"
+        return 0
+    fi
+    
+    return 1
+}
+
+# Resize filesystem sulla partizione
+resize_filesystem_on_partition() {
     log "Preparing to resize filesystem on selected partition $selected_partition"
     
     local target_dev="${NBD_DEVICE}p${selected_partition}"
     if [ ! -b "$target_dev" ]; then
         log "Error: Target device $target_dev not found after partition resize."
         whiptail --msgbox "Error: Could not find the selected partition after resizing. The partition table might be corrupted. You may need to use GParted Live." 15 80
-        safe_nbd_disconnect "$NBD_DEVICE"
         return 1
     fi
     
@@ -645,93 +704,117 @@ advanced_resize() {
             resize_ext_filesystem "$target_dev"
             ;;
         "ntfs")
-            if command -v ntfsresize &> /dev/null && command -v ntfsfix &> /dev/null; then
-                (
-                    echo 0
-                    echo "# Checking NTFS consistency..."
-                    ntfsfix --clear-dirty "$target_dev" >/dev/null 2>&1
-                    echo 30
-                    echo "# Running chkdsk equivalent..."
-                    ntfsfix --no-action "$target_dev" >/tmp/ntfs_check_$$.log 2>&1
-                    echo 60
-                    echo "# Resizing NTFS..."
-                    local ntfs_output=$(ntfsresize --force --no-action "$target_dev" 2>&1)
-                    if echo "$ntfs_output" | grep -q "successfully would be resized"; then
-                        echo 80
-                        echo "# Applying resize..."
-                        local final_output=$(ntfsresize --force "$target_dev" 2>&1)
-                        echo 100
-                        if [ $? -eq 0 ]; then
-                            echo "# NTFS resized successfully!"
-                            log "NTFS resize successful: $final_output"
-                            sleep 1
-                        else
-                            echo "# NTFS resize failed"
-                            log "NTFS resize failed: $final_output"
-                            sleep 2
-                            exit 1
-                        fi
-                    else
-                        echo 100
-                        echo "# NTFS resize simulation failed"
-                        log "NTFS simulation failed: $ntfs_output"
-                        sleep 2
-                        exit 1
-                    fi
-                ) | whiptail --gauge "Resizing NTFS filesystem..." 8 50 0
-                if [ $? -eq 0 ]; then
-                    whiptail --msgbox "NTFS resized successfully!" 8 60
-                else
-                    local error_log=$(cat /tmp/ntfs_check_$$.log 2>/dev/null)
-                    rm -f /tmp/ntfs_check_$$.log
-                    whiptail --msgbox "Error resizing NTFS.\n\nDetails:\n$ntfs_output\n\nTry booting in Windows and running:\nchkdsk /f C:\n\nOr use GParted Live." 15 70
-                fi
-                rm -f /tmp/ntfs_check_$$.log
-            else
-                log "ntfs-3g tools missing"
-                whiptail --msgbox "ntfs-3g tools missing. Install with:\nsudo apt install ntfs-3g" 10 60
-            fi
+            resize_ntfs_filesystem "$target_dev"
             ;;
         "btrfs")
-            if command -v btrfs &> /dev/null; then
-                (
-                    echo 0
-                    echo "# Checking btrfs filesystem..."
-                    btrfs check --repair --force "$target_dev" >/dev/null 2>&1 || true
-                    echo 50
-                    echo "# Resizing btrfs filesystem..."
-                    btrfs filesystem resize max "$target_dev" >/dev/null 2>&1
-                    echo 100
-                    echo "# Btrfs resize completed!"
-                    sleep 1
-                ) | whiptail --gauge "Resizing btrfs filesystem..." 8 50 0
-                if [ $? -eq 0 ]; then
-                    whiptail --msgbox "Btrfs filesystem resized successfully!" 8 60
-                else
-                    whiptail --msgbox "Error resizing btrfs. Try manual resize with:\nbtrfs filesystem resize max /mount/point" 10 60
-                fi
-            else
-                whiptail --msgbox "btrfs tools not found. Install with:\nsudo apt install btrfs-progs" 10 60
-            fi
+            resize_btrfs_filesystem "$target_dev"
             ;;
         "xfs")
-            whiptail --msgbox "XFS detected. The partition has been extended, but the filesystem still needs to be resized.\n\nTo complete, use the 'Advanced Mount (NBD)' option, mount the partition, and run 'xfs_growfs <mount_point>'.\n\nAlternatively, you can boot the image with GParted Live to do it graphically." 20 80
+            handle_xfs_filesystem "$target_dev"
             ;;
         *)
-            if [ -n "$fs_type" ]; then
-                log "Unsupported filesystem: $fs_type"
-                whiptail --msgbox "Filesystem '$fs_type' is not supported for automatic resizing. You may need to use GParted Live." 10 70
-            else
-                log "Filesystem not recognized"
-                whiptail --msgbox "Filesystem not recognized. You may need to use GParted Live to verify and resize manually." 10 70
-            fi
+            handle_unsupported_filesystem "$fs_type"
             ;;
     esac
     
-    safe_nbd_disconnect "$NBD_DEVICE"
-    NBD_DEVICE=""
-    
-    log "Resize completed for $file to $size"
-    whiptail --msgbox "Resizing completed!\n\nFile: $(basename "$file")\nNew size: $size\n\nVerify the result with analysis or QEMU test." 12 70
     return 0
+}
+
+# Resize filesystem NTFS
+resize_ntfs_filesystem() {
+    local target_dev=$1
+    
+    if command -v ntfsresize &> /dev/null && command -v ntfsfix &> /dev/null; then
+        (
+            echo 0
+            echo "# Checking NTFS consistency..."
+            ntfsfix --clear-dirty "$target_dev" >/dev/null 2>&1
+            echo 30
+            echo "# Running chkdsk equivalent..."
+            ntfsfix --no-action "$target_dev" >/tmp/ntfs_check_$$.log 2>&1
+            echo 60
+            echo "# Resizing NTFS..."
+            local ntfs_output=$(ntfsresize --force --no-action "$target_dev" 2>&1)
+            if echo "$ntfs_output" | grep -q "successfully would be resized"; then
+                echo 80
+                echo "# Applying resize..."
+                local final_output=$(ntfsresize --force "$target_dev" 2>&1)
+                echo 100
+                if [ $? -eq 0 ]; then
+                    echo "# NTFS resized successfully!"
+                    log "NTFS resize successful: $final_output"
+                    sleep 1
+                else
+                    echo "# NTFS resize failed"
+                    log "NTFS resize failed: $final_output"
+                    sleep 2
+                    exit 1
+                fi
+            else
+                echo 100
+                echo "# NTFS resize simulation failed"
+                log "NTFS simulation failed: $ntfs_output"
+                sleep 2
+                exit 1
+            fi
+        ) | whiptail --gauge "Resizing NTFS filesystem..." 8 50 0
+        
+        if [ $? -eq 0 ]; then
+            whiptail --msgbox "NTFS resized successfully!" 8 60
+        else
+            local error_log=$(cat /tmp/ntfs_check_$$.log 2>/dev/null)
+            rm -f /tmp/ntfs_check_$$.log
+            whiptail --msgbox "Error resizing NTFS.\n\nDetails:\n$ntfs_output\n\nTry booting in Windows and running:\nchkdsk /f C:\n\nOr use GParted Live." 15 70
+        fi
+        rm -f /tmp/ntfs_check_$$.log
+    else
+        log "ntfs-3g tools missing"
+        whiptail --msgbox "ntfs-3g tools missing. Install with:\nsudo apt install ntfs-3g" 10 60
+    fi
+}
+
+# Resize filesystem Btrfs
+resize_btrfs_filesystem() {
+    local target_dev=$1
+    
+    if command -v btrfs &> /dev/null; then
+        (
+            echo 0
+            echo "# Checking btrfs filesystem..."
+            btrfs check --repair --force "$target_dev" >/dev/null 2>&1 || true
+            echo 50
+            echo "# Resizing btrfs filesystem..."
+            btrfs filesystem resize max "$target_dev" >/dev/null 2>&1
+            echo 100
+            echo "# Btrfs resize completed!"
+            sleep 1
+        ) | whiptail --gauge "Resizing btrfs filesystem..." 8 50 0
+        
+        if [ $? -eq 0 ]; then
+            whiptail --msgbox "Btrfs filesystem resized successfully!" 8 60
+        else
+            whiptail --msgbox "Error resizing btrfs. Try manual resize with:\nbtrfs filesystem resize max /mount/point" 10 60
+        fi
+    else
+        whiptail --msgbox "btrfs tools not found. Install with:\nsudo apt install btrfs-progs" 10 60
+    fi
+}
+
+# Gestione filesystem XFS
+handle_xfs_filesystem() {
+    local target_dev=$1
+    whiptail --msgbox "XFS detected. The partition has been extended, but the filesystem still needs to be resized.\n\nTo complete, use the 'Advanced Mount (NBD)' option, mount the partition, and run 'xfs_growfs <mount_point>'.\n\nAlternatively, you can boot the image with GParted Live to do it graphically." 20 80
+}
+
+# Gestione filesystem non supportati
+handle_unsupported_filesystem() {
+    local fs_type=$1
+    
+    if [ -n "$fs_type" ]; then
+        log "Unsupported filesystem: $fs_type"
+        whiptail --msgbox "Filesystem '$fs_type' is not supported for automatic resizing. You may need to use GParted Live." 10 70
+    else
+        log "Filesystem not recognized"
+        whiptail --msgbox "Filesystem not recognized. You may need to use GParted Live to verify and resize manually." 10 70
+    fi
 }
