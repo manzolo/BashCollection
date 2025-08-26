@@ -108,8 +108,8 @@ gparted_boot() {
     fi
     
     # Start QEMU and capture PID
-    echo 0
-    echo "# Starting QEMU with GParted Live..."
+    #echo 0
+    log "# Starting QEMU with GParted Live..."
     qemu-system-x86_64 -hda "$file" -cdrom "$gparted_iso_file" -boot d -m 2048 -enable-kvm </dev/null &>/dev/null &
     QEMU_PID=$!
     sleep 3

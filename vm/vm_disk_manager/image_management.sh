@@ -737,7 +737,7 @@ handle_windows_detection_and_partition_selection() {
     if detect_windows_image "$NBD_DEVICE"; then
         log "Windows image warning shown"
         if whiptail --title "Windows Detected" --yesno "This appears to be a Windows image with potentially complex partitions (e.g., recovery at end).\nAutomatic resize may fail.\n\nProceed anyway, or use GParted Live?" 12 70; then
-            echo "continue"
+            log "Windows image with potentially complex partitions -> Automatic resize"
         else
             log "User chose GParted for Windows image"
             gparted_boot "$file"

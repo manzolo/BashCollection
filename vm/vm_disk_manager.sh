@@ -53,7 +53,7 @@ trap cleanup EXIT INT TERM
 
 whiptail --title "$SCRIPT_NAME" --msgbox "WARNING: This script performs advanced operations on disk images.\n\nThese operations carry the risk of data loss.\n\nYou are solely responsible for any damage or data loss that may occur.\n\nALWAYS BACK UP YOUR DISK IMAGES BEFORE USING THIS SCRIPT.\n\nUSE AT YOUR OWN RISK." 15 70
 
-echo "Checking dependencies..."
+log "Checking dependencies..."
 check_and_install_dependencies
 
 echo "Starting interface..."
@@ -66,4 +66,4 @@ fi
 
 main_menu "$file"
 
-echo "Script terminated."
+log "Script terminated."
