@@ -42,11 +42,7 @@
 
 <img width="1416" height="664" alt="image" src="https://github.com/user-attachments/assets/102b31ec-6eae-42ab-afaf-347a4be6cf50" />
 
-<img width="1416" height="664" alt="image" src="https://github.com/user-attachments/assets/18830a77-9426-4815-8806-cf98ca9fc144" />
-
-
-
-
+<img width="1416" height="664" alt="image" src="https://github.com/user-attachments/assets/c4e7d798-a43c-45b8-a8d4-436ac63445fd" />
 
 
 
