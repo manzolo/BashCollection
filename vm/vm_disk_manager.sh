@@ -28,15 +28,20 @@ LAST_DIR_FILE="/tmp/vm_disk_manager_last_dir"
 
 echo "Script started at $(date)" > "$LOG_FILE"
 
-# Source helper scripts from vm_disk_manager directory relative to script location
-for script in "$SCRIPT_DIR/vm_disk_manager/"*.sh; do
+shopt -s globstar
+
+# Scansiona e "sorgenta" ogni file .sh nella directory e nelle sottodirectory.
+for script in "$SCRIPT_DIR/vm_disk_manager/"**/*.sh; do
     if [ -f "$script" ]; then
         source "$script"
     else
-        echo "Error: Helper script $script not found."
+        echo "Error: file script $script not found."
         exit 1
     fi
 done
+
+shopt -u globstar
+
 
 # Verify that all required helper scripts are sourced
 for required_script in cleanup.sh dependencies.sh file_operations.sh image_management.sh mount_operations.sh menu.sh; do

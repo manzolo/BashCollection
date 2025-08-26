@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # Helper function for logging
 log() {
     echo "[$(date '+%H:%M:%S')] $1" >> "$LOG_FILE"

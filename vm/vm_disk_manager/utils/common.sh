@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # Configurazione dell'ambiente per ridurre i warning lsof
 configure_lsof_environment() {
     # Imposta variabili d'ambiente per ridurre warning lsof

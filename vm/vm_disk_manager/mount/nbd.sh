@@ -1,86 +1,307 @@
 #!/bin/bash
 
-# Function to mount with guestmount
-mount_with_guestmount() {
+# Function to find a free NBD device
+find_free_nbd() {
+    for i in {0..15}; do
+        local nbd_dev="/dev/nbd$i"
+        if [ ! -s "/sys/block/nbd$i/pid" ] 2>/dev/null; then
+            echo "$nbd_dev"
+            return 0
+        fi
+    done
+    echo "/dev/nbd0"
+}
+
+# Function to connect the image to NBD
+connect_nbd() {
     local file=$1
+    local format=${2:-raw}
     
-    if ! command -v guestmount &> /dev/null; then
-        log "guestmount not found"
-        whiptail --msgbox "guestmount is not available.\nInstall with: apt install libguestfs-tools" 10 60
-        return 1
-    fi
+    log "Starting connect_nbd for $file (format: $format)"
     
     if ! check_file_lock "$file"; then
+        log "File lock check failed"
         return 1
     fi
     
-    local original_user=${SUDO_USER:-$(who am i | awk '{print $1}')}
-    local original_uid=${SUDO_UID:-$(id -u "$original_user" 2>/dev/null)}
-    local original_gid=${SUDO_GID:-$(id -g "$original_user" 2>/dev/null)}
+    if ! lsmod | grep -q nbd; then
+        log "Loading nbd module"
+        modprobe nbd max_part=16 || { log "Failed to load nbd module"; return 1; }
+    fi
     
-    local mount_point="/mnt/vm_guest_$$"
-    mkdir -p "$mount_point"
+    NBD_DEVICE=$(find_free_nbd)
     
+    local retries=3
     (
-        echo 0
-        echo "# Mounting with guestmount..."
-        local guestmount_opts=(--add "$file" -i --rw)
-        if [ -n "$original_uid" ]; then
-            guestmount_opts+=(--uid "$original_uid" --gid "$original_gid")
-        fi
-        guestmount_opts+=(-o allow_other)
-        guestmount "${guestmount_opts[@]}" "$mount_point" 2>>"$LOG_FILE"
-        echo 100
-        if [ $? -eq 0 ]; then
-            echo "# Mounted successfully!"
-            sleep 1
-        else
-            echo "# Mount failed"
+        for i in $(seq 1 $retries); do
+            echo $(( (i-1)*33 ))
+            echo "# Attempt $i/$retries: Connecting NBD..."
+            log "Attempt $i/$retries: Connecting $NBD_DEVICE"
+            local qemu_pid
+            timeout 30 qemu-nbd --connect="$NBD_DEVICE" -f "$format" "$file" 2>>"$LOG_FILE" &
+            qemu_pid=$!
+            wait $qemu_pid
+            if [ $? -eq 0 ]; then
+                sleep 3
+                if [ -b "$NBD_DEVICE" ] && [ -s "/sys/block/$(basename "$NBD_DEVICE")/pid" ]; then
+                    echo 100
+                    echo "# Connected successfully!"
+                    log "NBD connected successfully, PID: $(cat /sys/block/$(basename "$NBD_DEVICE")/pid)"
+                    sleep 1
+                    exit 0
+                fi
+            fi
+            log "Attempt $i failed: $(tail -n 1 "$LOG_FILE")"
+            qemu-nbd --disconnect "$NBD_DEVICE" 2>/dev/null
             sleep 2
-            exit 1
-        fi
-    ) | whiptail --gauge "Mounting with guestmount..." 8 50 0
+        done
+        echo 100
+        echo "# Failed after $retries attempts."
+        log "All NBD attempts failed"
+        sleep 2
+        exit 1
+    ) | whiptail --gauge "Connecting NBD device..." 8 50 0
     
     if [ $? -eq 0 ]; then
-        MOUNTED_PATHS+=("$mount_point")
-        sleep 2
-        if [ -n "$original_uid" ]; then
-            chown "$original_uid:$original_gid" "$mount_point" 2>/dev/null || true
-            chmod 755 "$mount_point" 2>/dev/null || true
-        fi
-        local access_test="OK"
-        if [ -n "$original_user" ]; then
-            if ! su - "$original_user" -c "test -r '$mount_point'" 2>/dev/null; then
-                access_test="LIMITED - Use sudo for full access"
-            fi
-        fi
-        local space_info=$(df -h "$mount_point" 2>/dev/null | tail -1)
-        local user_info=""
-        if [ -n "$original_user" ]; then
-            user_info="\nUser: $original_user\nAccess: $access_test"
-        fi
-        log "Mounted at $mount_point, access: $access_test"
-        whiptail --msgbox "Image mounted successfully!\n\nPath: $mount_point$user_info\nSpace: $space_info\n\nCommands:\n- cd $mount_point\n- ls -la $mount_point\n- sudo -u $original_user ls $mount_point\n\nPress OK when you're done." 20 80
-        (
-            echo 0
-            echo "# Unmounting..."
-            guestunmount "$mount_point" 2>/dev/null || fusermount -u "$mount_point" 2>/dev/null
-            rmdir "$mount_point" 2>/dev/null
-            echo 100
-            echo "# Unmounted!"
-            sleep 1
-        ) | whiptail --gauge "Unmounting..." 8 50 0
-        MOUNTED_PATHS=("${MOUNTED_PATHS[@]/$mount_point}")
-        log "Unmounted $mount_point"
-        whiptail --msgbox "Unmounting completed." 8 50
         return 0
     else
-        rmdir "$mount_point" 2>/dev/null
-        log "guestmount failed"
-        whiptail --msgbox "Error mounting with guestmount.\nPossible causes:\n- Corrupted image\n- Unsupported filesystem\n- Insufficient permissions\nCheck log: $LOG_FILE" 12 70
+        whiptail --msgbox "NBD connection failed after retries. Check log: $LOG_FILE" 8 50
+        NBD_DEVICE=""
         return 1
     fi
 }
+
+# Function to safely disconnect NBD
+safe_nbd_disconnect() {
+    local device=$1
+    
+    if [ -z "$device" ]; then
+        log "No NBD device specified for disconnect"
+        return 0
+    fi
+    
+    log "Starting safe disconnect for $device"
+    
+    # Metodo 1: lsof con filtri specifici e warning soppressi
+    check_nbd_usage_filtered() {
+        local nbd_device=$1
+        
+        # Usa lsof con opzioni specifiche per ridurre warning
+        # -w: sopprime warning su filesystem inaccessibili
+        # +D: cerca solo nella directory specifica se necessario
+        local lsof_output
+        lsof_output=$(lsof -w "$nbd_device" 2>/dev/null | tail -n +2)
+        
+        if [ -n "$lsof_output" ]; then
+            log "NBD device $nbd_device is still in use:"
+            log "$lsof_output"
+            return 1
+        fi
+        return 0
+    }
+    
+    # Metodo 2: Controllo alternativo senza lsof usando /proc
+    check_nbd_usage_proc() {
+        local nbd_device=$1
+        local device_major_minor
+        
+        if [ ! -b "$nbd_device" ]; then
+            return 0  # Device non esiste, quindi non è in uso
+        fi
+        
+        # Ottieni major:minor del device
+        device_major_minor=$(stat -c "%t:%T" "$nbd_device" 2>/dev/null)
+        if [ -z "$device_major_minor" ]; then
+            return 0
+        fi
+        
+        # Converti da hex a decimale
+        local major=$(printf "%d" "0x${device_major_minor%:*}")
+        local minor=$(printf "%d" "0x${device_major_minor#*:}")
+        local device_id="${major}:${minor}"
+        
+        # Cerca nei file descriptor aperti
+        local processes_using_device=()
+        for proc_fd in /proc/*/fd/*; do
+            if [ -L "$proc_fd" ]; then
+                local link_target=$(readlink "$proc_fd" 2>/dev/null)
+                if [[ "$link_target" == "$nbd_device" ]] || [[ "$link_target" =~ ${nbd_device}p[0-9]+ ]]; then
+                    local pid=$(echo "$proc_fd" | cut -d'/' -f3)
+                    processes_using_device+=("$pid")
+                fi
+            fi
+        done
+        
+        # Cerca nei mount points
+        if mount | grep -q "$nbd_device"; then
+            log "NBD device $nbd_device has mounted partitions"
+            return 1
+        fi
+        
+        if [ ${#processes_using_device[@]} -gt 0 ]; then
+            log "NBD device $nbd_device is in use by processes: ${processes_using_device[*]}"
+            return 1
+        fi
+        
+        return 0
+    }
+    
+    # Metodo 3: Controllo con fuser (se disponibile)
+    check_nbd_usage_fuser() {
+        local nbd_device=$1
+        
+        if ! command -v fuser &> /dev/null; then
+            return 0  # fuser non disponibile, skip
+        fi
+        
+        # fuser è generalmente più silenzioso di lsof
+        if fuser -s "$nbd_device" 2>/dev/null; then
+            log "NBD device $nbd_device is in use (detected by fuser)"
+            return 1
+        fi
+        return 0
+    }
+    
+    # Funzione principale di controllo con fallback multipli
+    is_nbd_in_use() {
+        local nbd_device=$1
+        
+        # Prova prima con fuser (più pulito)
+        if command -v fuser &> /dev/null; then
+            if ! check_nbd_usage_fuser "$nbd_device"; then
+                return 0  # In uso
+            fi
+        fi
+        
+        # Poi con il metodo /proc (più affidabile)
+        if ! check_nbd_usage_proc "$nbd_device"; then
+            return 0  # In uso
+        fi
+        
+        # Infine con lsof filtrato (come fallback)
+        if ! check_nbd_usage_filtered "$nbd_device"; then
+            return 0  # In uso
+        fi
+        
+        return 1  # Non in uso
+    }
+    
+    # Smonta tutte le partizioni prima della disconnessione
+    unmount_nbd_partitions() {
+        local base_device=$1
+        log "Unmounting partitions for $base_device"
+        
+        # Trova e smonta tutte le partizioni
+        for partition in "${base_device}p"*; do
+            if [ -b "$partition" ]; then
+                log "Checking partition $partition"
+                if mount | grep -q "^$partition "; then
+                    log "Unmounting $partition"
+                    if ! umount "$partition" 2>/dev/null; then
+                        log "Force unmounting $partition"
+                        umount -f "$partition" 2>/dev/null || umount -l "$partition" 2>/dev/null
+                    fi
+                fi
+            fi
+        done
+        
+        # Verifica che il device base non sia montato
+        if mount | grep -q "^$base_device "; then
+            log "Unmounting base device $base_device"
+            if ! umount "$base_device" 2>/dev/null; then
+                log "Force unmounting base device $base_device"
+                umount -f "$base_device" 2>/dev/null || umount -l "$base_device" 2>/dev/null
+            fi
+        fi
+    }
+    
+    # Esecuzione della disconnessione
+    unmount_nbd_partitions "$device"
+    
+    # Attendi un momento per il cleanup
+    sleep 1
+    
+    # Controlla se è ancora in uso
+    local max_attempts=5
+    local attempt=1
+    
+    while [ $attempt -le $max_attempts ]; do
+        if is_nbd_in_use "$device"; then
+            log "NBD device $device is free, proceeding with disconnect (attempt $attempt)"
+            break
+        else
+            log "NBD device $device still in use, waiting... (attempt $attempt/$max_attempts)"
+            if [ $attempt -eq $max_attempts ]; then
+                log "Warning: Forcing NBD disconnect after $max_attempts attempts"
+                # Lista i processi che ancora usano il device per il log
+                if command -v fuser &> /dev/null; then
+                    local using_processes=$(fuser -v "$device" 2>&1 | tail -n +2 || true)
+                    if [ -n "$using_processes" ]; then
+                        log "Processes still using $device: $using_processes"
+                    fi
+                fi
+            fi
+            sleep 2
+            ((attempt++))
+        fi
+    done
+    
+    # Disconnetti il device NBD
+    log "Disconnecting NBD device $device"
+    if qemu-nbd --disconnect "$device" 2>/dev/null; then
+        log "NBD device $device disconnected successfully"
+        
+        # Verifica che sia realmente disconnesso
+        sleep 1
+        if [ ! -b "$device" ] || ! ls -la "$device" &>/dev/null; then
+            log "NBD device $device confirmed disconnected"
+        else
+            log "Warning: NBD device $device still exists after disconnect"
+        fi
+    else
+        log "Error disconnecting NBD device $device, trying alternative methods"
+        
+        # Metodo alternativo: usa nbd-client se disponibile
+        if command -v nbd-client &> /dev/null; then
+            log "Trying nbd-client disconnect"
+            nbd-client -d "$device" 2>/dev/null && log "NBD disconnected via nbd-client"
+        fi
+        
+        # Ultimo tentativo: forza il cleanup del modulo
+        if lsmod | grep -q nbd; then
+            local nbd_num=$(echo "$device" | sed 's/.*nbd//')
+            if [ -n "$nbd_num" ]; then
+                echo "$nbd_num" > /sys/block/nbd${nbd_num}/pid 2>/dev/null || true
+            fi
+        fi
+    fi
+    
+    log "NBD disconnect procedure completed for $device"
+}
+
+# Funzione per il controllo e cleanup preventivo dei device NBD
+cleanup_stale_nbd_devices() {
+    log "Checking for stale NBD devices..."
+    
+    for nbd_dev in /dev/nbd*; do
+        if [ -b "$nbd_dev" ] && [[ "$nbd_dev" =~ /dev/nbd[0-9]+$ ]]; then
+            # Controlla se il device è connesso ma non in uso
+            if qemu-nbd --list 2>/dev/null | grep -q "$nbd_dev" || \
+               [ -r "/sys/block/$(basename "$nbd_dev")/pid" ] && \
+               [ "$(cat "/sys/block/$(basename "$nbd_dev")/pid" 2>/dev/null)" != "0" ]; then
+                
+                log "Found active NBD device: $nbd_dev"
+                
+                # Controlla se è in uso
+                if is_nbd_in_use "$nbd_dev"; then
+                    log "NBD device $nbd_dev is free but still connected, cleaning up"
+                    qemu-nbd --disconnect "$nbd_dev" 2>/dev/null || true
+                fi
+            fi
+        fi
+    done
+}
+
 
 # Function to mount with NBD
 mount_with_nbd() {
@@ -344,162 +565,4 @@ mount_with_nbd() {
         whiptail --msgbox "Mount failed. Check $LOG_FILE for details." 8 50
         return 1
     fi
-}
-
-# Function to show active mount points
-show_active_mounts() {
-    local active_mounts=""
-    local original_user=${SUDO_USER:-$(who am i | awk '{print $1}')}
-    
-    for mount_point in "${MOUNTED_PATHS[@]}"; do
-        if mountpoint -q "$mount_point" 2>/dev/null; then
-            local mount_info=$(df -h "$mount_point" 2>/dev/null | tail -1)
-            local access_test="OK"
-            if [ -n "$original_user" ]; then
-                if ! su - "$original_user" -c "test -r '$mount_point'" 2>/dev/null; then
-                    access_test="LIMITED"
-                fi
-            fi
-            active_mounts="$active_mounts$mount_point (Access: $access_test)\n$mount_info\n\n"
-        fi
-    done
-    
-    if [ -n "$active_mounts" ]; then
-        whiptail --title "Active Mount Points" --msgbox "Currently active mount points:\n\n$active_mounts\nUseful commands:\n- sudo -u $original_user bash\n- sudo chmod -R 755 /mount/path\n- sudo chown -R $original_user:$original_user /mount/path" 20 80
-    else
-        whiptail --msgbox "No active mount points found at the moment." 8 50
-    fi
-}
-
-# Function to fix permissions of existing mounts
-fix_mount_permissions() {
-    local original_user=${SUDO_USER:-$(who am i | awk '{print $1}')}
-    local original_uid=${SUDO_UID:-$(id -u "$original_user" 2>/dev/null)}
-    local original_gid=${SUDO_GID:-$(id -g "$original_user" 2>/dev/null)}
-    
-    if [ ${#MOUNTED_PATHS[@]} -eq 0 ]; then
-        whiptail --msgbox "No active mount points found." 8 50
-        return 1
-    fi
-    
-    local mount_items=()
-    local counter=1
-    for mount_point in "${MOUNTED_PATHS[@]}"; do
-        if mountpoint -q "$mount_point" 2>/dev/null; then
-            mount_items+=("$counter" "$mount_point")
-            ((counter++))
-        fi
-    done
-    
-    if [ ${#mount_items[@]} -eq 0 ]; then
-        whiptail --msgbox "No active mount points." 8 50
-        return 1
-    fi
-    
-    mount_items+=("$counter" "All mount points")
-    local all_option=$counter
-    
-    local choice=$(whiptail --title "Fix Permissions" --menu "Which mount point to fix?" 15 70 8 "${mount_items[@]}" 3>&1 1>&2 2>&3)
-    
-    if [ $? -ne 0 ]; then
-        return 1
-    fi
-    
-    local target_mounts=()
-    if [ "$choice" -eq "$all_option" ]; then
-        target_mounts=("${MOUNTED_PATHS[@]}")
-    else
-        local current_counter=1
-        for mount_point in "${MOUNTED_PATHS[@]}"; do
-            if mountpoint -q "$mount_point" 2>/dev/null && [ "$choice" -eq "$current_counter" ]; then
-                target_mounts=("$mount_point")
-                break
-            fi
-            ((current_counter++))
-        done
-    fi
-    
-    local fixed_count=0
-    for mount_point in "${target_mounts[@]}"; do
-        if mountpoint -q "$mount_point" 2>/dev/null; then
-            (
-                echo 0
-                echo "# Fixing permissions for $mount_point..."
-                timeout 30 chmod -R 755 "$mount_point" 2>/dev/null || true
-                if [ -n "$original_uid" ] && [ -n "$original_gid" ]; then
-                    timeout 30 chown -R "$original_uid:$original_gid" "$mount_point" 2>/dev/null || true
-                fi
-                echo 100
-                echo "# Permissions fixed!"
-                sleep 1
-            ) | whiptail --gauge "Fixing permissions..." 8 50 0
-            ((fixed_count++))
-            log "Fixed permissions for $mount_point"
-        fi
-    done
-    
-    whiptail --msgbox "Permissions fixed for $fixed_count mount points.\n\nUser: $original_user\n\nNow you can try:\ncd $mount_point\nls -la $mount_point" 12 70
-}
-
-# Run a chroot in an isolated mount namespace
-run_chroot_isolated() {
-    local root="$1"
-
-    if [ ! -d "$root" ]; then
-        whiptail --msgbox "Invalid root directory: $root" 8 60
-        return 1
-    fi
-
-    if ! command -v unshare >/dev/null 2>&1; then
-        whiptail --msgbox "'unshare' command not found.\nPlease install util-linux." 10 60
-        return 1
-    fi
-
-    # Define preferred shells in order of preference
-    local preferred_shells=("/bin/bash" "/usr/bin/bash" "/bin/sh" "/usr/bin/sh")
-    local shell_path=""
-
-    # Check for the first available shell in the chroot
-    for shell in "${preferred_shells[@]}"; do
-        if [ -x "$root$shell" ]; then
-            shell_path="$shell"
-            break
-        fi
-    done
-
-    # If no suitable shell was found, exit
-    if [ -z "$shell_path" ]; then
-        whiptail --msgbox "No suitable shell found in $root.\nExpected one of: ${preferred_shells[*]}" 12 70
-        return 1
-    fi
-
-    unshare -m bash -c "
-        set -e
-        mount --make-rprivate /
-
-        # Ensure required mountpoints exist
-        for d in proc sys dev dev/pts run; do
-            [ -d '$root/'\$d ] || mkdir -p '$root/'\$d
-        done
-
-        # Bind required filesystems
-        mountpoint -q '$root/proc'    2>/dev/null || mount -t proc  proc  '$root/proc'
-        mountpoint -q '$root/sys'     2>/dev/null || mount -t sysfs sys   '$root/sys'
-        mountpoint -q '$root/dev'     2>/dev/null || mount --bind /dev   '$root/dev'
-        mountpoint -q '$root/dev/pts' 2>/dev/null || mount -t devpts devpts '$root/dev/pts'
-        mountpoint -q '$root/run'     2>/dev/null || mount --bind /run   '$root/run'
-
-        # Cleanup on exit
-        cleanup_mounts() {
-            umount -l '$root/run'     2>/dev/null || true
-            umount -l '$root/dev/pts' 2>/dev/null || true
-            umount -l '$root/dev'     2>/dev/null || true
-            umount -l '$root/sys'     2>/dev/null || true
-            umount -l '$root/proc'    2>/dev/null || true
-        }
-        trap cleanup_mounts EXIT
-
-        echo 'Entering isolated chroot...'
-        exec chroot '$root' '$shell_path' -l
-    "
 }

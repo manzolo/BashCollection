@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # Function to get simplified file information
 get_file_info() {
     local file=$1
