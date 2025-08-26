@@ -73,55 +73,287 @@ connect_nbd() {
 
 # Function to safely disconnect NBD
 safe_nbd_disconnect() {
-    local device=${1:-$NBD_DEVICE}
+    local device=$1
     
-    if [ -z "$device" ] || [ ! -b "$device" ]; then
+    if [ -z "$device" ]; then
+        log "No NBD device specified for disconnect"
         return 0
     fi
     
-    log "Disconnecting NBD device $device"
+    log "Starting safe disconnect for $device"
     
-    # Unmount any associated partitions
-    for part in "${device}"p*; do
-        if [ -b "$part" ]; then
-            for mount in $(mount | grep "$part" | awk '{print $3}'); do
-                log "Unmounting $mount from $part"
-                umount "$mount" 2>/dev/null || umount -f "$mount" 2>/dev/null || umount -l "$mount" 2>/dev/null
-            done
+    # Metodo 1: lsof con filtri specifici e warning soppressi
+    check_nbd_usage_filtered() {
+        local nbd_device=$1
+        
+        # Usa lsof con opzioni specifiche per ridurre warning
+        # -w: sopprime warning su filesystem inaccessibili
+        # +D: cerca solo nella directory specifica se necessario
+        local lsof_output
+        lsof_output=$(lsof -w "$nbd_device" 2>/dev/null | tail -n +2)
+        
+        if [ -n "$lsof_output" ]; then
+            log "NBD device $nbd_device is still in use:"
+            log "$lsof_output"
+            return 1
         fi
-    done
+        return 0
+    }
     
-    # Unmount main device mounts
-    for mount in $(mount | grep "$device" | awk '{print $3}'); do
-        log "Unmounting $mount from $device"
-        umount "$mount" 2>/dev/null || umount -f "$mount" 2>/dev/null || umount -l "$mount" 2>/dev/null
-    done
-    
-    # Check for processes using the device
-    if lsof "$device" >/dev/null 2>&1; then
-        log "Processes using $device found, attempting to terminate"
-        lsof "$device" | tail -n +2 | awk '{print $2}' | sort -u | while read pid; do
-            kill "$pid" 2>/dev/null
-            sleep 1
-            kill -9 "$pid" 2>/dev/null
+    # Metodo 2: Controllo alternativo senza lsof usando /proc
+    check_nbd_usage_proc() {
+        local nbd_device=$1
+        local device_major_minor
+        
+        if [ ! -b "$nbd_device" ]; then
+            return 0  # Device non esiste, quindi non è in uso
+        fi
+        
+        # Ottieni major:minor del device
+        device_major_minor=$(stat -c "%t:%T" "$nbd_device" 2>/dev/null)
+        if [ -z "$device_major_minor" ]; then
+            return 0
+        fi
+        
+        # Converti da hex a decimale
+        local major=$(printf "%d" "0x${device_major_minor%:*}")
+        local minor=$(printf "%d" "0x${device_major_minor#*:}")
+        local device_id="${major}:${minor}"
+        
+        # Cerca nei file descriptor aperti
+        local processes_using_device=()
+        for proc_fd in /proc/*/fd/*; do
+            if [ -L "$proc_fd" ]; then
+                local link_target=$(readlink "$proc_fd" 2>/dev/null)
+                if [[ "$link_target" == "$nbd_device" ]] || [[ "$link_target" =~ ${nbd_device}p[0-9]+ ]]; then
+                    local pid=$(echo "$proc_fd" | cut -d'/' -f3)
+                    processes_using_device+=("$pid")
+                fi
+            fi
         done
-    fi
+        
+        # Cerca nei mount points
+        if mount | grep -q "$nbd_device"; then
+            log "NBD device $nbd_device has mounted partitions"
+            return 1
+        fi
+        
+        if [ ${#processes_using_device[@]} -gt 0 ]; then
+            log "NBD device $nbd_device is in use by processes: ${processes_using_device[*]}"
+            return 1
+        fi
+        
+        return 0
+    }
     
-    # Retry disconnection
-    for i in {1..10}; do
-        if qemu-nbd --disconnect "$device" 2>/dev/null; then
-            sleep 1
-            if [ ! -s "/sys/block/$(basename "$device")/pid" ] 2>/dev/null; then
-                log "NBD device $device disconnected"
-                return 0
+    # Metodo 3: Controllo con fuser (se disponibile)
+    check_nbd_usage_fuser() {
+        local nbd_device=$1
+        
+        if ! command -v fuser &> /dev/null; then
+            return 0  # fuser non disponibile, skip
+        fi
+        
+        # fuser è generalmente più silenzioso di lsof
+        if fuser -s "$nbd_device" 2>/dev/null; then
+            log "NBD device $nbd_device is in use (detected by fuser)"
+            return 1
+        fi
+        return 0
+    }
+    
+    # Funzione principale di controllo con fallback multipli
+    is_nbd_in_use() {
+        local nbd_device=$1
+        
+        # Prova prima con fuser (più pulito)
+        if command -v fuser &> /dev/null; then
+            if ! check_nbd_usage_fuser "$nbd_device"; then
+                return 0  # In uso
             fi
         fi
-        sleep 2
+        
+        # Poi con il metodo /proc (più affidabile)
+        if ! check_nbd_usage_proc "$nbd_device"; then
+            return 0  # In uso
+        fi
+        
+        # Infine con lsof filtrato (come fallback)
+        if ! check_nbd_usage_filtered "$nbd_device"; then
+            return 0  # In uso
+        fi
+        
+        return 1  # Non in uso
+    }
+    
+    # Smonta tutte le partizioni prima della disconnessione
+    unmount_nbd_partitions() {
+        local base_device=$1
+        log "Unmounting partitions for $base_device"
+        
+        # Trova e smonta tutte le partizioni
+        for partition in "${base_device}p"*; do
+            if [ -b "$partition" ]; then
+                log "Checking partition $partition"
+                if mount | grep -q "^$partition "; then
+                    log "Unmounting $partition"
+                    if ! umount "$partition" 2>/dev/null; then
+                        log "Force unmounting $partition"
+                        umount -f "$partition" 2>/dev/null || umount -l "$partition" 2>/dev/null
+                    fi
+                fi
+            fi
+        done
+        
+        # Verifica che il device base non sia montato
+        if mount | grep -q "^$base_device "; then
+            log "Unmounting base device $base_device"
+            if ! umount "$base_device" 2>/dev/null; then
+                log "Force unmounting base device $base_device"
+                umount -f "$base_device" 2>/dev/null || umount -l "$base_device" 2>/dev/null
+            fi
+        fi
+    }
+    
+    # Esecuzione della disconnessione
+    unmount_nbd_partitions "$device"
+    
+    # Attendi un momento per il cleanup
+    sleep 1
+    
+    # Controlla se è ancora in uso
+    local max_attempts=5
+    local attempt=1
+    
+    while [ $attempt -le $max_attempts ]; do
+        if is_nbd_in_use "$device"; then
+            log "NBD device $device is free, proceeding with disconnect (attempt $attempt)"
+            break
+        else
+            log "NBD device $device still in use, waiting... (attempt $attempt/$max_attempts)"
+            if [ $attempt -eq $max_attempts ]; then
+                log "Warning: Forcing NBD disconnect after $max_attempts attempts"
+                # Lista i processi che ancora usano il device per il log
+                if command -v fuser &> /dev/null; then
+                    local using_processes=$(fuser -v "$device" 2>&1 | tail -n +2 || true)
+                    if [ -n "$using_processes" ]; then
+                        log "Processes still using $device: $using_processes"
+                    fi
+                fi
+            fi
+            sleep 2
+            ((attempt++))
+        fi
     done
     
-    log "Failed to disconnect $device"
-    whiptail --msgbox "Warning: Could not disconnect $device.\nA reboot may be required." 10 60
-    return 1
+    # Disconnetti il device NBD
+    log "Disconnecting NBD device $device"
+    if qemu-nbd --disconnect "$device" 2>/dev/null; then
+        log "NBD device $device disconnected successfully"
+        
+        # Verifica che sia realmente disconnesso
+        sleep 1
+        if [ ! -b "$device" ] || ! ls -la "$device" &>/dev/null; then
+            log "NBD device $device confirmed disconnected"
+        else
+            log "Warning: NBD device $device still exists after disconnect"
+        fi
+    else
+        log "Error disconnecting NBD device $device, trying alternative methods"
+        
+        # Metodo alternativo: usa nbd-client se disponibile
+        if command -v nbd-client &> /dev/null; then
+            log "Trying nbd-client disconnect"
+            nbd-client -d "$device" 2>/dev/null && log "NBD disconnected via nbd-client"
+        fi
+        
+        # Ultimo tentativo: forza il cleanup del modulo
+        if lsmod | grep -q nbd; then
+            local nbd_num=$(echo "$device" | sed 's/.*nbd//')
+            if [ -n "$nbd_num" ]; then
+                echo "$nbd_num" > /sys/block/nbd${nbd_num}/pid 2>/dev/null || true
+            fi
+        fi
+    fi
+    
+    log "NBD disconnect procedure completed for $device"
+}
+
+# Funzione per il controllo e cleanup preventivo dei device NBD
+cleanup_stale_nbd_devices() {
+    log "Checking for stale NBD devices..."
+    
+    for nbd_dev in /dev/nbd*; do
+        if [ -b "$nbd_dev" ] && [[ "$nbd_dev" =~ /dev/nbd[0-9]+$ ]]; then
+            # Controlla se il device è connesso ma non in uso
+            if qemu-nbd --list 2>/dev/null | grep -q "$nbd_dev" || \
+               [ -r "/sys/block/$(basename "$nbd_dev")/pid" ] && \
+               [ "$(cat "/sys/block/$(basename "$nbd_dev")/pid" 2>/dev/null)" != "0" ]; then
+                
+                log "Found active NBD device: $nbd_dev"
+                
+                # Controlla se è in uso
+                if is_nbd_in_use "$nbd_dev"; then
+                    log "NBD device $nbd_dev is free but still connected, cleaning up"
+                    qemu-nbd --disconnect "$nbd_dev" 2>/dev/null || true
+                fi
+            fi
+        fi
+    done
+}
+
+# Versione migliorata della funzione connect_nbd
+connect_nbd_improved() {
+    local file=$1
+    local format=${2:-raw}
+    
+    # Cleanup preventivo
+    cleanup_stale_nbd_devices
+    
+    # Trova un device NBD libero
+    for i in {0..15}; do
+        local nbd_dev="/dev/nbd$i"
+        if [ -b "$nbd_dev" ]; then
+            # Controlla se è già in uso
+            if is_nbd_in_use "$nbd_dev"; then
+                log "NBD device $nbd_dev is available"
+                NBD_DEVICE="$nbd_dev"
+                break
+            else
+                log "NBD device $nbd_dev is in use, trying next"
+            fi
+        fi
+    done
+    
+    if [ -z "$NBD_DEVICE" ]; then
+        log "No free NBD devices found"
+        return 1
+    fi
+    
+    log "Connecting $file to $NBD_DEVICE with format $format"
+    
+    # Connetti il device
+    if qemu-nbd --connect="$NBD_DEVICE" --format="$format" "$file"; then
+        log "NBD connection successful"
+        
+        # Attendi che il device sia pronto
+        local timeout=10
+        while [ $timeout -gt 0 ] && [ ! -b "$NBD_DEVICE" ]; do
+            sleep 1
+            ((timeout--))
+        done
+        
+        if [ -b "$NBD_DEVICE" ]; then
+            log "NBD device $NBD_DEVICE is ready"
+            return 0
+        else
+            log "NBD device $NBD_DEVICE not ready after timeout"
+            return 1
+        fi
+    else
+        log "NBD connection failed"
+        return 1
+    fi
 }
 
 # Function to detect Windows image

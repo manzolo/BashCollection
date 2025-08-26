@@ -46,6 +46,8 @@ for required_script in cleanup.sh dependencies.sh file_operations.sh image_manag
     fi
 done
 
+configure_lsof_environment
+
 # Trap for automatic cleanup on exit
 trap cleanup EXIT INT TERM
 
