@@ -326,3 +326,41 @@ get_user_preferences() {
     echo "$memory|$network|$audio"
     return 0
 }
+
+# Checks for the qemu-img dependency and installs it if not found.
+check_qemu_img_dependency() {
+    if ! command -v qemu-img &> /dev/null; then
+        whiptail --title "$SCRIPT_NAME" --msgbox "The 'qemu-img' tool is required but not found. Please install it to continue." 10 60
+        exit 1
+    fi
+}
+
+# Function to compress a disk image using qemu-img.
+# Usage: compress_image "input_image_path" "output_image_path"
+compress_image() {
+    local input_image="$1"
+    local output_image="$2"
+
+    if [ -z "$input_image" ] || [ -z "$output_image" ]; then
+        whiptail --title "Compression Error" --msgbox "Error: Both input and output image paths are required." 8 60
+        return 1
+    fi
+
+    # Verifica se il file di input esiste
+    if [ ! -f "$input_image" ]; then
+        whiptail --title "Compression Error" --msgbox "Error: Input image file not found at $input_image." 8 60
+        return 1
+    fi
+
+    # Mostra un messaggio di avvio compressione
+    whiptail --title "Compressing Image" --msgbox "Starting compression, be patient..." 8 60
+
+    # Esegui la compressione con qemu-img
+    if sudo qemu-img convert -c -O qcow2 -p "$input_image" "$output_image" 2>/dev/null; then
+        #whiptail --title "Compression Complete" --msgbox "Compression successful. New image created at $output_image" 10 60
+        return 0
+    else
+        whiptail --title "Compression Error" --msgbox "Error: Compression failed." 8 60
+        return 1
+    fi
+}

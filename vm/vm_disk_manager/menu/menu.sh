@@ -127,6 +127,26 @@ handle_mount_menu() {
     done
 }
 
+handle_image_compression() {
+    local file=$1
+    local filename=$(basename -- "$file")
+    local extension="${filename##*.}"
+    local base="${filename%.*}"
+    local output_file="${base}_compressed.${extension}"
+
+    # Mostra il messaggio di conferma
+    if whiptail --title "Compressing Image" --yesno "The compressed file will be saved as:\n\n$output_file\n\nPress OK to continue." 10 60; then
+        # Esegui la compressione
+        compress_image "$file" "$output_file"
+        # Mostra un messaggio di successo
+        whiptail --title "Compression Complete" --msgbox "Image successfully compressed to:\n\n$output_file" 10 60
+    else
+        # Se l'utente annulla, mostra un messaggio e torna al menu
+        whiptail --title "Compression Cancelled" --msgbox "Compression cancelled. Returning to menu." 8 60
+    fi
+    # Non è necessario fare altro; il flusso tornerà automaticamente al menu chiamante
+}
+
 handle_disk_ops_menu() {
     local file=$1
     while true; do
@@ -134,7 +154,8 @@ handle_disk_ops_menu() {
         local menu_items=(
             "1" "📏 Resize Image"
             "2" "🔧 Launch GParted Live"
-            "3" "🚪 Back to Main Menu"
+            "3" "⬇️  Compress Image"
+            "4" "🚪 Back to Main Menu"
         )
         local choice=$(whiptail --title "$menu_title" --menu "Select a disk operation:" 20 70 12 "${menu_items[@]}" 3>&1 1>&2 2>&3)
 
@@ -145,7 +166,10 @@ handle_disk_ops_menu() {
             2)
                 gparted_boot "$file"
                 ;;
-            3|"")
+            3)
+                handle_image_compression "$file"
+                ;;
+            4|"")
                 return
                 ;;
         esac
