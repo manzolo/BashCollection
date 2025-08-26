@@ -27,33 +27,6 @@ detect_windows_image() {
     return 1
 }
 
-# Function to open LUKS
-open_luks() {
-    local luks_part=$1
-    local mapper_name="luks_$(basename "$luks_part")_$$"
-    
-    log "Attempting to open LUKS on $luks_part"
-    if whiptail --title "LUKS Detected" --yesno "LUKS partition: $luks_part\nDo you want to open it?" 10 60; then
-        local password=$(whiptail --title "LUKS Password" --passwordbox "Password for $luks_part:" 10 60 3>&1 1>&2 2>&3)
-        
-        if [ $? -ne 0 ] || [ -z "$password" ]; then
-            log "LUKS password input cancelled"
-            return 1
-        fi
-        
-        if echo "$password" | cryptsetup luksOpen "$luks_part" "$mapper_name" 2>>"$LOG_FILE"; then
-            LUKS_MAPPED+=("$mapper_name")
-            log "LUKS opened: /dev/mapper/$mapper_name"
-            echo "/dev/mapper/$mapper_name"
-            return 0
-        else
-            log "Failed to open LUKS: $(tail -n 1 "$LOG_FILE")"
-            whiptail --msgbox "Incorrect password or error opening LUKS." 8 50
-            return 1
-        fi
-    fi
-    return 1
-}
 
 # Function to handle LVM
 handle_lvm() {

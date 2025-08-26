@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Function to check if a file is in use
+# Enhanced file lock check with proper logging
 check_file_lock() {
     local file=$1
     
@@ -20,7 +20,7 @@ check_file_lock() {
             if lsof "$file" >/dev/null 2>&1; then
                 log "Could not release file lock"
                 whiptail --msgbox "Could not release the file. Please try again later." 8 60
-                return 1
+            return 1
             fi
         else
             return 1

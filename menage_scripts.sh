@@ -11,6 +11,9 @@ NC='\033[0m' # No Color
 INSTALL_DIR="/usr/local/bin"          # For main script symlinks
 SCRIPT_BASE_DIR="/usr/local/share/scripts"  # For script directories and subdirectories
 
+# Directory in cui si trova questo script
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+
 # Check if the script is run with root permissions
 if [ "$(id -u)" -ne 0 ]; then
     echo -e "${RED}This script must be run as root. Please use 'sudo'.${NC}"
@@ -18,11 +21,11 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # List of directories to scan for scripts
-SCRIPT_DIRS=("backup" "chroot" "cleaner" "docker" "nvidia" "utils" "vm")
+SCRIPT_DIRS=("backup" "chroot" "cleaner" "docker" "nvidia" "qemu" "utils" "vm")
 
 install_scripts() {
     echo -e "${BLUE}>>> Installing scripts into: $SCRIPT_BASE_DIR and $INSTALL_DIR${NC}"
-
+    
     # Create the base directory for scripts
     mkdir -p "$SCRIPT_BASE_DIR"
 
@@ -52,7 +55,7 @@ install_scripts() {
 
 uninstall_scripts() {
     echo -e "${BLUE}>>> Uninstalling scripts from: $INSTALL_DIR and $SCRIPT_BASE_DIR${NC}"
-
+    
     for dir in "${SCRIPT_DIRS[@]}"; do
         echo -e "${YELLOW}>> Processing directory: $dir${NC}"
         
@@ -101,7 +104,34 @@ list_scripts() {
     fi
 }
 
-# Main script logic
+update_scripts() {
+    echo -e "${BLUE}>>> Updating scripts...${NC}"
+
+    # Esegue il git pull come l'utente proprietario
+    if [ "$(id -u)" -eq 0 ]; then
+        # Se lo script è stato lanciato con sudo, usiamo 'sudo -u' per eseguire git pull come l'utente originale
+        USER_NAME=$(logname)
+        echo -e "${YELLOW}>> Running git pull as user: ${USER_NAME}...${NC}"
+        sudo -u "$USER_NAME" git -C "$SCRIPT_DIR" pull
+        PULL_RESULT=$?
+    else
+        # Se lo script è stato lanciato senza sudo, lo eseguiamo normalmente
+        echo -e "${YELLOW}>> Running git pull as your user...${NC}"
+        git -C "$SCRIPT_DIR" pull
+        PULL_RESULT=$?
+    fi
+    
+    # Controlla se il git pull ha avuto successo
+    if [ $PULL_RESULT -eq 0 ]; then
+        echo -e "${GREEN}✔ Git pull successful!${NC}"
+        echo -e "${YELLOW}>> Re-running installation to update scripts...${NC}"
+        install_scripts
+    else
+        echo -e "${RED}✖ Git pull failed. Please check your network connection or repository status.${NC}"
+        exit 1
+    fi
+}
+
 case "$1" in
     install)
         install_scripts
@@ -112,8 +142,11 @@ case "$1" in
     list)
         list_scripts
         ;;
+    update)
+        update_scripts
+        ;;
     *)
-        echo "Usage: sudo $0 {install|uninstall|list}"
+        echo "Usage: sudo $0 {install|uninstall|list|update}"
         exit 1
         ;;
 esac

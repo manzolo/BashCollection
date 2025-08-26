@@ -44,7 +44,7 @@ connect_nbd() {
             if [ $? -eq 0 ]; then
                 sleep 3
                 if [ -b "$NBD_DEVICE" ] && [ -s "/sys/block/$(basename "$NBD_DEVICE")/pid" ]; then
-                    echo 100
+            echo 100
                     echo "# Connected successfully!"
                     log "NBD connected successfully, PID: $(cat /sys/block/$(basename "$NBD_DEVICE")/pid)"
                     sleep 1
@@ -312,8 +312,10 @@ mount_with_nbd() {
         format="raw"
     fi
     
-    if ! connect_nbd "$file" "$format" >> "$LOG_FILE" 2>&1; then
-        whiptail --msgbox "NBD connection error. Check $LOG_FILE for details." 8 50
+    preventive_cleanup
+    
+    if ! connect_nbd "$file" "$format"; then
+        whiptail --msgbox "NBD connection error. Check $LOG_FILE for details." 8 50 3>&1 1>&2 2>&3
         return 1
     fi
     
@@ -329,7 +331,7 @@ mount_with_nbd() {
     done
     
     if [ ${#part_items[@]} -eq 0 ]; then
-        whiptail --msgbox "No partitions found." 8 50
+        whiptail --msgbox "No partitions found." 8 50 3>&1 1>&2 2>&3
         safe_nbd_disconnect "$NBD_DEVICE" >> "$LOG_FILE" 2>&1
         NBD_DEVICE=""
         return 1
@@ -358,7 +360,7 @@ mount_with_nbd() {
         fi
         safe_nbd_disconnect "$NBD_DEVICE" >> "$LOG_FILE" 2>&1
         NBD_DEVICE=""
-        whiptail --title "Full Analysis" --msgbox "$analysis$luks_info" 20 80
+        whiptail --title "Full Analysis" --msgbox "$analysis$luks_info" 20 80 3>&1 1>&2 2>&3
         return 0
     fi
     
@@ -373,58 +375,248 @@ mount_with_nbd() {
     done
     
     if [ -z "$selected_part" ]; then
-        whiptail --msgbox "Selection error." 8 50
+        whiptail --msgbox "Selection error." 8 50 3>&1 1>&2 2>&3
         safe_nbd_disconnect "$NBD_DEVICE" >> "$LOG_FILE" 2>&1
         NBD_DEVICE=""
         return 1
     fi
     
+    echo "=== MOUNT DEBUG ===" >> "$LOG_FILE"
+    echo "selected_part: $selected_part" >> "$LOG_FILE"
+    echo "Is LUKS?: $(cryptsetup isLuks "$selected_part" 2>/dev/null && echo yes || echo no)" >> "$LOG_FILE"
+    ls -la "$selected_part" >> "$LOG_FILE" 2>&1
+    echo "===================" >> "$LOG_FILE"
+    
     local luks_name=""
     if cryptsetup isLuks "$selected_part" 2>/dev/null; then
-        local luks_mapped=$(open_luks "$selected_part" 2>>"$LOG_FILE")
+        local luks_mapped
+        luks_mapped=$(open_luks "$selected_part")
+
         if [ $? -eq 0 ] && [ -n "$luks_mapped" ]; then
             selected_part="$luks_mapped"
             luks_name=$(basename "$luks_mapped")
             LUKS_MAPPED+=("$luks_name")
         else
-            whiptail --msgbox "Cannot open the LUKS partition. Check $LOG_FILE for details." 8 50
+            whiptail --msgbox "Cannot open the LUKS partition. Check $LOG_FILE for details." 8 50 3>&1 1>&2 2>&3
             safe_nbd_disconnect "$NBD_DEVICE" >> "$LOG_FILE" 2>&1
             NBD_DEVICE=""
             return 1
         fi
     fi
     
+    local device_to_mount="$selected_part"
+    local fs_type=$(blkid -o value -s TYPE "$selected_part" 2>/dev/null || echo "unknown")
+    if [ "$fs_type" == "LVM2_member" ]; then
+        log "LVM2_member filesystem detected on $selected_part. Activating volume groups..."
+        
+        if ! vgchange -ay &>>"$LOG_FILE"; then
+            whiptail --msgbox "Failed to activate LVM volume groups.\nCheck log for details." 10 60 3>&1 1>&2 2>&3
+            safe_nbd_disconnect "$NBD_DEVICE" >> "$LOG_FILE" 2>&1
+            NBD_DEVICE=""
+            return 1
+        fi
+        
+        LVM_ACTIVE+=("$selected_part")
+        log "LVM volume groups activated successfully."
+        
+        # Wait a moment for devices to appear
+        sleep 2
+        
+        local lv_items=()
+        local lv_counter=1
+        local lv_devices=()
+        
+        # Build list of available logical volumes
+        for lv_path in /dev/mapper/*; do
+            if [ -b "$lv_path" ]; then
+                local basename_lv=$(basename "$lv_path")
+                # Skip LUKS devices and control device
+                if [[ "$basename_lv" != "luks_"* ]] && [[ "$basename_lv" != "control" ]]; then
+                    local lv_fs_type=$(blkid -o value -s TYPE "$lv_path" 2>/dev/null || echo "unknown")
+                    local lv_size=$(lsblk -no SIZE "$lv_path" 2>/dev/null || echo "?")
+                    lv_items+=("$lv_counter" "$basename_lv - $lv_fs_type ($lv_size)")
+                    lv_devices+=("$lv_path")
+                    log "Found LV: $lv_path ($lv_fs_type, $lv_size)"
+                    ((lv_counter++))
+                fi
+            fi
+        done
+        
+        if [ ${#lv_items[@]} -eq 0 ]; then
+            whiptail --msgbox "No logical volumes found after activating LVM." 10 60 3>&1 1>&2 2>&3
+            vgchange -an &>>"$LOG_FILE" || true
+            safe_nbd_disconnect "$NBD_DEVICE" >> "$LOG_FILE" 2>&1
+            NBD_DEVICE=""
+            return 1
+        fi
+        
+        local lv_choice=$(whiptail --title "LVM Logical Volumes" --menu "Select logical volume to mount:" 18 70 10 "${lv_items[@]}" 3>&1 1>&2 2>&3)
+        if [ $? -ne 0 ]; then
+            log "User cancelled LVM logical volume selection."
+            vgchange -an &>>"$LOG_FILE" || true
+            safe_nbd_disconnect "$NBD_DEVICE" >> "$LOG_FILE" 2>&1
+            NBD_DEVICE=""
+            return 1
+        fi
+        
+        # Get the selected device using array index
+        local array_index=$((lv_choice - 1))
+        if [ $array_index -ge 0 ] && [ $array_index -lt ${#lv_devices[@]} ]; then
+            device_to_mount="${lv_devices[$array_index]}"
+            log "Selected logical volume: $device_to_mount"
+        else
+            whiptail --msgbox "Invalid selection." 8 50 3>&1 1>&2 2>&3
+            vgchange -an &>>"$LOG_FILE" || true
+            safe_nbd_disconnect "$NBD_DEVICE" >> "$LOG_FILE" 2>&1
+            NBD_DEVICE=""
+            return 1
+        fi
+    fi
+
+    # === Fixed mounting section ===
     local mount_point="/mnt/nbd_mount_$$"
     mkdir -p "$mount_point"
-    
     local original_user=${SUDO_USER:-$(who am i | awk '{print $1}')}
-    
+
+    local mount_success=false
+    # First check if the mount point is already in use
+    if mountpoint -q "$mount_point" 2>/dev/null; then
+        log "Mount point $mount_point already in use, cleaning up"
+        umount "$mount_point" 2>/dev/null || umount -l "$mount_point" 2>/dev/null
+    fi
+
     (
-        echo 0
-        echo "# Mounting $selected_part..."
+        echo 10
+        echo "# Detecting filesystem on $device_to_mount..."
+        
+        local detected_fs=""
+        # Preferred method: use lsblk which is reliable on logical volumes
+        detected_fs=$(lsblk -no FSTYPE "$device_to_mount" 2>/dev/null | head -n 1 | tr -d ' ')
+        
+        if [ -z "$detected_fs" ] || [ "$detected_fs" = "" ]; then
+            # Fallback to blkid if lsblk fails
+            detected_fs=$(blkid -o value -s TYPE "$device_to_mount" 2>/dev/null)
+        fi
+        
+        if [ -z "$detected_fs" ] || [ "$detected_fs" = "" ]; then
+            # Further fallback to file command
+            local file_output=$(file -s "$device_to_mount" 2>/dev/null)
+            if echo "$file_output" | grep -q "ext4"; then
+                detected_fs="ext4"
+            elif echo "$file_output" | grep -q "ext3"; then
+                detected_fs="ext3"
+            elif echo "$file_output" | grep -q "ext2"; then
+                detected_fs="ext2"
+            elif echo "$file_output" | grep -q "XFS"; then
+                detected_fs="xfs"
+            elif echo "$file_output" | grep -q "BTRFS"; then
+                detected_fs="btrfs"
+            fi
+        fi
+        
+        log "Device to mount: $device_to_mount"
+        log "Detected filesystem: ${detected_fs:-unknown}"
+        
+        echo 40
+        echo "# Attempting to mount..."
+        
+        # Prepare mount options
         local mount_opts=""
+        local uid_gid_opts=""
         if [ -n "$original_user" ]; then
             local original_uid=$(id -u "$original_user" 2>/dev/null)
             local original_gid=$(id -g "$original_user" 2>/dev/null)
-            if [ -n "$original_uid" ]; then
-                mount_opts="-o uid=$original_uid,gid=$original_gid,umask=022"
+            if [ -n "$original_uid" ] && [ -n "$original_gid" ]; then
+                uid_gid_opts="uid=$original_uid,gid=$original_gid,umask=022"
             fi
         fi
-        if ! mount $mount_opts "$selected_part" "$mount_point" 2>>"$LOG_FILE"; then
-            mount "$selected_part" "$mount_point" 2>>"$LOG_FILE"
+        
+        echo 60
+        # Try mounting with detected filesystem type and user options
+        if [ -n "$detected_fs" ] && [ -n "$uid_gid_opts" ]; then
+            if mount -t "$detected_fs" -o "$uid_gid_opts" "$device_to_mount" "$mount_point" 2>>"$LOG_FILE"; then
+                echo "mount_success=true" > "/tmp/mount_result_$$"
+                log "Mounted successfully with filesystem type: $detected_fs and user options"
+            else
+                log "Mount failed with detected filesystem type and user options"
+            fi
         fi
-        echo 100
-        if [ $? -eq 0 ]; then
+        
+        # Try without user options if that failed
+        if [ ! -f "/tmp/mount_result_$$" ] && [ -n "$detected_fs" ]; then
+            echo 70
+            echo "# Retrying without user options..."
+            if mount -t "$detected_fs" "$device_to_mount" "$mount_point" 2>>"$LOG_FILE"; then
+                echo "mount_success=true" > "/tmp/mount_result_$$"
+                log "Mounted successfully with filesystem type: $detected_fs"
+            else
+                log "Mount failed with detected filesystem type: $detected_fs"
+            fi
+        fi
+        
+        # Try auto-detection without specifying filesystem type
+        if [ ! -f "/tmp/mount_result_$$" ]; then
+            echo 80
+            echo "# Retrying with auto-detection..."
+            if [ -n "$uid_gid_opts" ]; then
+                if mount -o "$uid_gid_opts" "$device_to_mount" "$mount_point" 2>>"$LOG_FILE"; then
+                    echo "mount_success=true" > "/tmp/mount_result_$$"
+                    log "Mounted successfully with auto-detection and user options"
+                else
+                    log "Mount failed with auto-detection and user options"
+                fi
+            fi
+        fi
+        
+        # Final attempt: basic mount with no options
+        if [ ! -f "/tmp/mount_result_$$" ]; then
+            echo 90
+            echo "# Final attempt with basic mount..."
+            if mount "$device_to_mount" "$mount_point" 2>>"$LOG_FILE"; then
+                echo "mount_success=true" > "/tmp/mount_result_$$"
+                log "Mounted successfully with basic mount"
+            else
+                log "All mount attempts failed"
+                echo "mount_success=false" > "/tmp/mount_result_$$"
+            fi
+        fi
+        
+        # Check final result
+        if [ -f "/tmp/mount_result_$$" ] && grep -q "mount_success=true" "/tmp/mount_result_$$"; then
+            echo 100
             echo "# Mounted successfully!"
             sleep 1
         else
-            echo "# Mount failed"
+            echo 100
+            echo "# Mount failed - check logs"
             sleep 2
-            exit 1
         fi
-    ) | whiptail --gauge "Mounting partition..." 8 50 0
+    ) | whiptail --gauge "Mounting partition" 8 50 0
     
-    if [ $? -eq 0 ]; then
+    # Check the actual mount result
+    if [ -f "/tmp/mount_result_$$" ] && grep -q "mount_success=true" "/tmp/mount_result_$$"; then
+        mount_success=true
+        rm -f "/tmp/mount_result_$$"
+    else
+        mount_success=false
+        rm -f "/tmp/mount_result_$$"
+    fi
+    
+    # Verify the mount actually worked by checking if mount point contains the device
+    if [ "$mount_success" = true ]; then
+        if ! mountpoint -q "$mount_point" 2>/dev/null; then
+            mount_success=false
+            log "Mount verification failed - mount point is not actually mounted"
+        else
+            # Double-check that it's our device that's mounted
+            local mounted_device=$(mount | grep "$mount_point" | awk '{print $1}' | head -1)
+            if [ "$mounted_device" != "$device_to_mount" ]; then
+                log "Warning: Expected $device_to_mount but found $mounted_device mounted"
+            fi
+        fi
+    fi
+    
+    if [ "$mount_success" = true ]; then
         MOUNTED_PATHS+=("$mount_point")
         if [ -n "$original_user" ]; then
             local original_uid=$(id -u "$original_user" 2>/dev/null)
@@ -435,7 +627,7 @@ mount_with_nbd() {
             fi
         fi
         
-        log "Mounted $selected_part at $mount_point" >> "$LOG_FILE"
+        log "Mounted $device_to_mount at $mount_point" >> "$LOG_FILE"
         
         local action_options=(
             "1" "Interactive shell in mount directory"
@@ -447,7 +639,7 @@ mount_with_nbd() {
         
         case $action_choice in
             1)
-                whiptail --msgbox "Opening shell in mount directory.\n\nPath: $mount_point\n\nUse 'exit' to return to the menu." 12 70
+                whiptail --msgbox "Opening shell in mount directory.\n\nPath: $mount_point\n\nUse 'exit' to return to the menu." 12 70 3>&1 1>&2 2>&3
                 if [ -n "$original_user" ]; then
                     sudo -u "$original_user" bash -c "cd '$mount_point' && exec bash -i"
                 else
@@ -456,10 +648,10 @@ mount_with_nbd() {
                 ;;
             2)
                 if [ -d "$mount_point" ]; then
-                    whiptail --msgbox "Entering isolated chroot environment.\n\nYou are now in the VM's filesystem as root.\nNetworking and some services may not work.\n\nUse 'exit' to return to the menu.\n\nWarning: Be careful with system modifications!" 15 70
+                    whiptail --msgbox "Entering isolated chroot environment.\n\nYou are now in the VM's filesystem as root.\nNetworking and some services may not work.\n\nUse 'exit' to return to the menu.\n\nWarning: Be careful with system modifications!" 15 70 3>&1 1>&2 2>&3
                     run_chroot_isolated "$mount_point"
                 else
-                    whiptail --msgbox "Invalid mount point.\nFalling back to regular shell." 10 60
+                    whiptail --msgbox "Invalid mount point.\nFalling back to regular shell." 10 60 3>&1 1>&2 2>&3
                     if [ -n "$original_user" ]; then
                         sudo -u "$original_user" bash -c "cd '$mount_point' && exec bash -i"
                     else
@@ -468,86 +660,58 @@ mount_with_nbd() {
                 fi
                 ;;
             3)
-                whiptail --msgbox "Partition mounted at: $mount_point\n\nReturning to menu. Use 'Active Mount Points' to manage." 10 70
+                whiptail --msgbox "Partition mounted at: $mount_point\n\nReturning to menu. Use 'Active Mount Points' to manage." 10 70 3>&1 1>&2 2>&3
                 return 0
                 ;;
             *)
-                whiptail --msgbox "No action selected. Returning to menu.\n\nMount point: $mount_point" 10 70
+                whiptail --msgbox "No action selected. Returning to menu.\n\nMount point: $mount_point" 10 70 3>&1 1>&2 2>&3
                 return 0
                 ;;
         esac
         
-        # Cleanup after shell/chroot exits
         log "Shell/chroot exited, cleaning up mount and NBD"
         
-        # Unmount any partitions
-        for part in "${NBD_DEVICE}"p*; do
-            if [ -b "$part" ]; then
-                for mnt in $(mount | grep "$part" | awk '{print $3}'); do
-                    log "Unmounting $mnt from $part"
-                    for i in {1..3}; do
-                        if umount "$mnt" 2>>"$LOG_FILE" || umount -f "$mnt" 2>>"$LOG_FILE"; then
-                            break
-                        fi
-                        log "Failed to unmount $mnt, retrying ($i/3)"
-                        sleep 1
-                    done
-                    if mountpoint -q "$mnt" 2>/dev/null; then
-                        log "Resorting to lazy unmount for $mnt"
-                        umount -l "$mnt" 2>>"$LOG_FILE"
-                    fi
-                    MOUNTED_PATHS=("${MOUNTED_PATHS[@]/$mnt}")
-                done
+                # === START OF IMPROVED CLEANUP LOGIC ===
+        
+        # 1. Unmount all mounted paths
+        for mnt_path in "${MOUNTED_PATHS[@]}"; do
+            if mountpoint -q "$mnt_path" 2>/dev/null; then
+                log "Unmounting $mnt_path"
+                umount "$mnt_path" 2>>"$LOG_FILE" || umount -l "$mnt_path" 2>>"$LOG_FILE"
+                rmdir "$mnt_path" 2>/dev/null
             fi
         done
+        MOUNTED_PATHS=()
         
-        # Unmount main partition
-        if mountpoint -q "$mount_point" 2>/dev/null; then
-            for i in {1..3}; do
-                if umount "$mount_point" 2>>"$LOG_FILE" || umount -f "$mount_point" 2>>"$LOG_FILE"; then
-                    break
-                fi
-                log "Failed to unmount $mount_point, retrying ($i/3)"
-                sleep 1
-            done
-            if mountpoint -q "$mount_point" 2>/dev/null; then
-                log "Resorting to lazy unmount for $mount_point"
-                umount -l "$mount_point" 2>>"$LOG_FILE"
-            fi
-            rmdir "$mount_point" 2>/dev/null
-            MOUNTED_PATHS=("${MOUNTED_PATHS[@]/$mount_point}")
-            log "Unmounted $mount_point"
-        fi
+        # 2. Comprehensive LVM cleanup
+        cleanup_lvm_volumes
+        LVM_ACTIVE=()
         
-        # Close LUKS mapping if it exists
-        if [ -n "$luks_name" ] && [ -b "/dev/mapper/$luks_name" ]; then
-            log "Closing LUKS mapping $luks_name"
-            cryptsetup luksClose "$luks_name" 2>>"$LOG_FILE" || log "Failed to close LUKS $luks_name"
-            LUKS_MAPPED=("${LUKS_MAPPED[@]/$luks_name}")
-        fi
+        # 3. Comprehensive LUKS cleanup
+        cleanup_luks_mappings
         
-        # Check for processes using the NBD device
-        if [ -n "$NBD_DEVICE" ] && lsof -e /run/user/*/gvfs -e /run/user/*/doc -e /tmp/.mount_* "$NBD_DEVICE" >/dev/null 2>&1; then
-            log "Processes using $NBD_DEVICE found, attempting to terminate"
-            lsof -e /run/user/*/gvfs -e /run/user/*/doc -e /tmp/.mount_* "$NBD_DEVICE" | tail -n +2 | awk '{print $2}' | sort -u | while read pid; do
-                log "Terminating PID $pid holding $NBD_DEVICE"
-                kill "$pid" 2>/dev/null
-                sleep 1
-                kill -9 "$pid" 2>/dev/null
-            done
-        fi
+        # 4. Wait for device cleanup
+        sleep 3
         
-        # Disconnect NBD
+        # 5. Disconnect NBD device
         if [ -n "$NBD_DEVICE" ] && [ -b "$NBD_DEVICE" ]; then
             safe_nbd_disconnect "$NBD_DEVICE" >> "$LOG_FILE" 2>&1
             NBD_DEVICE=""
-            log "Disconnected $NBD_DEVICE"
+            log "Disconnected NBD device"
         fi
         
-        whiptail --msgbox "Mount and NBD cleaned up successfully." 8 50
+        # 6. Final cleanup verification
+        sleep 2
+        if lsmod | grep -q nbd; then
+            log "NBD module still loaded - this is normal"
+        fi
+        
+        # === END OF IMPROVED CLEANUP LOGIC ===
+        
+        whiptail --msgbox "Mount and NBD cleaned up successfully." 8 50 3>&1 1>&2 2>&3
         return 0
     else
-        # Cleanup on mount failure
+        # === START OF FAILED MOUNT CLEANUP LOGIC ===
         if [ -n "$luks_name" ] && [ -b "/dev/mapper/$luks_name" ]; then
             log "Closing LUKS mapping $luks_name on mount failure"
             cryptsetup luksClose "$luks_name" 2>>"$LOG_FILE" || log "Failed to close LUKS $luks_name"
@@ -562,7 +726,8 @@ mount_with_nbd() {
             safe_nbd_disconnect "$NBD_DEVICE" >> "$LOG_FILE" 2>&1
             NBD_DEVICE=""
         fi
-        whiptail --msgbox "Mount failed. Check $LOG_FILE for details." 8 50
+        # === END OF FAILED MOUNT CLEANUP LOGIC ===
+        whiptail --msgbox "Mount failed. Check $LOG_FILE for details." 8 50 3>&1 1>&2 2>&3
         return 1
     fi
 }

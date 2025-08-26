@@ -43,7 +43,7 @@ cleanup() {
     # Deactivate VG
     for vg in "${VG_DEACTIVATED[@]}"; do
         log "Deactivating VG $vg"
-        vgchange -an "$vg" 2>/dev/null
+        vgchange -an "$vg" &>/dev/null
     done
     
     # Close LUKS

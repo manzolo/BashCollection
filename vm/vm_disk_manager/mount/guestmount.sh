@@ -26,7 +26,7 @@ mount_with_guestmount() {
         echo "# Mounting with guestmount..."
         local guestmount_opts=(--add "$file" -i --rw)
         if [ -n "$original_uid" ]; then
-            guestmount_opts+=(--uid "$original_uid" --gid "$original_gid")
+            guestmount_opts+=()
         fi
         guestmount_opts+=(-o allow_other)
         guestmount "${guestmount_opts[@]}" "$mount_point" 2>>"$LOG_FILE"

@@ -422,19 +422,8 @@ setup_chroot() {
     if ! safe_mount "$ROOT_DEVICE" "$ROOT_MOUNT"; then
         return 1
     fi
-    
-    # Mount EFI partition
-    if [[ -n "$EFI_PART" ]]; then
-        if ! validate_filesystem "$EFI_PART"; then
-            return 1
-        fi
-        
-        if ! safe_mount "$EFI_PART" "$ROOT_MOUNT/boot/efi"; then
-            return 1
-        fi
-    fi
-    
-    # Mount boot partition
+
+    # Caso 1: c'è una partizione /boot separata
     if [[ -n "$BOOT_PART" ]]; then
         if ! validate_filesystem "$BOOT_PART"; then
             return 1
@@ -442,6 +431,34 @@ setup_chroot() {
         
         if ! safe_mount "$BOOT_PART" "$ROOT_MOUNT/boot"; then
             return 1
+        fi
+
+        if [[ -n "$EFI_PART" ]]; then
+            if ! validate_filesystem "$EFI_PART"; then
+                return 1
+            fi
+
+            if [[ -d "$ROOT_MOUNT/boot/efi" ]]; then
+                if ! safe_mount "$EFI_PART" "$ROOT_MOUNT/boot/efi"; then
+                    return 1
+                fi
+            else
+                # fallback: monta EFI su /efi
+                mkdir -p "$ROOT_MOUNT/efi"
+                if ! safe_mount "$EFI_PART" "$ROOT_MOUNT/efi"; then
+                    return 1
+                fi
+            fi
+        fi
+
+    else
+        if [[ -n "$EFI_PART" ]]; then
+            if ! validate_filesystem "$EFI_PART"; then
+                return 1
+            fi
+            if ! safe_mount "$EFI_PART" "$ROOT_MOUNT/boot/efi"; then
+                return 1
+            fi
         fi
     fi
     
