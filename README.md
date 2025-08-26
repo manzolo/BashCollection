@@ -61,7 +61,7 @@ After installation, run scripts directly from the terminal (e.g., `docker_manage
 
 - **ventoy_tester**: (From utils) Tests Ventoy USB boot in QEMU with UEFI/BIOS modes, diagnostics, and configs. Requires QEMU and related deps.
 
-- **vm_image_manager**: An interactive shell script for advanced VM disk image operations. Use it to resize disks, manage partitions, and extend filesystems directly via the NBD protocol. It also includes an option to test the image with QEMU and a dedicated GParted Live boot feature for manual resizing.
+- **[vm_image_manager](https://github.com/manzolo/BashCollection/blob/main/vm/Readme.md )**: An interactive shell script for advanced VM disk image operations. Use it to resize disks, manage partitions, and extend filesystems directly via the NBD protocol. It also includes an option to test the image with QEMU and a dedicated GParted Live boot feature for manual resizing.
 
 - **menage_scripts**: The installer itself (symlinked as `menage_scripts`). Use for install/uninstall/list.
 
