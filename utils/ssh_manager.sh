@@ -567,9 +567,9 @@ main_menu() {
             "2" "🔑 Copy SSH key" \
             "3" "📁 Connect via SFTP" \
             "4" "➕ Add server" \
-            "5" "✏️ Edit server" \
-            "6" "🗑️ Remove server" \
-            "7" "ℹ️ Server information" \
+            "5" "✏️  Edit server" \
+            "6" "🗑️  Remove server" \
+            "7" "ℹ️  Server information" \
             "8" "🔧 Install prerequisites" \
             "0" "🚪 Exit" 2>&1 >/dev/tty)
         
