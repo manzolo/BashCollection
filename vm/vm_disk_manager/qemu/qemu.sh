@@ -1,3 +1,34 @@
+# Function to gather user preferences for RAM, network, and audio
+get_user_preferences() {
+    local default_memory=$1
+    
+    # Selezione RAM
+    local memory=$(whiptail --title "Select RAM" --inputbox "Enter RAM size (MB):" 8 50 "$default_memory" 3>&1 1>&2 2>&3)
+    if [ $? -ne 0 ] || [ -z "$memory" ]; then
+        log "RAM selection cancelled" >> "$LOG_FILE"
+        return 1
+    fi
+    
+    # Selezione rete
+    local network_options=("virtio-net" "VirtIO Network" "e1000" "Intel E1000" "none" "No Network")
+    local network=$(whiptail --title "Select Network" --menu "Choose network type:" 12 50 3 "${network_options[@]}" 3>&1 1>&2 2>&3)
+    if [ $? -ne 0 ] || [ -z "$network" ]; then
+        log "Network selection cancelled" >> "$LOG_FILE"
+        return 1
+    fi
+    
+    # Selezione audio
+    local audio_options=("ac97" "AC97 Audio" "hda" "Intel HDA" "none" "No Audio")
+    local audio=$(whiptail --title "Select Audio" --menu "Choose audio type:" 12 50 3 "${audio_options[@]}" 3>&1 1>&2 2>&3)
+    if [ $? -ne 0 ] || [ -z "$audio" ]; then
+        log "Audio selection cancelled" >> "$LOG_FILE"
+        return 1
+    fi
+    
+    echo "$memory|$network|$audio"
+    return 0
+}
+
 # Main QEMU test function
 test_vm_qemu() {
     local file=$1
@@ -13,11 +44,15 @@ test_vm_qemu() {
         "3" "Headless Mode (SSH via port 2222)"
         "4" "Custom Boot Configuration"
         "5" "Debug Mode (verbose logging)"
+        "6" "Cancel"
     )
     
     local choice=$(whiptail --title "Test VM with QEMU" --menu "Select boot mode:" 16 70 6 "${qemu_options[@]}" 3>&1 1>&2 2>&3)
+    local exit_code=$?
     
-    if [ $? -ne 0 ]; then
+    if [ $exit_code -ne 0 ] || [ "$choice" = "6" ]; then
+        log "QEMU boot mode selection cancelled" >> "$LOG_FILE"
+        whiptail --msgbox "Operation cancelled. Returning to main menu." 8 50
         return 1
     fi
     
@@ -34,7 +69,11 @@ test_vm_qemu() {
         1)
             # Enhanced MBR Boot with options
             local prefs=$(get_user_preferences 2048)
-            if [ $? -ne 0 ]; then return 1; fi
+            if [ $? -ne 0 ] || [ -z "$prefs" ]; then
+                log "MBR boot preferences cancelled or invalid" >> "$LOG_FILE"
+                whiptail --msgbox "Preferences selection cancelled. Returning to main menu." 8 50
+                return 1
+            fi
             local memory="${prefs%%|*}"
             local network="${prefs#*|}"
             local audio="${network#*|}"
@@ -46,20 +85,32 @@ test_vm_qemu() {
         2)
             # UEFI/EFI Boot
             local prefs=$(get_user_preferences 2048)
-            if [ $? -ne 0 ]; then return 1; fi
+            if [ $? -ne 0 ] || [ -z "$prefs" ]; then
+                log "UEFI boot preferences cancelled or invalid" >> "$LOG_FILE"
+                whiptail --msgbox "Preferences selection cancelled. Returning to main menu." 8 50
+                return 1
+            fi
             local memory="${prefs%%|*}"
             local network="${prefs#*|}"
             local audio="${network#*|}"
             network="${network%%|*}"
             
             qemu_args=($(configure_uefi_boot "$file" "$file_format" "$kvm_option" "$memory" "$network" "$audio"))
-            if [ $? -ne 0 ]; then return 1; fi
+            if [ $? -ne 0 ]; then
+                log "UEFI configuration failed" >> "$LOG_FILE"
+                whiptail --msgbox "UEFI configuration failed. Returning to main menu." 8 50
+                return 1
+            fi
             boot_description="UEFI/EFI Boot (${memory}MB RAM, Network: $network, Audio: $audio)"
             ;;
         3)
             # Headless Mode
             local prefs=$(get_user_preferences 1024)
-            if [ $? -ne 0 ]; then return 1; fi
+            if [ $? -ne 0 ] || [ -z "$prefs" ]; then
+                log "Headless mode preferences cancelled or invalid" >> "$LOG_FILE"
+                whiptail --msgbox "Preferences selection cancelled. Returning to main menu." 8 50
+                return 1
+            fi
             local memory="${prefs%%|*}"
             local network="${prefs#*|}"
             local audio="${network#*|}"
@@ -72,19 +123,24 @@ test_vm_qemu() {
         4)
             # Custom Boot
             local custom_args=$(whiptail --title "Custom Options" --inputbox "Enter QEMU arguments (file will be added automatically):" 12 70 "-m 2048 $kvm_option -vga virtio" 3>&1 1>&2 2>&3)
-            if [ $? -eq 0 ] && [ -n "$custom_args" ]; then
-                qemu_args=(-drive "file=$file,format=$file_format,if=virtio")
-                IFS=' ' read -ra ADDR <<< "$custom_args"
-                qemu_args+=("${ADDR[@]}")
-                boot_description="Custom Boot"
-            else
+            if [ $? -ne 0 ] || [ -z "$custom_args" ]; then
+                log "Custom boot configuration cancelled or empty" >> "$LOG_FILE"
+                whiptail --msgbox "Custom configuration cancelled or empty. Returning to main menu." 8 50
                 return 1
             fi
+            qemu_args=(-drive "file=$file,format=$file_format,if=virtio")
+            IFS=' ' read -ra ADDR <<< "$custom_args"
+            qemu_args+=("${ADDR[@]}")
+            boot_description="Custom Boot"
             ;;
         5)
             # Debug Mode
             local prefs=$(get_user_preferences 2048)
-            if [ $? -ne 0 ]; then return 1; fi
+            if [ $? -ne 0 ] || [ -z "$prefs" ]; then
+                log "Debug mode preferences cancelled or invalid" >> "$LOG_FILE"
+                whiptail --msgbox "Preferences selection cancelled. Returning to main menu." 8 50
+                return 1
+            fi
             local memory="${prefs%%|*}"
             local network="${prefs#*|}"
             local audio="${network#*|}"
@@ -95,7 +151,15 @@ test_vm_qemu() {
             ;;
     esac
     
+    if [ ${#qemu_args[@]} -eq 0 ]; then
+        log "No QEMU arguments configured - aborting" >> "$LOG_FILE"
+        whiptail --msgbox "Error: No valid QEMU arguments configured." 8 50
+        return 1
+    fi
+    
     if ! check_file_lock "$file"; then
+        log "File lock check failed for $file" >> "$LOG_FILE"
+        whiptail --msgbox "File lock check failed. Returning to main menu." 8 50
         return 1
     fi
     
@@ -159,15 +223,18 @@ test_vm_qemu() {
         
         # Add mode-specific information
         case $choice in
-            1|2|3|5)
+            1|2|5)
                 info_msg+="\n\nFeatures:\n- VirtIO disk and network for better performance\n- SSH forwarding: ssh -p 2222 user@localhost (virtio-net)\n- SSH forwarding: ssh -p 2223 user@localhost (e1000)"
                 ;;
-            4)
+            3)
                 info_msg+="\n\nAccess:\n- SSH: ssh -p 2222 user@localhost\n- Monitor: telnet localhost 4444"
+                ;;
+            4)
+                info_msg+="\n\nCustom configuration applied."
                 ;;
         esac
         
-        if [[ "$choice" == "2" || "$choice" == "3" ]]; then
+        if [[ "$choice" == "2" ]]; then
             info_msg+="\n\nEFI Boot:\n- UEFI boot screen may take a moment\n- Serial log: /tmp/qemu-serial-$QEMU_PID.log"
         fi
         
