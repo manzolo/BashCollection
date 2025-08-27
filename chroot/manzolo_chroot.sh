@@ -661,7 +661,12 @@ interactive_mode() {
         exit 1
     fi
     
-    # Get root mount point
+    # Check if the selected root device is already mounted and offer to unmount it
+    if ! check_and_unmount "$ROOT_DEVICE"; then
+        # If check_and_unmount fails (user cancels or unmount fails), exit.
+        exit 1
+    fi
+
     if ! ROOT_MOUNT=$(dialog --title "Root Mount Point" \
                             --inputbox "Enter root mount directory:" \
                             10 50 "/mnt/chroot" \
@@ -669,7 +674,7 @@ interactive_mode() {
         error "No mount point specified or operation cancelled"
         exit 1
     fi
-    
+
     if [[ -z "$ROOT_MOUNT" ]]; then
         error "Empty mount point specified"
         exit 1
@@ -699,6 +704,35 @@ interactive_mode() {
             fi
         fi
     fi
+}
+
+check_and_unmount() {
+    local device="$1"
+    local mountpoint
+    
+    # Check if the device is currently mounted
+    mountpoint=$(findmnt --noheadings --output TARGET --source "$device" 2>/dev/null || true)
+
+    if [[ -n "$mountpoint" ]]; then
+        log "Device $device is already mounted at $mountpoint"
+        if [[ "$QUIET_MODE" == false ]]; then
+            if dialog --title "Warning: Device Already Mounted" --yesno "The device $device is already mounted at $mountpoint.\nDo you want to unmount it before proceeding?" 10 60; then
+                log "Attempting to unmount $device from $mountpoint"
+                if umount "$mountpoint" 2>/dev/null; then
+                    log "Successfully unmounted $device"
+                    return 0
+                else
+                    error "Failed to unmount $device. Another process might be using it."
+                    dialog --title "Unmount Error" --msgbox "Could not unmount device $device. Check active processes and try again." 10 60
+                    return 1
+                fi
+            else
+                log "Unmount cancelled by user. Exiting."
+                return 1
+            fi
+        fi
+    fi
+    return 0
 }
 
 # Main function
