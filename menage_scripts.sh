@@ -23,31 +23,86 @@ fi
 # List of directories to scan for scripts
 SCRIPT_DIRS=("backup" "chroot" "cleaner" "docker" "nvidia" "qemu" "utils" "vm")
 
+# Funzione per caricare le regole di inclusione ed esclusione da file
+load_rules() {
+    local ignore_file="$SCRIPT_DIR/.manzoloignore"
+    local include_file="$SCRIPT_DIR/.manzoloinclude"
+
+    # Carica le esclusioni
+    EXCLUSIONS=()
+    if [ -f "$ignore_file" ]; then
+        while read -r line; do
+            if [[ ! -z "$line" && ! "$line" =~ ^# ]]; then
+                EXCLUSIONS+=("$line")
+            fi
+        done < "$ignore_file"
+    fi
+    # Aggiungi le esclusioni dalle sottocartelle
+    while read -r sub_ignore_file; do
+        local parent_dir=$(dirname "$sub_ignore_file")
+        EXCLUSIONS+=("${parent_dir#$SCRIPT_DIR/}/")
+    done < <(find "$SCRIPT_DIR" -type f -name ".manzoloignore")
+    
+    # Carica le inclusioni
+    INCLUSIONS=()
+    if [ -f "$include_file" ]; then
+        while read -r line; do
+            if [[ ! -z "$line" && ! "$line" =~ ^# ]]; then
+                INCLUSIONS+=("$line")
+            fi
+        done < "$include_file"
+    fi
+}
+
+# Funzione per controllare se un file deve essere ignorato
+is_ignored() {
+    local relative_path="$1"
+    
+    # Priorità: inclusione
+    for include_rule in "${INCLUSIONS[@]}"; do
+        if [[ "$relative_path" =~ ^$include_rule$ ]]; then
+            return 1 # Non ignorare
+        fi
+    done
+
+    # Se non c'è una regola di inclusione, controlla se c'è una di esclusione
+    for exclusion_rule in "${EXCLUSIONS[@]}"; do
+        if [[ "$relative_path" == "$exclusion_rule"* ]]; then
+            return 0 # Ignora
+        fi
+    done
+
+    # Se non ci sono regole, non ignorare
+    return 1
+}
+
 install_scripts() {
     echo -e "${BLUE}>>> Installing scripts into: $SCRIPT_BASE_DIR and $INSTALL_DIR${NC}"
     
-    # Create the base directory for scripts
     mkdir -p "$SCRIPT_BASE_DIR"
 
+    # Carica le regole una sola volta
+    load_rules
+
     for dir in "${SCRIPT_DIRS[@]}"; do
-        if [ -d "$dir" ]; then
-            echo -e "${YELLOW}>> Processing directory: $dir${NC}"
-            
-            # Copy the entire directory (including subdirectories) to SCRIPT_BASE_DIR
-            cp -r "$dir" "$SCRIPT_BASE_DIR/"
-            chmod -R 755 "$SCRIPT_BASE_DIR/$dir"
-            
-            # Create symlink for each .sh file in the top-level directory
-            for script in "$dir"/*.sh; do
-                if [ -f "$script" ]; then
-                    script_name=$(basename "$script" .sh)
-                    ln -sf "$SCRIPT_BASE_DIR/$dir/$script_name.sh" "$INSTALL_DIR/$script_name"
-                    echo -e "  ${GREEN}✔ Symlink created:${NC} ${YELLOW}$INSTALL_DIR/$script_name${NC} -> ${BLUE}$SCRIPT_BASE_DIR/$dir/$script_name.sh${NC}"
-                fi
-            done
-        else
+        if [ ! -d "$dir" ]; then
             echo -e "  ${YELLOW}Directory $dir not found, skipping.${NC}"
+            continue
         fi
+
+        echo -e "${YELLOW}>> Processing directory: $dir${NC}"
+        cp -r "$dir" "$SCRIPT_BASE_DIR/"
+        chmod -R 755 "$SCRIPT_BASE_DIR/$dir"
+
+        while read -r script_path; do
+            local relative_path="${script_path#$SCRIPT_BASE_DIR/}"
+            
+            if ! is_ignored "$relative_path"; then
+                local script_name=$(basename "$script_path" .sh)
+                ln -sf "$script_path" "$INSTALL_DIR/$script_name"
+                echo -e "  ${GREEN}✔ Symlink created:${NC} ${YELLOW}$INSTALL_DIR/$script_name${NC} -> ${BLUE}$script_path${NC}"
+            fi
+        done < <(find "$SCRIPT_BASE_DIR/$dir" -type f -name "*.sh")
     done
     echo -e "\n${GREEN}Installation complete!${NC} The scripts are now available in your PATH."
     echo -e "You may need to restart your shell for changes to take effect."
@@ -56,29 +111,32 @@ install_scripts() {
 uninstall_scripts() {
     echo -e "${BLUE}>>> Uninstalling scripts from: $INSTALL_DIR and $SCRIPT_BASE_DIR${NC}"
     
+    load_rules
+
     for dir in "${SCRIPT_DIRS[@]}"; do
         echo -e "${YELLOW}>> Processing directory: $dir${NC}"
         
-        # Remove symlinks for scripts in the top-level directory
-        for script in "$dir"/*.sh; do
-            if [ -f "$script" ]; then
-                script_name=$(basename "$script" .sh)
-                if [ -L "$INSTALL_DIR/$script_name" ]; then
-                    rm "$INSTALL_DIR/$script_name"
-                    echo -e "  ${RED}✖ Symlink removed:${NC} ${YELLOW}$INSTALL_DIR/$script_name${NC}"
-                else
-                    echo -e "  ${YELLOW}→ Symlink not found:${NC} ${YELLOW}$INSTALL_DIR/$script_name${NC}. Skipping."
+        if [ -d "$SCRIPT_BASE_DIR/$dir" ]; then
+            while read -r script_path; do
+                local relative_path="${script_path#$SCRIPT_BASE_DIR/}"
+
+                if ! is_ignored "$relative_path"; then
+                    local script_name=$(basename "$script_path" .sh)
+                    if [ -L "$INSTALL_DIR/$script_name" ]; then
+                        rm "$INSTALL_DIR/$script_name"
+                        echo -e "  ${RED}✖ Symlink removed:${NC} ${YELLOW}$INSTALL_DIR/$script_name${NC}"
+                    else
+                        echo -e "  ${YELLOW}→ Symlink not found:${NC} ${YELLOW}$INSTALL_DIR/$script_name${NC}. Skipping."
+                    fi
                 fi
-            fi
-        done
+            done < <(find "$SCRIPT_BASE_DIR/$dir" -type f -name "*.sh")
+        fi
         
-        # Remove the directory from SCRIPT_BASE_DIR
         if [ -d "$SCRIPT_BASE_DIR/$dir" ]; then
             rm -rf "$SCRIPT_BASE_DIR/$dir"
             echo -e "  ${RED}✖ Directory removed:${NC} ${YELLOW}$SCRIPT_BASE_DIR/$dir${NC}"
         fi
     done
-    # Remove SCRIPT_BASE_DIR if empty
     rmdir "$SCRIPT_BASE_DIR" 2>/dev/null && echo -e "  ${RED}✖ Base directory removed:${NC} ${YELLOW}$SCRIPT_BASE_DIR${NC}"
     echo -e "\n${GREEN}Uninstallation complete!${NC}"
 }
@@ -86,17 +144,25 @@ uninstall_scripts() {
 list_scripts() {
     echo -e "${BLUE}>>> Available commands:${NC}"
     local count=0
+    
+    load_rules
+
     for dir in "${SCRIPT_DIRS[@]}"; do
-        if [ -d "$dir" ]; then
-            for script in "$dir"/*.sh; do
-                if [ -f "$script" ]; then
-                    script_name=$(basename "$script" .sh)
-                    echo -e "  ${GREEN}•${NC} ${YELLOW}$script_name${NC} ${BLUE}(from $dir)${NC}"
-                    count=$((count + 1))
-                fi
-            done
+        if [ ! -d "$dir" ]; then
+            continue
         fi
+
+        while read -r script_path; do
+            local relative_path="${script_path#$SCRIPT_DIR/}"
+            
+            if ! is_ignored "$relative_path"; then
+                local script_name=$(basename "$script_path" .sh)
+                echo -e "  ${GREEN}•${NC} ${YELLOW}$script_name${NC} ${BLUE}(from $dir)${NC}"
+                count=$((count + 1))
+            fi
+        done < <(find "$dir" -type f -name "*.sh")
     done
+
     if [ "$count" -eq 0 ]; then
         echo -e "  ${YELLOW}No scripts found.${NC}"
     else
@@ -104,24 +170,21 @@ list_scripts() {
     fi
 }
 
+
 update_scripts() {
     echo -e "${BLUE}>>> Updating scripts...${NC}"
 
-    # Esegue il git pull come l'utente proprietario
     if [ "$(id -u)" -eq 0 ]; then
-        # Se lo script è stato lanciato con sudo, usiamo 'sudo -u' per eseguire git pull come l'utente originale
         USER_NAME=$(logname)
         echo -e "${YELLOW}>> Running git pull as user: ${USER_NAME}...${NC}"
         sudo -u "$USER_NAME" git -C "$SCRIPT_DIR" pull
         PULL_RESULT=$?
     else
-        # Se lo script è stato lanciato senza sudo, lo eseguiamo normalmente
         echo -e "${YELLOW}>> Running git pull as your user...${NC}"
         git -C "$SCRIPT_DIR" pull
         PULL_RESULT=$?
     fi
     
-    # Controlla se il git pull ha avuto successo
     if [ $PULL_RESULT -eq 0 ]; then
         echo -e "${GREEN}✔ Git pull successful!${NC}"
         echo -e "${YELLOW}>> Re-running installation to update scripts...${NC}"
