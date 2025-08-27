@@ -17,6 +17,7 @@ readonly SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
 readonly LOG_FILE="/tmp/${SCRIPT_NAME%.sh}.log"
 readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.sh}.lock"
 readonly CONFIG_FILE="$SCRIPT_DIR/chroot.conf"
+readonly CHROOT_PID_FILE="/tmp/${SCRIPT_NAME%.sh}.chroot.pid"
 
 # Global variables
 QUIET_MODE=false
@@ -30,7 +31,8 @@ BOOT_PART=""
 ADDITIONAL_MOUNTS=()
 MOUNTED_POINTS=()
 ENABLE_GUI_SUPPORT=false
-
+CHROOT_USER=""
+CHROOT_PROCESSES=()
 
 # Logging functions
 log() {
@@ -45,6 +47,10 @@ debug() {
 
 error() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $*" | tee -a "$LOG_FILE" >&2
+}
+
+warning() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: $*" | tee -a "$LOG_FILE" >&2
 }
 
 # Help function
@@ -68,6 +74,8 @@ Configuration file format:
     ADDITIONAL_MOUNTS=(/dev/sda1:/home /dev/sda2:/var)
     CUSTOM_SHELL=/bin/zsh
     PRESERVE_ENV=true
+    ENABLE_GUI_SUPPORT=true
+    CHROOT_USER=manzolo
 
 Examples:
     ./$SCRIPT_NAME                    # Interactive mode
@@ -109,9 +117,27 @@ parse_args() {
 
 # Function to run a command with sudo, preserving environment
 run_with_privileges() {
+    if [[ $EUID -eq 0 ]]; then
+        "$@"
+        return $?
+    fi
+    
+    if [[ "$QUIET_MODE" == false ]] && command -v dialog &> /dev/null; then
+        clear
+        echo "Administrative privileges required for: $*"
+        echo "Please enter your password when prompted..."
+        echo
+    fi
+    
     sudo -E "$@"
-    if [[ $? -ne 0 ]]; then
+    local exit_code=$?
+    
+    if [[ $exit_code -ne 0 ]]; then
         error "Failed to execute privileged command: $*"
+        if [[ "$QUIET_MODE" == false ]]; then
+            echo "Press Enter to continue..."
+            read -r dummy_input || true
+        fi
         return 1
     fi
     return 0
@@ -122,7 +148,6 @@ load_config() {
     if [[ "$USE_CONFIG" == true ]]; then
         if [[ -f "$CONFIG_FILE_PATH" ]]; then
             debug "Loading configuration from $CONFIG_FILE_PATH"
-            # shellcheck source=/dev/null
             source "$CONFIG_FILE_PATH"
         else
             error "Configuration file not found: $CONFIG_FILE_PATH"
@@ -131,7 +156,6 @@ load_config() {
     elif [[ -f "$CONFIG_FILE" ]] && [[ "$QUIET_MODE" == false ]]; then
         if dialog --title "Configuration" --yesno "Found config file. Load it?" 8 40; then
             debug "Loading default configuration file"
-            # shellcheck source=/dev/null
             source "$CONFIG_FILE"
         fi
     fi
@@ -212,6 +236,182 @@ select_device() {
     fi
 }
 
+# Find processes using a mount point
+find_processes_using_mount() {
+    local mount_point="$1"
+    local processes=()
+    
+    debug "Finding processes using $mount_point"
+    
+    if command -v fuser &> /dev/null; then
+        local pids
+        pids=$(fuser -m "$mount_point" 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+$' || true)
+        
+        if [[ -n "$pids" ]]; then
+            while IFS= read -r pid; do
+                if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+                    local cmd
+                    cmd=$(ps -p "$pid" -o comm= 2>/dev/null || echo "unknown")
+                    processes+=("$pid:$cmd")
+                    debug "Found process using $mount_point: PID $pid ($cmd)"
+                fi
+            done <<< "$pids"
+        fi
+    fi
+    
+    if command -v lsof &> /dev/null; then
+        local lsof_pids
+        lsof_pids=$(lsof +D "$mount_point" 2>/dev/null | awk 'NR>1 {print $2}' | sort -u || true)
+        
+        if [[ -n "$lsof_pids" ]]; then
+            while IFS= read -r pid; do
+                if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+                    local cmd
+                    cmd=$(ps -p "$pid" -o comm= 2>/dev/null || echo "unknown")
+                    if [[ ! " ${processes[*]} " =~ " $pid:$cmd " ]]; then
+                        processes+=("$pid:$cmd")
+                        debug "Found additional process using $mount_point: PID $pid ($cmd)"
+                    fi
+                fi
+            done <<< "$lsof_pids"
+        fi
+    fi
+    
+    printf '%s\n' "${processes[@]}"
+}
+
+# Terminate processes gracefully
+terminate_processes_gracefully() {
+    local mount_point="$1"
+    local processes
+    local success=true
+    
+    processes=($(find_processes_using_mount "$mount_point"))
+    
+    if [[ ${#processes[@]} -eq 0 ]]; then
+        debug "No processes found using $mount_point"
+        return 0
+    fi
+    
+    log "Found ${#processes[@]} processes using $mount_point"
+    
+    for process in "${processes[@]}"; do
+        local pid="${process%%:*}"
+        local cmd="${process#*:}"
+        
+        if kill -0 "$pid" 2>/dev/null; then
+            log "Sending SIGTERM to process $pid ($cmd)"
+            if ! kill -TERM "$pid" 2>/dev/null; then
+                warning "Failed to send SIGTERM to process $pid"
+                success=false
+            fi
+        fi
+    done
+    
+    sleep 3
+    
+    for process in "${processes[@]}"; do
+        local pid="${process%%:*}"
+        local cmd="${process#*:}"
+        
+        if kill -0 "$pid" 2>/dev/null; then
+            warning "Process $pid ($cmd) still running, sending SIGKILL"
+            if ! kill -KILL "$pid" 2>/dev/null; then
+                error "Failed to kill process $pid"
+                success=false
+            else
+                log "Successfully killed process $pid ($cmd)"
+            fi
+        else
+            debug "Process $pid ($cmd) terminated gracefully"
+        fi
+    done
+    
+    sleep 1
+    
+    if [[ "$success" == true ]]; then
+        log "All processes using $mount_point have been terminated"
+        return 0
+    else
+        error "Some processes could not be terminated"
+        return 1
+    fi
+}
+
+# Find all processes chrooted to ROOT_MOUNT
+find_chroot_processes() {
+    local chroot_path
+    chroot_path=$(realpath "$ROOT_MOUNT" 2>/dev/null || echo "$ROOT_MOUNT")
+    local processes=()
+    
+    debug "Finding processes chrooted to $chroot_path"
+    
+    for proc in /proc/[0-9]*; do
+        if [[ -d "$proc" ]]; then
+            local root_link="$proc/root"
+            if [[ -L "$root_link" ]]; then
+                local proc_root
+                proc_root=$(readlink "$root_link" 2>/dev/null || continue)
+                if [[ "$proc_root" == "$chroot_path" ]] || [[ "$proc_root" == "$chroot_path/"* ]]; then
+                    local pid="${proc##/proc/}"
+                    local cmd
+                    cmd=$(ps -p "$pid" -o comm= 2>/dev/null || echo "unknown")
+                    processes+=("$pid:$cmd")
+                    debug "Found chroot process: PID $pid ($cmd)"
+                fi
+            fi
+        fi
+    done
+    
+    printf '%s\n' "${processes[@]}"
+}
+
+# Terminate all chroot processes gracefully
+terminate_chroot_processes() {
+    local processes
+    processes=($(find_chroot_processes))
+    
+    if [[ ${#processes[@]} -eq 0 ]]; then
+        debug "No chroot processes found"
+        return 0
+    fi
+    
+    log "Found ${#processes[@]} chroot processes to terminate"
+    local success=true
+    
+    for process in "${processes[@]}"; do
+        local pid="${process%%:*}"
+        local cmd="${process#*:}"
+        if kill -0 "$pid" 2>/dev/null; then
+            log "Sending SIGTERM to chroot process $pid ($cmd)"
+            kill -TERM "$pid" 2>/dev/null || { warning "Failed to send SIGTERM to $pid"; success=false; }
+        fi
+    done
+    
+    sleep 3
+    
+    for process in "${processes[@]}"; do
+        local pid="${process%%:*}"
+        local cmd="${process#*:}"
+        if kill -0 "$pid" 2>/dev/null; then
+            warning "Chroot process $pid ($cmd) still running, sending SIGKILL"
+            kill -KILL "$pid" 2>/dev/null || { error "Failed to kill $pid"; success=false; }
+        else
+            debug "Chroot process $pid ($cmd) terminated gracefully"
+        fi
+    done
+    
+    sleep 1
+    
+    if [[ "$success" == true ]]; then
+        log "All chroot processes terminated"
+        return 0
+    else
+        error "Some chroot processes could not be terminated"
+        return 1
+    fi
+}
+
 # Check and unmount a device if it's already mounted
 check_and_unmount() {
     local device="$1"
@@ -224,20 +424,29 @@ check_and_unmount() {
         if [[ "$QUIET_MODE" == false ]]; then
             if dialog --title "Warning: Device Already Mounted" --yesno "The device $device is already mounted at $mountpoint.\nDo you want to unmount it before proceeding?" 10 60; then
                 log "Attempting to unmount $device from $mountpoint"
+                
                 if ! run_with_privileges umount "$mountpoint" 2>/dev/null; then
-                    error "Failed to unmount $device. Another process might be using it."
-                    if dialog --title "Unmount Error" --yesno "Unmount failed. Try a lazy unmount?" 10 60; then
-                        if run_with_privileges umount -l "$mountpoint" 2>/dev/null; then
-                            log "Successfully lazy unmounted $device."
-                            return 0
+                    warning "Normal unmount failed, checking for processes"
+                    
+                    if ! terminate_processes_gracefully "$mountpoint"; then
+                        warning "Could not terminate all processes gracefully"
+                    fi
+                    
+                    if ! run_with_privileges umount "$mountpoint" 2>/dev/null; then
+                        error "Failed to unmount $device. Trying lazy unmount."
+                        if dialog --title "Unmount Error" --yesno "Unmount failed. Try a lazy unmount?" 10 60; then
+                            if run_with_privileges umount -l "$mountpoint" 2>/dev/null; then
+                                log "Successfully lazy unmounted $device."
+                                return 0
+                            else
+                                error "Failed to lazy unmount $device. Manual intervention may be required."
+                                dialog --title "Critical Error" --msgbox "Could not unmount the device. Please unmount it manually and try again." 10 60
+                                return 1
+                            fi
                         else
-                            error "Failed to lazy unmount $device. Manual intervention may be required."
-                            dialog --title "Critical Error" --msgbox "Could not unmount the device. Please unmount it manually and try again." 10 60
+                            log "Unmount cancelled by user. Exiting."
                             return 1
                         fi
-                    else
-                        log "Unmount cancelled by user. Exiting."
-                        return 1
                     fi
                 fi
                 log "Successfully unmounted $device"
@@ -258,16 +467,13 @@ validate_filesystem() {
     
     debug "Validating filesystem on $device"
     
-    # Try multiple methods to detect filesystem
     fstype=$(lsblk -no FSTYPE "$device" 2>/dev/null || echo "")
     
-    # If lsblk fails, try blkid
     if [[ -z "$fstype" ]] || [[ "$fstype" == "unknown" ]]; then
         debug "lsblk returned '$fstype', trying blkid"
         fstype=$(blkid -o value -s TYPE "$device" 2>/dev/null || echo "")
     fi
     
-    # If still unknown, try file command
     if [[ -z "$fstype" ]] || [[ "$fstype" == "unknown" ]]; then
         debug "blkid failed, trying file command"
         local file_output
@@ -297,7 +503,6 @@ validate_filesystem() {
                 return 0
             else
                 debug "FAT filesystem on non-EFI device: $fstype"
-                # Ask user if they want to proceed with FAT filesystem for root
                 if [[ "$QUIET_MODE" == false ]]; then
                     if dialog --title "Warning" --yesno "Device $device has FAT filesystem ($fstype).\nThis is unusual for a root filesystem.\nProceed anyway?" 10 60; then
                         return 0
@@ -312,7 +517,6 @@ validate_filesystem() {
             return 1
             ;;
         ""|unknown)
-            # If we still can't detect, warn but allow user to proceed
             debug "Could not determine filesystem type for $device"
             if [[ "$QUIET_MODE" == false ]]; then
                 if dialog --title "Warning" --yesno "Cannot determine filesystem type for $device.\nThis might indicate:\n- Encrypted partition\n- Corrupted filesystem\n- Unsupported filesystem\n\nProceed anyway? (Risk of mount failure)" 12 70; then
@@ -321,8 +525,7 @@ validate_filesystem() {
                     return 1
                 fi
             else
-                # In quiet mode, proceed with warning
-                log "Warning: Unknown filesystem type for $device, proceeding anyway"
+                warning "Unknown filesystem type for $device, proceeding anyway"
                 return 0
             fi
             ;;
@@ -346,24 +549,25 @@ safe_mount() {
     
     debug "Mounting $source to $target with options: $options"
     
-    # Create target directory (does not need sudo)
     if ! mkdir -p "$target"; then
         error "Failed to create mount point: $target"
         return 1
     fi
     
-    # Check if already mounted
     if mountpoint -q "$target"; then
-        log "Warning: $target is already mounted"
-        if ! run_with_privileges umount "$target" 2>/tmp/umount_error.log; then
+        warning "$target is already mounted, attempting unmount"
+        if ! terminate_processes_gracefully "$target"; then
+            warning "Could not terminate all processes using $target"
+        fi
+        
+        if ! run_with_privileges umount "$target" 2>/tmp/mount_error.log; then
             local error_msg
-            error_msg=$(cat /tmp/umount_error.log 2>/dev/null || echo "Unknown error")
+            error_msg=$(cat /tmp/mount_error.log 2>/dev/null || echo "Unknown error")
             error "Failed to unmount existing mount at $target: $error_msg"
             return 1
         fi
     fi
     
-    # Attempt mounting with retries
     for ((i=1; i<=retries; i++)); do
         debug "Mount attempt $i/$retries"
         
@@ -403,11 +607,47 @@ safe_mount() {
     done
 }
 
+# Safe unmount function with retries
+safe_umount() {
+    local target="$1"
+    local retries=3
+    local delay=2
+    
+    debug "Unmounting $target"
+    
+    for ((i=1; i<=retries; i++)); do
+        debug "Unmount attempt $i/$retries for $target"
+        
+        if run_with_privileges umount "$target" 2>/tmp/umount_error.log; then
+            log "Successfully unmounted $target"
+            return 0
+        else
+            local error_msg
+            error_msg=$(cat /tmp/umount_error.log 2>/dev/null || echo "Unknown error")
+            warning "Unmount attempt $i failed: $error_msg"
+            
+            terminate_processes_gracefully "$target"
+            
+            sleep $delay
+        fi
+    done
+    
+    warning "All unmount attempts failed, trying lazy unmount for $target"
+    if run_with_privileges umount -l "$target" 2>/tmp/umount_error.log; then
+        log "Successfully lazy unmounted $target"
+        return 0
+    else
+        local error_msg
+        error_msg=$(cat /tmp/umount_error.log 2>/dev/null || echo "Unknown error")
+        error "Failed to unmount $target even with lazy: $error_msg"
+        return 1
+    fi
+}
+
 # Setup chroot environment
 setup_chroot() {
     log "Setting up chroot environment at $ROOT_MOUNT"
     
-    # Mount root device
     if ! validate_filesystem "$ROOT_DEVICE"; then
         return 1
     fi
@@ -416,7 +656,6 @@ setup_chroot() {
         return 1
     fi
 
-    # Separate boot partition
     if [[ -n "$BOOT_PART" ]]; then
         if ! validate_filesystem "$BOOT_PART"; then
             return 1
@@ -454,7 +693,6 @@ setup_chroot() {
         fi
     fi
     
-    # Mount additional partitions
     for mount_spec in "${ADDITIONAL_MOUNTS[@]}"; do
         if [[ "$mount_spec" =~ ^([^:]+):([^:]+)(:(.+))?$ ]]; then
             local src="${BASH_REMATCH[1]}"
@@ -470,22 +708,23 @@ setup_chroot() {
         fi
     done
     
-    # Mount virtual filesystems
     local virtual_mounts=(
         "/proc:proc:$ROOT_MOUNT/proc"
         "/sys:sysfs:$ROOT_MOUNT/sys"
         "/dev:--bind:$ROOT_MOUNT/dev"
-        "/dev/pts:--bind:$ROOT_MOUNT/dev/pts"
+        "/dev/pts:devpts:$ROOT_MOUNT/dev/pts:--options=ptmxmode=666,gid=5,mode=620"
         "/run:--bind:$ROOT_MOUNT/run"
         "/tmp:--bind:$ROOT_MOUNT/tmp"
     )
     
     for mount_spec in "${virtual_mounts[@]}"; do
-        IFS=':' read -r src fstype target <<< "$mount_spec"
+        IFS=':' read -r src fstype target options <<< "$mount_spec"
         
         local mount_opts=""
         if [[ "$fstype" == "--bind" ]]; then
             mount_opts="--bind"
+        elif [[ -n "$options" ]]; then
+            mount_opts="-t $fstype $options"
         else
             mount_opts="-t $fstype"
         fi
@@ -495,7 +734,14 @@ setup_chroot() {
         fi
     done
     
-    # Copy essential files
+    # Debug checks for /dev/pts
+    debug "Checking /dev/pts in chroot: $(ls -ld "$ROOT_MOUNT/dev/pts")"
+    if [[ -n "$(ls $ROOT_MOUNT/dev/pts)" ]]; then
+        debug "PTY devices in chroot: $(ls $ROOT_MOUNT/dev/pts)"
+    else
+        warning "No PTY devices found in $ROOT_MOUNT/dev/pts"
+    fi
+    
     local files_to_copy=(
         "/etc/resolv.conf"
         "/etc/hosts"
@@ -508,7 +754,6 @@ setup_chroot() {
         fi
     done
     
-    # Ensure essential directories exist
     local dirs_to_create=(
         "/proc"
         "/sys"
@@ -521,126 +766,230 @@ setup_chroot() {
     
     for dir in "${dirs_to_create[@]}"; do
         run_with_privileges mkdir -p "$ROOT_MOUNT$dir"
+        run_with_privileges chmod 1777 "$ROOT_MOUNT$dir" || debug "Failed to set permissions on $ROOT_MOUNT$dir"
     done
     
     log "Chroot environment setup complete"
 }
 
+# Helper function to ensure user exists in chroot and create home dir if needed
+ensure_chroot_user() {
+    local chroot_user="${CHROOT_USER:-root}"
+    local chroot_passwd="$ROOT_MOUNT/etc/passwd"
+    
+    if [[ "$chroot_user" != "root" ]]; then
+        if ! grep -q "^$chroot_user:" "$chroot_passwd" 2>/dev/null; then
+            error "User $chroot_user does not exist in chroot's /etc/passwd"
+            return 1
+        fi
+        local home_dir
+        home_dir=$(grep "^$chroot_user:" "$chroot_passwd" | cut -d: -f6)
+        if [[ -z "$home_dir" ]]; then
+            error "No home directory found for $chroot_user in chroot"
+            return 1
+        fi
+        run_with_privileges mkdir -p "$ROOT_MOUNT$home_dir" || {
+            error "Failed to create home directory $home_dir for $chroot_user"
+            return 1
+        }
+        run_with_privileges chown "$chroot_user:$chroot_user" "$ROOT_MOUNT$home_dir" || {
+            warning "Failed to set ownership for $home_dir"
+        }
+    fi
+    return 0
+}
+
 setup_gui_support() {
     if [[ "$ENABLE_GUI_SUPPORT" == true ]]; then
-        log "Setting up graphical support (X11/Wayland)"
+        log "Setting up graphical support (X11) - EXPERIMENTAL"
+        warning "GUI support is experimental and may cause host system instability"
 
-        # Set up X11 support
+        if ! ensure_chroot_user; then
+            error "Failed to ensure chroot user setup, GUI support may fail"
+            ENABLE_GUI_SUPPORT=false
+            return 1
+        fi
+
         if [[ -n "${DISPLAY:-}" ]]; then
-            log "Configuring X11 display access"
+            log "Configuring X11 display access (using shared /tmp/.X11-unix)"
             
-            if [ -d "/tmp/.X11-unix" ]; then
-                if ! run_with_privileges mount --bind "/tmp/.X11-unix" "$ROOT_MOUNT/tmp/.X11-unix"; then
-                    error "Failed to bind mount X11 socket directory."
-                fi
-            fi
-            
-            # Check if the ORIGINAL_USER has an Xauthority file
-            local xauthority_path="/home/$ORIGINAL_USER/.Xauthority"
-            if [[ -f "$xauthority_path" ]]; then
-                log "Copying Xauthority file for authentication."
-                run_with_privileges cp "$xauthority_path" "$ROOT_MOUNT/root/"
+            # Ensure /tmp/.X11-unix has correct permissions
+            if [[ -d "/tmp/.X11-unix" ]]; then
+                run_with_privileges chmod 1777 "/tmp/.X11-unix" || \
+                    warning "Failed to set permissions on /tmp/.X11-unix"
+                debug "Permissions on /tmp/.X11-unix: $(ls -ld /tmp/.X11-unix)"
             else
-                log "Xauthority file not found. X11 may not work without it."
+                warning "/tmp/.X11-unix does not exist on host"
             fi
+            
+            # Copy Xauthority to appropriate user's home in chroot
+            local chroot_user="${CHROOT_USER:-root}"
+            local xauthority_path="/home/$ORIGINAL_USER/.Xauthority"
+            local chroot_xauth_path
+            if [[ "$chroot_user" == "root" ]]; then
+                chroot_xauth_path="$ROOT_MOUNT/root/.Xauthority"
+            else
+                chroot_xauth_path="$ROOT_MOUNT/home/$chroot_user/.Xauthority"
+            fi
+            if [[ -f "$xauthority_path" ]]; then
+                log "Copying Xauthority file to $chroot_xauth_path"
+                run_with_privileges cp "$xauthority_path" "$chroot_xauth_path" && \
+                run_with_privileges chown "$chroot_user:$chroot_user" "$chroot_xauth_path" && \
+                run_with_privileges chmod 600 "$chroot_xauth_path" || \
+                    warning "Failed to setup X11 authentication for $chroot_user"
+                debug "Xauthority in chroot: $(ls -l $chroot_xauth_path 2>/dev/null || echo 'not found')"
+            else
+                warning "Xauthority file not found at $xauthority_path - X11 authentication may fail"
+            fi
+
+            # Allow local connections for the chroot user
+            if command -v xhost &> /dev/null; then
+                log "Configuring xhost for local access"
+                xhost +local: || warning "Failed to configure xhost"
+                debug "xhost settings: $(xhost)"
+            else
+                warning "xhost not found, X11 authentication may fail"
+            fi
+        else
+            warning "DISPLAY not set, X11 support will not work"
+            ENABLE_GUI_SUPPORT=false
+            return 1
         fi
 
-        # Set up Wayland support
-        if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
-            log "Configuring Wayland display access"
+        # Temporarily disable Wayland support to isolate X11 issues
+        # if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+        #     log "Configuring Wayland display access (using shared /run/user)"
+        #     local original_uid=$(id -u "$ORIGINAL_USER")
+        #     run_with_privileges mkdir -p "$ROOT_MOUNT/run/user/$original_uid" || \
+        #         warning "Failed to ensure Wayland runtime dir in chroot"
+        #     run_with_privileges chmod 700 "$ROOT_MOUNT/run/user/$original_uid" || \
+        #         warning "Failed to set permissions on Wayland runtime dir"
+        #     run_with_privileges chown "$original_uid:$original_uid" "$ROOT_MOUNT/run/user/$original_uid" || \
+        #         warning "Failed to set ownership on Wayland runtime dir"
+        #     debug "Permissions on /run/user/$original_uid: $(ls -ld $ROOT_MOUNT/run/user/$original_uid)"
+        # fi
 
-            # Use the original user's UID to find the Wayland runtime directory
-            local original_uid=$(id -u "$ORIGINAL_USER")
-            local wayland_runtime_dir="/run/user/$original_uid"
-            if [ -d "$wayland_runtime_dir" ]; then
-                if ! run_with_privileges mount --bind "$wayland_runtime_dir" "$ROOT_MOUNT/run/user/$original_uid"; then
-                    error "Failed to bind mount Wayland runtime directory."
-                fi
-            fi
-        fi
+        # Ensure /dev/pts permissions
+        run_with_privileges chmod 1777 "$ROOT_MOUNT/dev/pts" || \
+            warning "Failed to set permissions on /dev/pts in chroot"
+        debug "Permissions on /dev/pts: $(ls -ld $ROOT_MOUNT/dev/pts)"
 
-        log "Graphical support setup complete."
+        log "Graphical support setup complete (experimental mode)"
+        warning "Monitor your host system for stability issues"
     fi
 }
 
-# Enhanced cleanup function
 cleanup() {
     local exit_code=$?
     
     debug "Starting cleanup process"
     
-    # Remove lock file
-    rm -f "$LOCK_FILE"
+    rm -f "$LOCK_FILE" "$CHROOT_PID_FILE"
     
     if [[ ${#MOUNTED_POINTS[@]} -eq 0 ]]; then
         debug "No mount points to clean up"
         return $exit_code
     fi
     
-    log "Cleaning up mount points"
+    log "Cleaning up mount points gracefully"
     
-    # Reverse the mount points array for proper unmounting order
+    log "Terminating any lingering chroot processes"
+    if ! terminate_chroot_processes; then
+        warning "Some chroot processes may persist, proceeding with caution."
+    fi
+    sleep 2
+
+    # Then, proceed with unmounting
     local reverse_mounts=()
     for ((i=${#MOUNTED_POINTS[@]}-1; i>=0; i--)); do
         reverse_mounts+=("${MOUNTED_POINTS[i]}")
     done
-    
-    local retries=5
-    local delay=2
-    
+
     for mount_point in "${reverse_mounts[@]}"; do
         if ! mountpoint -q "$mount_point"; then
             debug "$mount_point is not mounted, skipping"
             continue
         fi
         
-        debug "Unmounting $mount_point"
+        # Do NOT call terminate_processes_gracefully for bind-mounts of host directories
+        case "$mount_point" in
+            */proc|*/sys|*/dev|*/run|*/tmp|*/dev/pts)
+                log "Unmounting virtual filesystem: $mount_point"
+                ;;
+            *)
+                log "Unmounting physical filesystem: $mount_point"
+                terminate_processes_gracefully "$mount_point" || warning "Could not terminate all processes for $mount_point"
+                ;;
+        esac
         
-        for ((i=1; i<=retries; i++)); do
-            if run_with_privileges umount "$mount_point" 2>/dev/null; then
-                debug "Successfully unmounted $mount_point"
-                break
-            else
-                if [[ $i -eq $retries ]]; then
-                    error "Failed to unmount $mount_point after $retries attempts. Attempting force unmount."
-                    if run_with_privileges umount -l "$mount_point" 2>/dev/null; then
-                        log "Force unmounted $mount_point"
-                    else
-                        error "Could not unmount $mount_point even with force"
-                    fi
-                else
-                    debug "Unmount attempt $i failed. Retrying in ${delay}s..."
-                    sleep $delay
-                fi
-            fi
-        done
-    done
+        safe_umount "$mount_point" || error "Failed to unmount $mount_point - check manually"
+    done    
+
+    if [[ "$ENABLE_GUI_SUPPORT" == true ]]; then
+        log "Cleaning up GUI support remnants"
+        local chroot_user="${CHROOT_USER:-root}"
+        if [[ "$chroot_user" == "root" ]]; then
+            rm -f "$ROOT_MOUNT/root/.Xauthority" 2>/dev/null || true
+        else
+            rm -f "$ROOT_MOUNT/home/$chroot_user/.Xauthority" 2>/dev/null || true
+        fi
+        # Reset xhost settings
+        if command -v xhost &> /dev/null; then
+            xhost -local: || warning "Failed to reset xhost settings"
+            debug "xhost settings after cleanup: $(xhost)"
+        fi
+        log "GUI cleanup complete"
+    fi
     
-    # Clean up temporary files
     rm -f /tmp/mount_error.log /tmp/umount_error.log
     
-    debug "Cleanup complete"
+    log "Cleanup complete"
     return $exit_code
 }
 
-# Enter chroot environment
+# Enter chroot environment with better process tracking
 enter_chroot() {
     local shell="${CUSTOM_SHELL:-/bin/bash}"
     
     log "Entering chroot environment"
     
     if [[ "$QUIET_MODE" == false ]]; then
-        dialog --title "Chroot Ready" \
-               --msgbox "Entering chroot for $ROOT_DEVICE\nMount point: $ROOT_MOUNT\nShell: $shell\n\nType 'exit' to return" 12 60
+        clear
+        echo "================================================="
+        echo "           CHROOT SESSION READY"
+        echo "================================================="
+        echo "Chroot Environment: $ROOT_DEVICE"
+        echo "Mount Point: $ROOT_MOUNT"
+        echo "Shell: $shell"
+        echo "Chroot User: ${CHROOT_USER:-root}"
+        if [[ "$ENABLE_GUI_SUPPORT" == true ]]; then
+            echo "GUI Support: ENABLED (experimental)"
+            echo
+            echo "WARNING: GUI support is experimental!"
+            echo "If you experience host system issues, exit immediately."
+        else
+            echo "GUI Support: DISABLED (recommended)"
+        fi
+        echo
+        echo "Tips:"
+        echo "- Type 'exit' to return to host system"
+        echo "- The cleanup process will handle mount points automatically"
+        echo "- Monitor system resources if GUI support is enabled"
+        echo "================================================="
+        echo
+        if [[ -t 0 ]]; then
+            echo "Press Enter to continue into chroot environment..."
+            local dummy_input
+            read -r dummy_input || {
+                warning "Failed to read input, continuing anyway"
+            }
+        else
+            debug "Non-interactive session, skipping Enter prompt"
+        fi
     fi
     
     if [[ ! -x "$ROOT_MOUNT$shell" ]]; then
-        error "Shell $shell not found in chroot, falling back to /bin/sh"
+        warning "Shell $shell not found in chroot, falling back to /bin/sh"
         shell="/bin/sh"
         
         if [[ ! -x "$ROOT_MOUNT$shell" ]]; then
@@ -649,12 +998,48 @@ enter_chroot() {
         fi
     fi
     
-    run_with_privileges chroot "$ROOT_MOUNT" "$shell"
+    echo $$ > "$CHROOT_PID_FILE"
+    
+    local chroot_env_vars=()
+    if [[ "$ENABLE_GUI_SUPPORT" == true ]]; then
+        if [[ -n "${DISPLAY:-}" ]]; then
+            chroot_env_vars+=("DISPLAY=$DISPLAY")
+            debug "Setting DISPLAY=$DISPLAY for chroot"
+        fi
+        # Temporarily disable Wayland
+        # if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+        #     chroot_env_vars+=("WAYLAND_DISPLAY=$WAYLAND_DISPLAY")
+        #     debug "Setting WAYLAND_DISPLAY=$WAYLAND_DISPLAY for chroot"
+        # fi
+        if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+            local original_uid=$(id -u "$ORIGINAL_USER")
+            chroot_env_vars+=("XDG_RUNTIME_DIR=/run/user/$original_uid")
+            debug "Setting XDG_RUNTIME_DIR=/run/user/$original_uid for chroot"
+        fi
+    fi
+    
+    debug "Environment variables for chroot: ${chroot_env_vars[*]}"
+    
+    if [[ -n "${CHROOT_USER:-}" ]] && [[ "$CHROOT_USER" != "root" ]]; then
+        log "Entering chroot as user $CHROOT_USER"
+        debug "Chroot user home: $(grep "^$CHROOT_USER:" $ROOT_MOUNT/etc/passwd | cut -d: -f6)"
+        if [[ ${#chroot_env_vars[@]} -gt 0 ]]; then
+            run_with_privileges chroot "$ROOT_MOUNT" su - "$CHROOT_USER" -c "env ${chroot_env_vars[*]} $shell"
+        else
+            run_with_privileges chroot "$ROOT_MOUNT" su - "$CHROOT_USER" -c "$shell"
+        fi
+    else
+        log "Entering chroot as root"
+        if [[ ${#chroot_env_vars[@]} -gt 0 ]]; then
+            run_with_privileges env "${chroot_env_vars[@]}" chroot "$ROOT_MOUNT" "$shell"
+        else
+            run_with_privileges chroot "$ROOT_MOUNT" "$shell"
+        fi
+    fi
     
     log "Exited chroot environment"
 }
 
-# Interactive mode
 interactive_mode() {
     if [[ "$QUIET_MODE" == false ]] && ! command -v dialog &> /dev/null; then
         error "Dialog not available for interactive mode"
@@ -670,8 +1055,21 @@ interactive_mode() {
         exit 1
     fi
 
-    if dialog --title "Graphical Support" --yesno "Do you need to run graphical applications (X11/Wayland) inside the chroot?" 8 50; then
+    if dialog --title "Graphical Support" --yesno "Do you need to run graphical applications (X11/Wayland) inside the chroot?\n\nThis will setup display variables and authentication files." 10 60; then
         ENABLE_GUI_SUPPORT=true
+        local chroot_user
+        chroot_user=$(dialog --title "Chroot User" --inputbox "Enter the user to run GUI apps as in chroot (default: root):" 10 50 "$ORIGINAL_USER" 3>&1 1>&2 2>&3)
+        if [[ $? -eq 0 ]]; then
+            if [[ -n "$chroot_user" ]]; then
+                CHROOT_USER="$chroot_user"
+            else
+                warning "No user specified, defaulting to root"
+                CHROOT_USER="root"
+            fi
+        else
+            debug "Chroot user selection cancelled, defaulting to root"
+            CHROOT_USER="root"
+        fi
     else
         ENABLE_GUI_SUPPORT=false
     fi    
@@ -712,36 +1110,158 @@ interactive_mode() {
     fi
 }
 
-# Main function
-main() {
-    # Initialize logging
-    : > "$LOG_FILE"
-    log "Starting $SCRIPT_NAME" >&2
+# Function to check system requirements and install missing tools
+check_system_requirements() {
+    log "Checking system requirements"
     
-    # Parse arguments
-    parse_args "$@"
+    local missing_tools=()
+    local optional_tools=()
     
-    # Check for dialog and install if necessary
-    if [[ "$QUIET_MODE" == false ]] && ! command -v dialog &> /dev/null; then
-        log "Installing dialog package"
+    local required_tools=(
+        "lsblk"
+        "mount" 
+        "umount"
+        "chroot"
+        "mountpoint"
+        "findmnt"
+    )
+    
+    local recommended_tools=(
+        "fuser"
+        "lsof"
+        "blkid"
+        "file"
+        "xhost"
+    )
+    
+    for tool in "${required_tools[@]}"; do
+        if ! command -v "$tool" &> /dev/null; then
+            missing_tools+=("$tool")
+        fi
+    done
+    
+    if [[ ${#missing_tools[@]} -gt 0 ]]; then
+        error "Missing required tools: ${missing_tools[*]}"
+        
         if command -v apt &> /dev/null; then
-            sudo apt update && sudo apt install -y dialog
+            log "Attempting to install missing tools via apt"
+            run_with_privileges apt update
+            for tool in "${missing_tools[@]}"; do
+                case "$tool" in
+                    "lsblk"|"mount"|"umount"|"mountpoint"|"findmnt") 
+                        run_with_privileges apt install -y util-linux ;;
+                    "chroot") 
+                        run_with_privileges apt install -y coreutils ;;
+                esac
+            done
         elif command -v yum &> /dev/null; then
-            sudo yum install -y dialog
+            log "Attempting to install missing tools via yum"
+            for tool in "${missing_tools[@]}"; do
+                case "$tool" in
+                    "lsblk"|"mount"|"umount"|"mountpoint"|"findmnt") 
+                        run_with_privileges yum install -y util-linux ;;
+                    "chroot") 
+                        run_with_privileges yum install -y coreutils ;;
+                esac
+            done
         elif command -v pacman &> /dev/null; then
-            sudo pacman -S --noconfirm dialog
+            log "Attempting to install missing tools via pacman"
+            for tool in "${missing_tools[@]}"; do
+                case "$tool" in
+                    "lsblk"|"mount"|"umount"|"mountpoint"|"findmnt") 
+                        run_with_privileges pacman -S --noconfirm util-linux ;;
+                    "chroot") 
+                        run_with_privileges pacman -S --noconfirm coreutils ;;
+                esac
+            done
+        fi
+        
+        missing_tools=()
+        for tool in "${required_tools[@]}"; do
+            if ! command -v "$tool" &> /dev/null; then
+                missing_tools+=("$tool")
+            fi
+        done
+        
+        if [[ ${#missing_tools[@]} -gt 0 ]]; then
+            error "Still missing required tools after installation attempt: ${missing_tools[*]}"
+            exit 1
+        fi
+    fi
+    
+    for tool in "${recommended_tools[@]}"; do
+        if ! command -v "$tool" &> /dev/null; then
+            optional_tools+=("$tool")
+        fi
+    done
+    
+    if [[ ${#optional_tools[@]} -gt 0 ]]; then
+        warning "Missing optional tools (some features may be limited): ${optional_tools[*]}"
+    fi
+    
+    if [[ "$QUIET_MODE" == false ]] && ! command -v dialog &> /dev/null; then
+        log "Installing dialog package for interactive mode"
+        if command -v apt &> /dev/null; then
+            run_with_privileges apt update && run_with_privileges apt install -y dialog
+        elif command -v yum &> /dev/null; then
+            run_with_privileges yum install -y dialog
+        elif command -v pacman &> /dev/null; then
+            run_with_privileges pacman -S --noconfirm dialog
         elif command -v zypper &> /dev/null; then
-            sudo zypper install -y dialog
+            run_with_privileges zypper install -y dialog
         else
             error "dialog not found and no supported package manager detected"
             exit 1
         fi
     fi
+    
+    log "System requirements check completed"
+}
 
-    # Check for existing lock file
+# Function to create a summary report
+create_summary_report() {
+    local report_file="/tmp/${SCRIPT_NAME%.sh}_summary.log"
+    
+    {
+        echo "=== Chroot Session Summary ==="
+        echo "Date: $(date)"
+        echo "User: $ORIGINAL_USER"
+        echo ""
+        echo "Configuration:"
+        echo "  ROOT_DEVICE: $ROOT_DEVICE"
+        echo "  ROOT_MOUNT: $ROOT_MOUNT"
+        echo "  EFI_PART: ${EFI_PART:-none}"
+        echo "  BOOT_PART: ${BOOT_PART:-none}"
+        echo "  GUI_SUPPORT: $ENABLE_GUI_SUPPORT"
+        echo "  CHROOT_USER: ${CHROOT_USER:-root}"
+        echo ""
+        echo "Mount Points Created:"
+        for mount_point in "${MOUNTED_POINTS[@]}"; do
+            echo "  $mount_point"
+        done
+        echo ""
+        echo "Additional Mounts:"
+        for mount_spec in "${ADDITIONAL_MOUNTS[@]}"; do
+            echo "  $mount_spec"
+        done
+        echo ""
+        echo "Log File: $LOG_FILE"
+        echo "=== End of Summary ==="
+    } > "$report_file"
+    
+    debug "Summary report created at $report_file"
+}
+
+# Main function
+main() {
+    : > "$LOG_FILE"
+    log "Starting $SCRIPT_NAME v2.1 (Enhanced Edition)"
+    
+    parse_args "$@"
+    
     if [[ -f "$LOCK_FILE" ]]; then
         local pid=$(cat "$LOCK_FILE" 2>/dev/null || echo "")
-        if [[ -n "$pid" ]] && run_with_privileges kill -0 "$pid" 2>/dev/null; then
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
             error "Another instance is already running (PID: $pid)"
             exit 1
         else
@@ -750,29 +1270,14 @@ main() {
         fi
     fi
     
-    # Create lock file
     echo $$ > "$LOCK_FILE"
     
-    # Check required tools
-    local missing_tools=()
-    for tool in lsblk mount umount chroot mountpoint; do
-        if ! command -v "$tool" &> /dev/null; then
-            missing_tools+=("$tool")
-        fi
-    done
+    check_system_requirements
     
-    if [[ ${#missing_tools[@]} -gt 0 ]]; then
-        error "Missing required tools: ${missing_tools[*]}"
-        exit 1
-    fi
-    
-    # Load configuration
-    load_config
-    
-    # Setup signal handlers
     trap cleanup EXIT INT TERM
     
-    # Run in appropriate mode
+    load_config
+    
     if [[ "$QUIET_MODE" == false ]] && [[ "$USE_CONFIG" == false ]]; then
         if ! interactive_mode; then
             error "Interactive mode failed"
@@ -780,34 +1285,35 @@ main() {
         fi
     fi
     
-    # Validate required variables
     if [[ -z "$ROOT_DEVICE" ]]; then
         error "ROOT_DEVICE not specified"
         exit 1
     fi
     
-    log "Configuration summary:" >&2
-    log "  ROOT_DEVICE: $ROOT_DEVICE" >&2
-    log "  ROOT_MOUNT: $ROOT_MOUNT" >&2
-    log "  EFI_PART: ${EFI_PART:-none}" >&2
-    log "  BOOT_PART: ${BOOT_PART:-none}" >&2
+    log "=== Configuration Summary ==="
+    log "  ROOT_DEVICE: $ROOT_DEVICE"
+    log "  ROOT_MOUNT: $ROOT_MOUNT"
+    log "  EFI_PART: ${EFI_PART:-none}"
+    log "  BOOT_PART: ${BOOT_PART:-none}"
+    log "  GUI_SUPPORT: $ENABLE_GUI_SUPPORT"
+    log "  CHROOT_USER: ${CHROOT_USER:-root}"
+    log "  ADDITIONAL_MOUNTS: ${#ADDITIONAL_MOUNTS[@]} configured"
+    log "========================="
     
-    # Setup and enter chroot
     if setup_chroot; then
         setup_gui_support
+        create_summary_report
         enter_chroot
     else
         error "Failed to setup chroot environment"
         exit 1
     fi
     
-    # Success message
     if [[ "$QUIET_MODE" == false ]]; then
-        dialog --title "Complete" --msgbox "Chroot session ended successfully" 8 40
+        dialog --title "Complete" --msgbox "Chroot session ended successfully.\n\nAll mount points have been cleaned up gracefully.\n\nSummary report: /tmp/${SCRIPT_NAME%.sh}_summary.log" 12 60
     fi
     
-    log "Script completed successfully" >&2
+    log "Script completed successfully"
 }
 
-# Run main function with all arguments
 main "$@"
