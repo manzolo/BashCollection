@@ -46,6 +46,7 @@ check_dependencies() {
     command -v mkfs.vfat >/dev/null || missing_tools+=("dosfstools")
     command -v qemu-nbd >/dev/null || missing_tools+=("qemu-utils")
     command -v whiptail >/dev/null || missing_tools+=("whiptail")
+    command -v awk >/dev/null || missing_tools+=("awk")
     
     if [ ${#missing_tools[@]} -gt 0 ]; then
         error "Missing required tools: ${missing_tools[*]}"
@@ -325,6 +326,24 @@ create_and_format_disk() {
         log "Setting up partitions..."
         create_partitions
         format_partitions
+        log "Final partition table for ${DISK_NAME}:"
+        if [ "$VERBOSE" -eq 1 ]; then
+            log "Full parted output:"
+            sudo parted -s "${DEVICE}" print
+            log "Formatted table:"
+        fi
+        # Generate tabular output
+        sudo parted -s "${DEVICE}" print | awk '
+            BEGIN {
+                printf "%-8s %-12s %-12s %-12s %-12s %s\n", "Number", "Start", "End", "Size", "File system", "Name"
+                printf "%-8s %-12s %-12s %-12s %-12s %s\n", "------", "-------", "-------", "-------", "-----------", "----"
+            }
+            /^[ ]*[0-9]+/ {
+                printf "%-8s %-12s %-12s %-12s %-12s %s\n", $1, $2, $3, $4, ($5 == "" ? "unknown" : $5), ($6 == "" ? "-" : $6)
+            }' | while IFS= read -r line; do
+                log "  $line"
+            done
+        cleanup_device "${DEVICE}"
     else
         success "Virtual disk created successfully (no partitions specified)."
     fi
@@ -701,11 +720,7 @@ format_partitions() {
         ((counter++))
     done
     
-    cleanup_device "$DEVICE"
-    rm -f /tmp/disk_creator_device_info
-    
     success "All partitions formatted successfully!"
-    log "Virtual disk '${DISK_NAME}' is ready for use."
 }
 
 # Show help
@@ -727,6 +742,7 @@ Features:
   - Linux swap partition support
   - Interactive and configuration file modes
   - Verbose mode for detailed command output (set VERBOSE=1)
+  - Displays final partition table in a tabular format after creation
 
 Configuration file example:
   DISK_NAME="example.raw"
