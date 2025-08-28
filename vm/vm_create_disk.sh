@@ -7,6 +7,7 @@ DISK_FORMAT=""
 PARTITION_TABLE="mbr" # Default to MBR
 PREALLOCATION="off"   # Default to sparse allocation
 declare -a PARTITIONS=()
+VERBOSE=${VERBOSE:-0} # Verbosity flag (0 = silent, 1 = verbose)
 
 # Color codes for output
 RED='\033[0;31m'
@@ -42,7 +43,7 @@ check_dependencies() {
     command -v mkfs.ext4 >/dev/null || missing_tools+=("e2fsprogs")
     command -v mkfs.xfs >/dev/null || missing_tools+=("xfsprogs")
     command -v mkfs.ntfs >/dev/null || missing_tools+=("ntfs-3g")
-    command -v mkfs.vfat >/dev/null || missing_tools+=("dosfstools") # Added for FAT support
+    command -v mkfs.vfat >/dev/null || missing_tools+=("dosfstools")
     command -v qemu-nbd >/dev/null || missing_tools+=("qemu-utils")
     command -v whiptail >/dev/null || missing_tools+=("whiptail")
     
@@ -81,7 +82,6 @@ size_to_bytes() {
 interactive_disk_config() {
     whiptail --title "Virtual Disk Creation" --msgbox "Welcome to the enhanced virtual disk creation tool.\n\nFeatures:\n- UEFI/MBR partition table support\n- Fixed/Sparse disk allocation\n- Multiple filesystem support\n- Swap partition support" 15 70
     
-    # Get disk name
     while true; do
         DISK_NAME=$(whiptail --title "Disk Name" --inputbox "Enter the virtual disk file name:\n(e.g., 'my_disk.qcow2', 'system.raw')" 12 60 3>&1 1>&2 2>&3)
         if [ $? -ne 0 ]; then
@@ -93,7 +93,6 @@ interactive_disk_config() {
         whiptail --title "Error" --msgbox "Disk name cannot be empty." 8 50
     done
     
-    # Get disk size
     while true; do
         DISK_SIZE=$(whiptail --title "Disk Size" --inputbox "Enter the disk size:\n(e.g., '10G', '512M', '1T')" 12 60 3>&1 1>&2 2>&3)
         if [ $? -ne 0 ]; then
@@ -105,7 +104,6 @@ interactive_disk_config() {
         whiptail --title "Error" --msgbox "Invalid size format. Use format like: 10G, 512M, 1T" 8 60
     done
     
-    # Get disk format
     DISK_FORMAT=$(whiptail --title "Disk Format" --menu "Choose the disk format:" 15 70 3 \
     "qcow2" "QEMU Copy-On-Write v2 (recommended)" \
     "raw" "Raw disk image (better performance)" \
@@ -115,7 +113,6 @@ interactive_disk_config() {
         exit 0
     fi
     
-    # Get partition table type
     PARTITION_TABLE=$(whiptail --title "Partition Table" --menu "Choose partition table type:" 15 70 2 \
     "mbr" "Master Boot Record (Legacy BIOS)" \
     "gpt" "GUID Partition Table (UEFI)" 3>&1 1>&2 2>&3)
@@ -124,7 +121,6 @@ interactive_disk_config() {
         exit 0
     fi
     
-    # Get preallocation option
     if [ "$DISK_FORMAT" = "raw" ] || [ "$DISK_FORMAT" = "qcow2" ]; then
         PREALLOCATION=$(whiptail --title "Disk Allocation" --menu "Choose allocation method:" 15 70 2 \
         "full" "Pre-allocate disk space (better performance)" \
@@ -136,7 +132,6 @@ interactive_disk_config() {
     fi
 }
 
-# Function to get user input for partitions using whiptail
 # Function to get user input for partitions using whiptail
 interactive_partition_config() {
     local total_bytes=$(size_to_bytes "$DISK_SIZE")
@@ -150,7 +145,6 @@ interactive_partition_config() {
             break
         fi
         
-        # Get partition size
         local PART_SIZE=""
         while true; do
             PART_SIZE=$(whiptail --title "Partition Size" --inputbox "Enter partition size:\n(e.g., '2G', '500M', or 'remaining' for all remaining space)\n\nRemaining: $remaining_readable" 14 60 3>&1 1>&2 2>&3)
@@ -174,7 +168,6 @@ interactive_partition_config() {
             fi
         done
         
-        # Get filesystem type
         local PART_FS=$(whiptail --title "Filesystem Type" --menu "Choose a filesystem:" 20 70 9 \
         "ext4" "Standard Linux filesystem (recommended)" \
         "ext3" "Older Linux filesystem" \
@@ -225,7 +218,6 @@ interactive_mode() {
         exit 1
     fi
     
-    # Show configuration summary
     local config_summary="Disk Configuration Summary:\n\n"
     config_summary+="Name: $DISK_NAME\n"
     config_summary+="Size: $DISK_SIZE\n"
@@ -269,7 +261,6 @@ non_interactive_mode() {
         exit 1
     fi
 
-    # Set defaults for optional variables
     PARTITION_TABLE=${PARTITION_TABLE:-"mbr"}
     PREALLOCATION=${PREALLOCATION:-"off"}
 
@@ -281,7 +272,6 @@ non_interactive_mode() {
 create_and_format_disk() {
     log "Starting disk creation process..."
     
-    # Check if file already exists
     if [ -f "${DISK_NAME}" ]; then
         error "File '${DISK_NAME}' already exists."
         if command -v whiptail >/dev/null 2>&1; then
@@ -297,15 +287,13 @@ create_and_format_disk() {
                 exit 0
             fi
         fi
-        rm -f "${DISK_NAME}"
+        rm -f "${DISK_NAME}" 2>/dev/null || { error "Failed to remove existing file '${DISK_NAME}'"; exit 1; }
     fi
     
-    # 1. Create the virtual disk
     log "Creating disk ${DISK_NAME} with size ${DISK_SIZE} and format ${DISK_FORMAT}..."
     
     local create_cmd="qemu-img create -f ${DISK_FORMAT}"
     
-    # Add preallocation option
     if [ "$PREALLOCATION" = "full" ]; then
         case "$DISK_FORMAT" in
             "raw")
@@ -319,14 +307,20 @@ create_and_format_disk() {
     
     create_cmd+=" ${DISK_NAME} ${DISK_SIZE}"
     
-    if ! eval $create_cmd; then
-        error "Failed to create virtual disk."
-        exit 1
+    if [ "$VERBOSE" -eq 1 ]; then
+        if ! eval $create_cmd; then
+            error "Failed to create virtual disk."
+            exit 1
+        fi
+    else
+        if ! eval $create_cmd >/dev/null 2>&1; then
+            error "Failed to create virtual disk."
+            exit 1
+        fi
     fi
     
     success "Virtual disk created successfully."
 
-    # 2. Create partitions if specified
     if [ "${#PARTITIONS[@]}" -gt 0 ]; then
         log "Setting up partitions..."
         create_partitions
@@ -347,7 +341,7 @@ size_to_mib() {
         M) echo $num ;;
         G) echo $((num * 1024)) ;;
         T) echo $((num * 1024 * 1024)) ;;
-        *) echo $((num / 1024 / 1024)) ;;  # Assume bytes
+        *) echo $((num / 1024 / 1024)) ;;
     esac
 }
 
@@ -355,10 +349,17 @@ size_to_mib() {
 create_partitions() {
     local DEVICE=""
     
-    # Handle different disk formats
     if [ "$DISK_FORMAT" = "qcow2" ]; then
         log "Loading qemu-nbd kernel module..."
-        sudo modprobe nbd max_part=8
+        if [ "$VERBOSE" -eq 1 ]; then
+            sudo modprobe nbd max_part=8
+        else
+            sudo modprobe nbd max_part=8 >/dev/null 2>&1
+        fi
+        if [ $? -ne 0 ]; then
+            error "Failed to load qemu-nbd kernel module."
+            exit 1
+        fi
         
         for i in {0..15}; do
             if [ ! -e "/sys/block/nbd$i/pid" ]; then
@@ -373,8 +374,11 @@ create_partitions() {
         fi
         
         log "Connecting ${DISK_NAME} to ${DEVICE} via qemu-nbd..."
-        sudo qemu-nbd --connect="$DEVICE" "$DISK_NAME"
-        
+        if [ "$VERBOSE" -eq 1 ]; then
+            sudo qemu-nbd --connect="$DEVICE" "$DISK_NAME"
+        else
+            sudo qemu-nbd --connect="$DEVICE" "$DISK_NAME" >/dev/null 2>&1
+        fi
         if [ $? -ne 0 ]; then
             error "Failed to connect qcow2 image via qemu-nbd"
             exit 1
@@ -382,8 +386,12 @@ create_partitions() {
         
         sleep 2
     else
-        DEVICE=$(sudo losetup -f --show "${DISK_NAME}")
-        
+        log "Setting up loop device for ${DISK_NAME}..."
+        if [ "$VERBOSE" -eq 1 ]; then
+            DEVICE=$(sudo losetup -f --show "${DISK_NAME}")
+        else
+            DEVICE=$(sudo losetup -f --show "${DISK_NAME}" 2>/dev/null)
+        fi
         if [ $? -ne 0 ]; then
             error "Failed to create loop device for ${DISK_NAME}"
             exit 1
@@ -392,13 +400,25 @@ create_partitions() {
     
     log "Using device: ${DEVICE}"
     
-    # Create partition table
     if [ "$PARTITION_TABLE" = "gpt" ]; then
         log "Creating GPT partition table..."
-        sudo parted -s "${DEVICE}" mklabel gpt
+        if [ "$VERBOSE" -eq 1 ]; then
+            sudo parted -s "${DEVICE}" mklabel gpt
+        else
+            sudo parted -s "${DEVICE}" mklabel gpt >/dev/null 2>&1
+        fi
     else
         log "Creating MBR partition table..."
-        sudo parted -s "${DEVICE}" mklabel msdos
+        if [ "$VERBOSE" -eq 1 ]; then
+            sudo parted -s "${DEVICE}" mklabel msdos
+        else
+            sudo parted -s "${DEVICE}" mklabel msdos >/dev/null 2>&1
+        fi
+    fi
+    if [ $? -ne 0 ]; then
+        error "Failed to create partition table"
+        cleanup_device "$DEVICE"
+        exit 1
     fi
     
     local start_mib=1
@@ -427,7 +447,6 @@ create_partitions() {
             fi
         fi
         
-        # Set partition name/label and type based on filesystem
         local part_name=""
         local part_type="primary"
         case "$part_fs" in
@@ -437,21 +456,30 @@ create_partitions() {
             "ext4"|"ext3"|"xfs"|"btrfs")
                 part_name="Linux filesystem"
                 ;;
-            "ntfs")
-                part_name="Microsoft basic data"
-                ;;
-            "fat16"|"vfat"|"fat32")
+            "ntfs"|"fat16"|"vfat"|"fat32")
                 part_name="Microsoft basic data"
                 if [ "$PARTITION_TABLE" = "mbr" ]; then
-                    # Set FAT-specific partition type for MBR
                     case "$part_fs" in
                         "fat16")
-                            sudo parted -s "${DEVICE}" set $partition_number type 0x06
+                            if [ "$VERBOSE" -eq 1 ]; then
+                                sudo parted -s "${DEVICE}" set $partition_number type 0x06
+                            else
+                                sudo parted -s "${DEVICE}" set $partition_number type 0x06 >/dev/null 2>&1
+                            fi
                             ;;
                         "vfat"|"fat32")
-                            sudo parted -s "${DEVICE}" set $partition_number type 0x0b
+                            if [ "$VERBOSE" -eq 1 ]; then
+                                sudo parted -s "${DEVICE}" set $partition_number type 0x0b
+                            else
+                                sudo parted -s "${DEVICE}" set $partition_number type 0x0b >/dev/null 2>&1
+                            fi
                             ;;
                     esac
+                    if [ $? -ne 0 ]; then
+                        error "Failed to set partition type for partition ${partition_number}"
+                        cleanup_device "$DEVICE"
+                        exit 1
+                    fi
                 fi
                 ;;
             *)
@@ -459,27 +487,45 @@ create_partitions() {
                 ;;
         esac
         
-        # Create the partition
         if [ "$PARTITION_TABLE" = "gpt" ]; then
-            sudo parted -s "${DEVICE}" mkpart "\"${part_name}\"" "${start_mib}MiB" "${end_position}"
+            if [ "$VERBOSE" -eq 1 ]; then
+                sudo parted -s "${DEVICE}" mkpart "\"${part_name}\"" "${start_mib}MiB" "${end_position}"
+            else
+                sudo parted -s "${DEVICE}" mkpart "\"${part_name}\"" "${start_mib}MiB" "${end_position}" >/dev/null 2>&1
+            fi
         else
             if [ "$end_position" = "100%" ]; then
-                sudo parted -s "${DEVICE}" mkpart "${part_type}" "${start_mib}MiB" "${end_position}"
+                if [ "$VERBOSE" -eq 1 ]; then
+                    sudo parted -s "${DEVICE}" mkpart "${part_type}" "${start_mib}MiB" "${end_position}"
+                else
+                    sudo parted -s "${DEVICE}" mkpart "${part_type}" "${start_mib}MiB" "${end_position}" >/dev/null 2>&1
+                fi
             else
-                sudo parted -s "${DEVICE}" mkpart "${part_type}" "${start_mib}MiB" "${end_position}MiB"
+                if [ "$VERBOSE" -eq 1 ]; then
+                    sudo parted -s "${DEVICE}" mkpart "${part_type}" "${start_mib}MiB" "${end_position}MiB"
+                else
+                    sudo parted -s "${DEVICE}" mkpart "${part_type}" "${start_mib}MiB" "${end_position}MiB" >/dev/null 2>&1
+                fi
             fi
         fi
-        
         if [ $? -ne 0 ]; then
             error "Failed to create partition ${partition_number}"
             cleanup_device "$DEVICE"
             exit 1
         fi
         
-        # Set partition flags if needed
         case "$part_fs" in
             "swap")
-                sudo parted -s "${DEVICE}" set $partition_number swap on
+                if [ "$VERBOSE" -eq 1 ]; then
+                    sudo parted -s "${DEVICE}" set $partition_number swap on
+                else
+                    sudo parted -s "${DEVICE}" set $partition_number swap on >/dev/null 2>&1
+                fi
+                if [ $? -ne 0 ]; then
+                    error "Failed to set swap flag for partition ${partition_number}"
+                    cleanup_device "$DEVICE"
+                    exit 1
+                fi
                 ;;
         esac
         
@@ -493,7 +539,16 @@ create_partitions() {
         ((partition_number++))
     done
     
-    sudo partprobe "${DEVICE}"
+    if [ "$VERBOSE" -eq 1 ]; then
+        sudo partprobe "${DEVICE}"
+    else
+        sudo partprobe "${DEVICE}" >/dev/null 2>&1
+    fi
+    if [ $? -ne 0 ]; then
+        error "Failed to inform kernel of partition table changes"
+        cleanup_device "$DEVICE"
+        exit 1
+    fi
     sleep 2
     
     echo "${DEVICE}:${DISK_FORMAT}" > /tmp/disk_creator_device_info
@@ -504,9 +559,23 @@ cleanup_device() {
     local DEVICE=$1
     
     if [[ "$DEVICE" =~ /dev/nbd ]]; then
-        sudo qemu-nbd --disconnect "$DEVICE"
+        log "Disconnecting ${DEVICE}..."
+        if [ "$VERBOSE" -eq 1 ]; then
+            sudo qemu-nbd --disconnect "$DEVICE"
+        else
+            sudo qemu-nbd --disconnect "$DEVICE" >/dev/null 2>&1
+        fi
     else
-        sudo losetup -d "$DEVICE"
+        log "Releasing loop device ${DEVICE}..."
+        if [ "$VERBOSE" -eq 1 ]; then
+            sudo losetup -d "$DEVICE"
+        else
+            sudo losetup -d "$DEVICE" >/dev/null 2>&1
+        fi
+    fi
+    if [ $? -ne 0 ]; then
+        error "Failed to cleanup device ${DEVICE}"
+        exit 1
     fi
 }
 
@@ -549,38 +618,76 @@ format_partitions() {
         
         case "$part_fs" in
             "ext4")
-                sudo mkfs.ext4 -F "${part_device}"
+                if [ "$VERBOSE" -eq 1 ]; then
+                    sudo mkfs.ext4 -F "${part_device}"
+                else
+                    sudo mkfs.ext4 -F "${part_device}" >/dev/null 2>&1
+                fi
                 ;;
             "ext3")
-                sudo mkfs.ext3 -F "${part_device}"
+                if [ "$VERBOSE" -eq 1 ]; then
+                    sudo mkfs.ext3 -F "${part_device}"
+                else
+                    sudo mkfs.ext3 -F "${part_device}" >/dev/null 2>&1
+                fi
                 ;;
             "xfs")
-                sudo mkfs.xfs -f "${part_device}"
+                if [ "$VERBOSE" -eq 1 ]; then
+                    sudo mkfs.xfs -f "${part_device}"
+                else
+                    sudo mkfs.xfs -f "${part_device}" >/dev/null 2>&1
+                fi
                 ;;
             "btrfs")
                 if command -v mkfs.btrfs >/dev/null; then
-                    sudo mkfs.btrfs -f "${part_device}"
+                    if [ "$VERBOSE" -eq 1 ]; then
+                        sudo mkfs.btrfs -f "${part_device}"
+                    else
+                        sudo mkfs.btrfs -f "${part_device}" >/dev/null 2>&1
+                    fi
                 else
                     warning "btrfs-progs not found, skipping formatting of ${part_device}"
+                    continue
                 fi
                 ;;
             "ntfs")
-                sudo mkfs.ntfs -F "${part_device}"
+                if [ "$VERBOSE" -eq 1 ]; then
+                    sudo mkfs.ntfs -F "${part_device}"
+                else
+                    sudo mkfs.ntfs -F "${part_device}" >/dev/null 2>&1
+                fi
                 ;;
             "fat16")
-                sudo mkfs.vfat -F 16 "${part_device}"
+                if [ "$VERBOSE" -eq 1 ]; then
+                    sudo mkfs.vfat -F 16 "${part_device}"
+                else
+                    sudo mkfs.vfat -F 16 "${part_device}" >/dev/null 2>&1
+                fi
                 ;;
             "vfat")
-                sudo mkfs.vfat "${part_device}"
+                if [ "$VERBOSE" -eq 1 ]; then
+                    sudo mkfs.vfat "${part_device}"
+                else
+                    sudo mkfs.vfat "${part_device}" >/dev/null 2>&1
+                fi
                 ;;
             "fat32")
-                sudo mkfs.vfat -F 32 "${part_device}"
+                if [ "$VERBOSE" -eq 1 ]; then
+                    sudo mkfs.vfat -F 32 "${part_device}"
+                else
+                    sudo mkfs.vfat -F 32 "${part_device}" >/dev/null 2>&1
+                fi
                 ;;
             "swap")
-                sudo mkswap "${part_device}"
+                if [ "$VERBOSE" -eq 1 ]; then
+                    sudo mkswap "${part_device}"
+                else
+                    sudo mkswap "${part_device}" >/dev/null 2>&1
+                fi
                 ;;
             *)
                 warning "Unknown filesystem type: ${part_fs}, skipping formatting"
+                continue
                 ;;
         esac
         
@@ -588,6 +695,7 @@ format_partitions() {
             success "Partition ${counter} formatted successfully as ${part_fs}"
         else
             error "Failed to format partition ${counter} as ${part_fs}"
+            continue
         fi
         
         ((counter++))
@@ -609,6 +717,7 @@ Usage:
   $0                      Start in interactive mode
   $0 <config_file>        Use configuration file
   $0 -h, --help           Show this help
+  VERBOSE=1 $0            Enable verbose output for debugging
 
 Features:
   - UEFI (GPT) and Legacy BIOS (MBR) support
@@ -617,6 +726,7 @@ Features:
   - Multiple filesystem support (ext4, ext3, xfs, btrfs, ntfs, fat16, vfat, fat32)
   - Linux swap partition support
   - Interactive and configuration file modes
+  - Verbose mode for detailed command output (set VERBOSE=1)
 
 Configuration file example:
   DISK_NAME="example.raw"
