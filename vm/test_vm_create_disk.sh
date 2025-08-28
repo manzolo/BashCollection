@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Test script for vm_create_disk.sh
+# Test script for vm_create_disk
 # Generates a matrix of disk configurations, creates disks, and verifies with --info
 
 # --- Configuration ---
@@ -9,6 +9,9 @@ DEBUG=${DEBUG:-false}
 
 # Directory to store config files and disks
 TEST_DIR="test_disks"
+
+# Path to the main script (installed in system PATH)
+SCRIPT_PATH="vm_create_disk"
 
 # Colors for output
 RED='\033[0;31m'
@@ -153,6 +156,65 @@ verify_disk() {
     fi
 }
 
+# Function to analyze the disk image using lsblk
+analyze_disk_with_lsblk() {
+    local disk_file="$1"
+
+    if ! command -v qemu-nbd >/dev/null 2>&1 || ! command -v lsblk >/dev/null 2>&1; then
+        log "WARNING" "qemu-nbd or lsblk not found. Skipping disk analysis."
+        return 0
+    fi
+
+    log "INFO" "Analyzing disk image with lsblk..."
+    
+    local device_name
+    
+    # Try to connect the disk image to a network block device
+    if sudo qemu-nbd -c /dev/nbd0 --read-only "$disk_file" &> /dev/null; then
+        device_name="/dev/nbd0"
+        log "INFO" "Connected disk to /dev/nbd0 via qemu-nbd."
+    else
+        log "ERROR" "Failed to connect disk to a network block device. Falling back to loop device."
+        
+        # Fallback to loop device for raw format
+        if [[ "$(qemu-img info "$disk_file" | grep 'file format' | awk '{print $NF}')" == "raw" ]]; then
+            device_name=$(sudo losetup -f --show "$disk_file")
+            if [[ $? -ne 0 ]]; then
+                log "ERROR" "Failed to set up loop device."
+                return 1
+            fi
+            log "INFO" "Set up loop device: $device_name"
+        else
+            log "ERROR" "Cannot analyze non-raw disk image without qemu-nbd."
+            return 1
+        fi
+    fi
+    
+    # Wait for partitions to be created
+    sleep 2
+    
+    # Use lsblk to get detailed information
+    echo "Partition table for $disk_file:"
+    if [[ "$device_name" == "/dev/nbd0" ]]; then
+        # lsblk needs sudo to see partitions on nbd device
+        sudo lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT,PARTTYPE "$device_name"
+    else
+        # lsblk needs sudo to see partitions on loop device
+        sudo lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT "$device_name"
+    fi
+    
+    # Disconnect the device
+    if [[ "$device_name" == "/dev/nbd0" ]]; then
+        sudo qemu-nbd -d "$device_name" &> /dev/null
+        log "INFO" "Disconnected /dev/nbd0."
+    elif [[ "$device_name" ]]; then
+        sudo losetup -d "$device_name" &> /dev/null
+        log "INFO" "Released loop device $device_name."
+    fi
+    
+    return 0
+}
+
 # --- Main Execution ---
 
 main() {
@@ -160,18 +222,26 @@ main() {
     local passed_tests=0
     local failed_tests=0
     
-    # List of expanded test cases (matrix: format, partition_table, preallocation, partitions)
+    # Check if the main script is executable and in PATH
+    if ! command -v "$SCRIPT_PATH" >/dev/null 2>&1; then
+        log "ERROR" "Main script '$SCRIPT_PATH' not found in PATH"
+        exit 1
+    fi
+
+    # List of test cases (matrix: format, partition_table, preallocation, partitions)
     declare -a TESTS=(
         "qcow2 gpt off 2G:ext4 1G:swap 1G:fat32"
         "qcow2 gpt metadata 2G:ext4 2G:swap 2G:btrfs"
         "qcow2 gpt full 5G:ntfs remaining:ext4"
-        "qcow2 mbr off 4G:ext4 2G:fat32 1G:ntfs"
-        "qcow2 mbr metadata 3G:xfs 3G:ext4 remaining:swap"
-        "qcow2 mbr full 5G:ntfs 1G:fat32 1G:ext4"
+        "qcow2 mbr off 4G:ext4:primary 2G:fat32:primary 1G:ntfs:primary"
+        "qcow2 mbr metadata 3G:xfs:primary 3G:ext4:primary remaining:swap:primary"
+        "qcow2 mbr full 5G:ntfs:primary 1G:fat32:primary 1G:ext4:extended"
         "raw gpt off 1G:ext4 1G:ext3 1G:fat16 remaining:swap"
         "raw gpt full 2G:btrfs 2G:xfs 2G:ntfs"
-        "raw mbr off 5G:ntfs remaining:ext4"
-        "raw mbr full 3G:xfs 2G:ntfs remaining:vfat"
+        "raw mbr off 5G:ntfs:primary remaining:ext4:primary"
+        "raw mbr full 3G:xfs:primary 2G:ntfs:primary remaining:vfat:primary"
+        "vmdk gpt off 3G:ext4 2G:swap remaining:fat32"
+        "vmdk mbr off 2G:ext4:primary 2G:fat32:primary 1G:swap:primary"
     )
 
     # Set up trap for cleanup on exit or interrupt
@@ -206,7 +276,7 @@ main() {
         disk_file="$TEST_DIR/test_${disk_format}_${partition_table}_${preallocation}.${disk_format}"
         
         # Run the vm_create_disk utility
-        if run_command "vm_create_disk \"$config_file\"" "Disk creation for $disk_format disk"; then
+        if run_command "$SCRIPT_PATH \"$config_file\"" "Disk creation for $disk_format disk"; then
             
             # Check for the existence of the created file
             if [[ -f "./test_${disk_format}_${partition_table}_${preallocation}.${disk_format}" ]]; then
@@ -215,8 +285,8 @@ main() {
                 
                 # Verify the created disk and test the --info option
                 if verify_disk "$disk_file" "$disk_format"; then
-                    log "INFO" "Testing --info option..."
-                    if run_command "vm_create_disk --info \"$disk_file\"" "Disk info for $disk_file"; then
+                    log "INFO" "Testing --info option with lsblk..."
+                    if run_command "$SCRIPT_PATH --info \"$disk_file\"" "Disk info for $disk_file" && analyze_disk_with_lsblk "$disk_file"; then
                         log "SUCCESS" "Test $total_tests PASSED"
                         passed_tests=$((passed_tests + 1))
                     else

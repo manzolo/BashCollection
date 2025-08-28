@@ -973,7 +973,7 @@ info_disk() {
 
     # Get disk format and size using qemu-img
     local QEMU_INFO
-    QEMU_INFO=$(qemu-img info "${DISK_IMAGE}" 2>/dev/null)
+    QEMU_INFO=$(sudo qemu-img info "${DISK_IMAGE}" 2>/dev/null)
     if [ $? -ne 0 ]; then
         error "Failed to read disk image info for ${DISK_IMAGE}"
         exit 1
@@ -981,8 +981,34 @@ info_disk() {
 
     DISK_NAME=$(basename "${DISK_IMAGE}")
     DISK_FORMAT=$(echo "$QEMU_INFO" | grep "file format" | awk '{print $3}')
-    local disk_size_bytes=$(echo "$QEMU_INFO" | grep "virtual size" | grep -oP '\(\K[0-9]+(?=\s*bytes)')
-    DISK_SIZE=$(bytes_to_readable "$disk_size_bytes")
+    
+    # Robust disk size extraction - try multiple methods
+    local disk_size_bytes=""
+    
+    # Method 1: Extract from parentheses with "bytes"
+    disk_size_bytes=$(echo "$QEMU_INFO" | grep "virtual size" | sed -n 's/.*(\([0-9][0-9,]*\) bytes).*/\1/p' | tr -d ',')
+    
+    # Method 2: Look for pattern like "10737418240 bytes"
+    if [[ ! "$disk_size_bytes" =~ ^[0-9]+$ ]]; then
+        disk_size_bytes=$(echo "$QEMU_INFO" | grep "virtual size" | grep -oE '[0-9,]+\s+bytes' | grep -oE '[0-9,]+' | tr -d ',' | head -1)
+    fi
+    
+    # Method 3: Extract any large number that looks like bytes
+    if [[ ! "$disk_size_bytes" =~ ^[0-9]+$ ]]; then
+        disk_size_bytes=$(echo "$QEMU_INFO" | grep "virtual size" | grep -oE '[0-9]{8,}' | head -1)
+    fi
+    
+    if [[ "$disk_size_bytes" =~ ^[0-9]+$ ]]; then
+        DISK_SIZE=$(bytes_to_readable "$disk_size_bytes")
+    else
+        DISK_SIZE="Unknown"
+        warning "Could not extract disk size from qemu-img output"
+        if [ "$VERBOSE" -eq 1 ]; then
+            log "Debug: qemu-img info output:"
+            echo "$QEMU_INFO" | while read line; do log "  $line"; done
+        fi
+    fi
+    
     log "Disk info: Name=$DISK_NAME, Format=$DISK_FORMAT, Size=$DISK_SIZE"
 
     # Set up device
@@ -1022,7 +1048,7 @@ info_disk() {
             exit 1
         fi
 
-        sleep 2
+        sleep 3  # Give more time for qcow2 connection
     else
         log "Setting up loop device for ${DISK_IMAGE}..."
         if [ "$VERBOSE" -eq 1 ]; then
@@ -1034,9 +1060,15 @@ info_disk() {
             error "Failed to create loop device for ${DISK_IMAGE}"
             exit 1
         fi
+        sleep 1
     fi
 
     log "Using device: ${DEVICE}"
+
+    # Wait for device to be ready and probe partitions
+    sudo partprobe "${DEVICE}" >/dev/null 2>&1
+    udevadm settle >/dev/null 2>&1
+    sleep 2
 
     # Get partition table type and partition details
     local PARTED_INFO
@@ -1049,64 +1081,155 @@ info_disk() {
 
     PARTITION_TABLE=$(echo "$PARTED_INFO" | grep -E "^Partition Table:" | awk '{print $3}' | tr '[:upper:]' '[:lower:]')
     if [ -z "$PARTITION_TABLE" ]; then
-        error "Could not determine partition table type"
-        cleanup_device "$DEVICE"
-        exit 1
+        PARTITION_TABLE="unknown"
+        warning "Could not determine partition table type"
     fi
     log "Partition table type: $PARTITION_TABLE"
 
-    # Get partition details
-    local part_output
-    part_output=$(echo "$PARTED_INFO" | LC_ALL=C awk -v part_table="$PARTITION_TABLE" '
-        /^[ ]*[0-9]+/ {
-            num=$1; start=$2; end=$3; size=$4; fs=$5; name=$6
-            if (fs == "" || fs == "unknown") fs="none"
-            if (fs == "linux-swap(v1)" || fs == "linux-swap") fs="swap"
-            if (fs == "fat16" || fs == "fat32" || fs == "vfat") name="Microsoft basic data"
-            else if (fs == "swap") name="Linux swap"
-            else if (fs == "ext4" || fs == "ext3" || fs == "xfs" || fs == "btrfs") name="Linux filesystem"
-            else if (name == "" || name == "unknown") name="Unformatted"
-            type=""
-            if (part_table == "mbr") {
-                if ($7 ~ /logical/) type="logical"
-                else if ($7 ~ /extended/) type="extended"
-                else type="primary"
-                printf("%s:%s:%s:%s:%s:%s\n", num, start, end, size, fs, type)
-            } else {
-                printf("%s:%s:%s:%s:%s\n", num, start, end, size, fs)
-            }
-        }')
+    # Check if there are any partitions
+    local has_partitions=$(echo "$PARTED_INFO" | grep -E "^[ ]*[0-9]+")
+    if [ -z "$has_partitions" ]; then
+        log "No partitions found on the disk image"
+        cleanup_device "$DEVICE"
+        return 0
+    fi
 
-    # Display tabular output
+    # Get filesystem information using blkid for accurate detection
+    log "Detecting filesystems..."
+    local blkid_info=""
+    if [ "$VERBOSE" -eq 1 ]; then
+        blkid_info=$(sudo blkid "${DEVICE}"* 2>/dev/null || true)
+        if [ -n "$blkid_info" ]; then
+            log "blkid output:"
+            echo "$blkid_info" | while read line; do log "  $line"; done
+        fi
+    else
+        blkid_info=$(sudo blkid "${DEVICE}"* 2>/dev/null || true)
+    fi
+
+    # Display partition table header - unified format
     log "Partition table:"
-    echo "$part_output" | awk -v part_table="$PARTITION_TABLE" '
-        BEGIN {
-            if (part_table == "mbr") {
-                printf "%-8s %-12s %-12s %-12s %-12s %-12s %s\n", "Number", "Start", "End", "Size", "File system", "Type", "Name"
-                printf "%-8s %-12s %-12s %-12s %-12s %-12s %s\n", "------", "-------", "-------", "-------", "-----------", "-------", "----"
-            } else {
-                printf "%-8s %-12s %-12s %-12s %-12s %s\n", "Number", "Start", "End", "Size", "File system", "Name"
-                printf "%-8s %-12s %-12s %-12s %-12s %s\n", "------", "-------", "-------", "-------", "-----------", "----"
+    if [ "$PARTITION_TABLE" = "mbr" ] || [ "$PARTITION_TABLE" = "msdos" ]; then
+        printf "  %-8s %-12s %-12s %-12s %-15s %-10s %s\n" "Number" "Start" "End" "Size" "File system" "Type" "Description"
+        printf "  %-8s %-12s %-12s %-12s %-15s %-10s %s\n" "------" "-------" "-------" "-------" "---------------" "----------" "-----------"
+    else
+        printf "  %-8s %-12s %-12s %-12s %-15s %s\n" "Number" "Start" "End" "Size" "File system" "Description"
+        printf "  %-8s %-12s %-12s %-12s %-15s %s\n" "------" "-------" "-------" "-------" "---------------" "-----------"
+    fi
+
+    # Parse partition information more robustly
+    echo "$PARTED_INFO" | tail -n +2 | while read -r line; do
+        # Skip non-partition lines
+        if [[ ! "$line" =~ ^[[:space:]]*[0-9]+ ]]; then continue; fi
+        
+        # Parse the line with awk for better column handling
+        local part_info=$(echo "$line" | awk '{
+            num=$1; start=$2; end=$3; size=$4
+            
+            # Find filesystem and flags
+            fs=""; flags=""; name=""
+            for(i=5; i<=NF; i++) {
+                if ($i == "primary" || $i == "logical" || $i == "extended") {
+                    flags=flags " " $i
+                } else if ($i == "boot" || $i == "swap" || $i == "lvm" || $i == "raid") {
+                    flags=flags " " $i
+                } else if (fs == "" && $i !~ /^(primary|logical|extended|boot|swap|lvm|raid)$/) {
+                    fs=$i
+                } else if ($i !~ /^(primary|logical|extended|boot|swap|lvm|raid)$/) {
+                    if (name == "") name=$i; else name=name " " $i
+                }
             }
-        }
-        {
-            split($0, fields, ":")
-            fs=fields[5]
-            if (fs == "" || fs == "unknown") fs="none"
-            if (fs == "linux-swap(v1)" || fs == "linux-swap") fs="swap"
-            name=fs
-            if (fs == "fat16" || fs == "fat32" || fs == "vfat") name="Microsoft basic data"
-            else if (fs == "swap") name="Linux swap"
-            else if (fs == "ext4" || fs == "ext3" || fs == "xfs" || fs == "btrfs") name="Linux filesystem"
-            else if (fs == "none" || name == "unknown") name="Unformatted"
-            if (part_table == "mbr") {
-                printf "%-8s %-12s %-12s %-12s %-12s %-12s %s\n", fields[1], fields[2], fields[3], fields[4], fs, fields[6], name
-            } else {
-                printf "%-8s %-12s %-12s %-12s %-12s %s\n", fields[1], fields[2], fields[3], fields[4], fs, name
-            }
-        }' | while IFS= read -r line; do
+            
+            print num ":" start ":" end ":" size ":" fs ":" flags ":" name
+        }')
+        
+        IFS=':' read -r num start end size parted_fs flags name <<< "$part_info"
+        
+        if [ -z "$num" ]; then continue; fi
+
+        # Get accurate filesystem from blkid
+        local part_device="${DEVICE}p${num}"
+        local actual_fs=""
+        local fs_label=""
+        
+        local blkid_line=$(echo "$blkid_info" | grep "^${part_device}:" | head -1)
+        if [ -n "$blkid_line" ]; then
+            actual_fs=$(echo "$blkid_line" | grep -oE 'TYPE="[^"]*"' | cut -d'"' -f2)
+            fs_label=$(echo "$blkid_line" | grep -oE 'LABEL="[^"]*"' | cut -d'"' -f2)
+        fi
+
+        # Use parted fs info if blkid didn't find anything
+        if [ -z "$actual_fs" ] || [ "$actual_fs" = "none" ]; then
+            actual_fs="$parted_fs"
+        fi
+
+        # Normalize filesystem names
+        case "$actual_fs" in
+            "linux-swap"|"linux-swap(v1)") actual_fs="swap" ;;
+            "vfat"|"msdos") actual_fs="fat32" ;;
+            "unknown"|"") actual_fs="none" ;;
+        esac
+        
+        # Determine partition type and description
+        local part_type=""
+        local description=""
+        
+        if [ "$PARTITION_TABLE" = "mbr" ] || [ "$PARTITION_TABLE" = "msdos" ]; then
+            # For MBR, extract partition type from flags
+            if [[ "$flags" =~ primary ]]; then
+                part_type="primary"
+            elif [[ "$flags" =~ logical ]]; then
+                part_type="logical"
+            elif [[ "$flags" =~ extended ]]; then
+                part_type="extended"
+            else
+                part_type="primary"  # default
+            fi
+            
+            # Generate description based on filesystem
+            case "$actual_fs" in
+                "ext2"|"ext3"|"ext4"|"xfs"|"btrfs"|"reiserfs") description="Linux filesystem" ;;
+                "swap") description="Linux swap" ;;
+                "fat16"|"fat32"|"vfat"|"ntfs") description="Microsoft basic data" ;;
+                "none") description="Unformatted" ;;
+                *) description="Unknown filesystem" ;;
+            esac
+        else
+            # For GPT, use partition name if available
+            description="$name"
+            if [ -z "$description" ] || [ "$description" = " " ]; then
+                case "$actual_fs" in
+                    "ext2"|"ext3"|"ext4"|"xfs"|"btrfs"|"reiserfs") description="Linux filesystem" ;;
+                    "swap") description="Linux swap" ;;
+                    "fat16"|"fat32"|"vfat"|"ntfs") description="Microsoft basic data" ;;
+                    "none") description="Unformatted" ;;
+                    *) description="Unknown filesystem" ;;
+                esac
+            fi
+        fi
+        
+        # Add label to description if available
+        if [ -n "$fs_label" ]; then
+            description="$description (Label: $fs_label)"
+        fi
+        
+        # Output the formatted line
+        if [ "$PARTITION_TABLE" = "mbr" ] || [ "$PARTITION_TABLE" = "msdos" ]; then
+            printf "  %-8s %-12s %-12s %-12s %-15s %-10s %s\n" "$num" "$start" "$end" "$size" "$actual_fs" "$part_type" "$description"
+        else
+            printf "  %-8s %-12s %-12s %-12s %-15s %s\n" "$num" "$start" "$end" "$size" "$actual_fs" "$description"
+        fi
+        
+    done
+
+    # Additional filesystem details in verbose mode
+    if [ "$VERBOSE" -eq 1 ] && [ -n "$blkid_info" ]; then
+        log ""
+        log "Detailed filesystem information:"
+        echo "$blkid_info" | while read line; do
             log "  $line"
         done
+    fi
 
     # Clean up
     cleanup_device "$DEVICE"
