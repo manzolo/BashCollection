@@ -306,7 +306,7 @@ main() {
         "qcow2 gpt full 5G:ntfs remaining:ext4"
         "qcow2 mbr off 4G:ext4:primary 2G:fat32:primary 1G:ntfs:primary"
         "qcow2 mbr metadata 3G:xfs:primary 3G:ext4:primary remaining:swap:primary"
-        "qcow2 mbr full 5G:ntfs:primary 1G:fat32:primary 1G:ext4:extended"
+        "qcow2 mbr full 5G:ntfs:primary 1G:fat32:primary 1G:ext4:logical"
         "raw gpt off 1G:ext4 1G:ext3 1G:fat16 remaining:swap"
         "raw gpt full 2G:btrfs 2G:xfs 2G:ntfs"
         "raw mbr off 5G:ntfs:primary remaining:ext4:primary"
