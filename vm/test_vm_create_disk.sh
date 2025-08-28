@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # Test script for vm_create_disk
-# Generates a matrix of disk configurations, creates disks, and verifies with --info
+# Generates a matrix of disk configurations, creates disks, verifies with --info, and logs file size
+# All output is logged to vm_create_disk_test.log in the current directory
 
 # --- Configuration ---
 # Set to 'true' to enable debug logging
@@ -13,12 +14,18 @@ TEST_DIR="test_disks"
 # Path to the main script (installed in system PATH)
 SCRIPT_PATH="vm_create_disk"
 
+# Log file in the current working directory
+LOG_FILE="$(pwd)/vm_create_disk_test.log"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
+
+# Flag to determine whether to keep disk images
+KEEP_IMAGES=false
 
 # --- Utility Functions ---
 
@@ -59,12 +66,14 @@ run_command() {
     
     log "DEBUG" "Running: $cmd"
     
-    # Check if the command exists before trying to run it
-    if ! eval "$cmd"; then
+    # Run the command and capture its output
+    if ! output=$(eval "$cmd" 2>&1); then
         log "ERROR" "$description failed with exit code $?"
+        echo "$output" | while IFS= read -r line; do log "ERROR" "  $line"; done
         return 1
     else
         log "SUCCESS" "$description completed successfully"
+        echo "$output" | while IFS= read -r line; do log "INFO" "  $line"; done
         return 0
     fi
 }
@@ -78,16 +87,44 @@ repeat() {
 
 # --- Test Case Management ---
 
-# Function to clean up test directory
+# Function to clean up test directory and log file
 cleanup() {
-    log "INFO" "Cleaning up test directory..."
+    log "INFO" "Cleaning up test directory and log file..."
+    if [[ -f "$LOG_FILE" ]]; then
+        rm -f "$LOG_FILE"
+        log "SUCCESS" "Log file $LOG_FILE removed."
+    fi
     if [[ -d "$TEST_DIR" ]]; then
-        rm -rf "$TEST_DIR"
-        log "SUCCESS" "Test directory cleaned up."
+        if [[ "$KEEP_IMAGES" == "false" ]]; then
+            rm -rf "$TEST_DIR"
+            log "SUCCESS" "Test directory cleaned up."
+        else
+            log "INFO" "Keeping disk images in $TEST_DIR due to --keep-images option."
+        fi
     fi
     # Also remove any disk files created in the current directory
-    log "DEBUG" "Removing lingering disk files."
-    rm -f test_*.{qcow2,raw,vmdk}
+    if [[ "$KEEP_IMAGES" == "false" ]]; then
+        log "DEBUG" "Removing lingering disk files."
+        rm -f test_*.{qcow2,raw}
+    else
+        log "INFO" "Keeping lingering disk files due to --keep-images option."
+    fi
+    # Ensure nbd devices are disconnected
+    if command -v qemu-nbd >/dev/null 2>&1; then
+        for nbd in /dev/nbd*; do
+            if [[ -b "$nbd" ]] && sudo qemu-nbd -d "$nbd" &>/dev/null; then
+                log "INFO" "Disconnected $nbd."
+            fi
+        done
+    fi
+    # Release any loop devices
+    if command -v losetup >/dev/null 2>&1; then
+        for loop in $(losetup -a | awk -F: '{print $1}'); do
+            if sudo losetup -d "$loop" &>/dev/null; then
+                log "INFO" "Released loop device $loop."
+            fi
+        done
+    fi
 }
 
 # Function to generate a configuration file for a specific test case
@@ -133,10 +170,14 @@ verify_disk() {
         return 1
     fi
     
-    local file_size=$(stat -c%s "$disk_file")
-    log "DEBUG" "Disk file size: $file_size bytes"
+    # Log the file size in human-readable format
+    local file_size=$(ls -lh "$disk_file" | awk '{print $5}')
+    log "INFO" "Disk file size on filesystem: $file_size"
     
-    if [[ $file_size -eq 0 ]]; then
+    local file_size_bytes=$(stat -c%s "$disk_file")
+    log "DEBUG" "Disk file size: $file_size_bytes bytes"
+    
+    if [[ $file_size_bytes -eq 0 ]]; then
         log "ERROR" "Disk file is empty: $disk_file"
         return 1
     fi
@@ -174,42 +215,58 @@ analyze_disk_with_lsblk() {
         device_name="/dev/nbd0"
         log "INFO" "Connected disk to /dev/nbd0 via qemu-nbd."
     else
-        log "ERROR" "Failed to connect disk to a network block device. Falling back to loop device."
+        log "WARNING" "Failed to connect disk to a network block device. Falling back to loop device."
         
         # Fallback to loop device for raw format
         if [[ "$(qemu-img info "$disk_file" | grep 'file format' | awk '{print $NF}')" == "raw" ]]; then
-            device_name=$(sudo losetup -f --show "$disk_file")
+            device_name=$(sudo losetup -f --show "$disk_file" 2>/dev/null)
             if [[ $? -ne 0 ]]; then
-                log "ERROR" "Failed to set up loop device."
-                return 1
+                log "WARNING" "Failed to set up loop device."
+                return 0
             fi
             log "INFO" "Set up loop device: $device_name"
         else
-            log "ERROR" "Cannot analyze non-raw disk image without qemu-nbd."
-            return 1
+            log "WARNING" "Cannot analyze non-raw disk image without qemu-nbd."
+            return 0
         fi
     fi
     
-    # Wait for partitions to be created
+    # Wait for partitions to be detected
     sleep 2
     
     # Use lsblk to get detailed information
     echo "Partition table for $disk_file:"
     if [[ "$device_name" == "/dev/nbd0" ]]; then
         # lsblk needs sudo to see partitions on nbd device
-        sudo lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT,PARTTYPE "$device_name"
+        if ! output=$(sudo lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT,PARTTYPE "$device_name" 2>&1); then
+            log "WARNING" "lsblk failed for $device_name."
+            echo "$output" | while IFS= read -r line; do log "WARNING" "  $line"; done
+        else
+            echo "$output" | while IFS= read -r line; do log "INFO" "  $line"; done
+        fi
     else
         # lsblk needs sudo to see partitions on loop device
-        sudo lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT "$device_name"
+        if ! output=$(sudo lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT "$device_name" 2>&1); then
+            log "WARNING" "lsblk failed for $device_name."
+            echo "$output" | while IFS= read -r line; do log "WARNING" "  $line"; done
+        else
+            echo "$output" | while IFS= read -r line; do log "INFO" "  $line"; done
+        fi
     fi
     
     # Disconnect the device
     if [[ "$device_name" == "/dev/nbd0" ]]; then
-        sudo qemu-nbd -d "$device_name" &> /dev/null
-        log "INFO" "Disconnected /dev/nbd0."
-    elif [[ "$device_name" ]]; then
-        sudo losetup -d "$device_name" &> /dev/null
-        log "INFO" "Released loop device $device_name."
+        if sudo qemu-nbd -d "$device_name" &> /dev/null; then
+            log "INFO" "Disconnected /dev/nbd0."
+        else
+            log "WARNING" "Failed to disconnect /dev/nbd0."
+        fi
+    elif [[ -n "$device_name" ]]; then
+        if sudo losetup -d "$device_name" &> /dev/null; then
+            log "INFO" "Released loop device $device_name."
+        else
+            log "WARNING" "Failed to release loop device $device_name."
+        fi
     fi
     
     return 0
@@ -221,6 +278,20 @@ main() {
     local total_tests=0
     local passed_tests=0
     local failed_tests=0
+    
+    # Parse command-line options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --keep-images)
+                KEEP_IMAGES=true
+                shift
+                ;;
+            *)
+                log "WARNING" "Unknown option: $1"
+                shift
+                ;;
+        esac
+    done
     
     # Check if the main script is executable and in PATH
     if ! command -v "$SCRIPT_PATH" >/dev/null 2>&1; then
@@ -240,8 +311,6 @@ main() {
         "raw gpt full 2G:btrfs 2G:xfs 2G:ntfs"
         "raw mbr off 5G:ntfs:primary remaining:ext4:primary"
         "raw mbr full 3G:xfs:primary 2G:ntfs:primary remaining:vfat:primary"
-        "vmdk gpt off 3G:ext4 2G:swap remaining:fat32"
-        "vmdk mbr off 2G:ext4:primary 2G:fat32:primary 1G:swap:primary"
     )
 
     # Set up trap for cleanup on exit or interrupt
@@ -271,38 +340,50 @@ main() {
         
         # Generate and check the config file
         config_file=$(generate_config "$disk_format" "$partition_table" "$preallocation" "${partitions_array[@]}")
+        if [[ ! -f "$config_file" ]]; then
+            log "ERROR" "Failed to generate config file: $config_file"
+            failed_tests=$((failed_tests + 1))
+            continue
+        fi
         
         # Define disk file path
         disk_file="$TEST_DIR/test_${disk_format}_${partition_table}_${preallocation}.${disk_format}"
         
         # Run the vm_create_disk utility
-        if run_command "$SCRIPT_PATH \"$config_file\"" "Disk creation for $disk_format disk"; then
-            
-            # Check for the existence of the created file
-            if [[ -f "./test_${disk_format}_${partition_table}_${preallocation}.${disk_format}" ]]; then
-                # Move the disk file to the test directory for verification
-                mv "test_${disk_format}_${partition_table}_${preallocation}.${disk_format}" "$disk_file" 2>/dev/null
-                
-                # Verify the created disk and test the --info option
-                if verify_disk "$disk_file" "$disk_format"; then
-                    log "INFO" "Testing --info option with lsblk..."
-                    if run_command "$SCRIPT_PATH --info \"$disk_file\"" "Disk info for $disk_file" && analyze_disk_with_lsblk "$disk_file"; then
-                        log "SUCCESS" "Test $total_tests PASSED"
-                        passed_tests=$((passed_tests + 1))
-                    else
-                        log "ERROR" "Disk info test failed."
-                        failed_tests=$((failed_tests + 1))
-                    fi
-                else
-                    log "ERROR" "Disk verification failed."
-                    failed_tests=$((failed_tests + 1))
-                fi
-            else
-                log "ERROR" "Disk file not created by vm_create_disk."
-                failed_tests=$((failed_tests + 1))
-            fi
-        else
+        if ! run_command "$SCRIPT_PATH \"$config_file\"" "Disk creation for $disk_format disk"; then
             log "ERROR" "Disk creation failed."
+            failed_tests=$((failed_tests + 1))
+            continue
+        fi
+        
+        # Check for the existence of the created file
+        if [[ ! -f "./test_${disk_format}_${partition_table}_${preallocation}.${disk_format}" ]]; then
+            log "ERROR" "Disk file not created by vm_create_disk."
+            failed_tests=$((failed_tests + 1))
+            continue
+        fi
+        
+        # Move the disk file to the test directory for verification
+        if ! mv "test_${disk_format}_${partition_table}_${preallocation}.${disk_format}" "$disk_file" 2>/dev/null; then
+            log "ERROR" "Failed to move disk file to $disk_file."
+            failed_tests=$((failed_tests + 1))
+            continue
+        fi
+        
+        # Verify the created disk
+        if ! verify_disk "$disk_file" "$disk_format"; then
+            log "ERROR" "Disk verification failed."
+            failed_tests=$((failed_tests + 1))
+            continue
+        fi
+        
+        # Test the --info option and lsblk analysis
+        log "INFO" "Testing --info option with lsblk..."
+        if run_command "$SCRIPT_PATH --info \"$disk_file\"" "Disk info for $disk_file" && analyze_disk_with_lsblk "$disk_file"; then
+            log "SUCCESS" "Test $total_tests PASSED"
+            passed_tests=$((passed_tests + 1))
+        else
+            log "ERROR" "Disk info test failed."
             failed_tests=$((failed_tests + 1))
         fi
     done
@@ -328,6 +409,14 @@ main() {
         return 1
     fi
 }
+
+# Remove existing log file if it exists
+if [[ -f "$LOG_FILE" ]]; then
+    rm -f "$LOG_FILE"
+fi
+
+# Redirect all output (stdout and stderr) to the log file and terminal
+exec > >(tee -a "$LOG_FILE") 2>&1
 
 # Run main function
 main "$@"

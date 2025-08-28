@@ -146,8 +146,7 @@ interactive_disk_config() {
     
     DISK_FORMAT=$(whiptail --title "Disk Format" --menu "Choose the disk format:" 15 70 3 \
     "qcow2" "QEMU Copy-On-Write v2 (recommended)" \
-    "raw" "Raw disk image (better performance)" \
-    "vmdk" "VMware disk format" 3>&1 1>&2 2>&3)
+    "raw" "Raw disk image (better performance)"  3>&1 1>&2 2>&3)
     
     if [ $? -ne 0 ]; then
         exit 0
@@ -645,6 +644,10 @@ cleanup_device() {
         else
             sudo qemu-nbd --disconnect "$DEVICE" >/dev/null 2>&1
         fi
+        if [ $? -ne 0 ]; then
+            warning "Failed to disconnect ${DEVICE}, but continuing."
+            return 1
+        fi
     else
         log "Releasing loop device ${DEVICE}..."
         if [ "$VERBOSE" -eq 1 ]; then
@@ -652,11 +655,12 @@ cleanup_device() {
         else
             sudo losetup -d "$DEVICE" >/dev/null 2>&1
         fi
+        if [ $? -ne 0 ]; then
+            warning "Failed to release loop device ${DEVICE}, but continuing."
+            return 1
+        fi
     fi
-    if [ $? -ne 0 ]; then
-        error "Failed to cleanup device ${DEVICE}"
-        exit 1
-    fi
+    return 0
 }
 
 # Function to format partitions
@@ -1250,7 +1254,7 @@ Usage:
 
 Features:
   - UEFI (GPT) and Legacy BIOS (MBR) support
-  - Multiple disk formats (qcow2, raw, vmdk)
+  - Multiple disk formats (qcow2, raw)
   - Fixed/sparse disk allocation
   - Multiple filesystem support (ext4, ext3, xfs, btrfs, ntfs, fat16, vfat, fat32, none)
   - Linux swap partition support
