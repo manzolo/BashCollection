@@ -1,6 +1,6 @@
 gparted_boot() {
     local file=$1
-    local gparted_dir="${SCRIPT_DIR}/gparted"  # Use fixed script dir instead of PWD
+    local gparted_dir="$HOME/.cache/manzolo_vm_disk_manager/gparted"
     local gparted_iso_version="1.7.0-8"
     local gparted_iso_filename="gparted-live-${gparted_iso_version}-amd64.iso"
     local gparted_iso_url="https://sourceforge.net/projects/gparted/files/gparted-live-stable/${gparted_iso_version}/${gparted_iso_filename}/download"
