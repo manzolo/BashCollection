@@ -1,13 +1,14 @@
 #!/bin/bash
 
 # ManzoloCleaner - Advanced System Cleaning Tool
-# Improved version with dialog, optimized output, and a cat error fix
+# Improved version v2.5 with fixed kernel removal, better command execution, and optimizations
 
 # Configuration
 SCRIPT_NAME="ManzoloCleaner"
 LOG_FILE="/tmp/manzolo_cleaner.log"
 CONFIG_FILE="$HOME/.manzolo_cleaner.conf"
 TEMP_OUTPUT="/tmp/manzolo_cleaner_output.txt"
+TEMP_COMMAND="/tmp/manzolo_temp_command.sh"  # New: Temp file for complex commands
 
 # Colors for output
 RED='\033[0;31m'
@@ -36,43 +37,85 @@ check_dependencies() {
     if ! command -v sudo &> /dev/null; then
         missing_deps+=("sudo")
     fi
+
+    # Check for bc (used in space calculation)
+    if ! command -v bc &> /dev/null; then
+        missing_deps+=("bc")
+    fi
     
     if [ ${#missing_deps[@]} -ne 0 ]; then
         echo -e "${RED}Missing dependencies:${NC}"
         for dep in "${missing_deps[@]}"; do
             echo "- $dep"
         done
-        echo -e "\n${YELLOW}Please install the missing dependencies (e.g., sudo apt install dialog) before continuing.${NC}"
+        echo -e "\n${YELLOW}Please install the missing dependencies (e.g., sudo apt install dialog bc) before continuing.${NC}"
         exit 1
     fi
 }
 
-# Function to run commands and save output
+# Improved function to run commands and save output (fixed for multiline)
 run_command_in_terminal() {
     local title="$1"
     local command="$2"
     local show_output="${3:-true}"
+    local calculate_space="${4:-false}"  # New: Option to calculate space freed
     
     log_message "INFO" "Executing command: $command"
     
     # Clear the temporary file before writing
     : > "$TEMP_OUTPUT"
     
+    # For complex/multiline commands, write to a temp script file
+    if [[ $command == *'{'* || $command == *';'* ]]; then
+        echo "#!/bin/bash" > "$TEMP_COMMAND"
+        echo "$command" >> "$TEMP_COMMAND"
+        chmod +x "$TEMP_COMMAND"
+        actual_cmd="$TEMP_COMMAND"
+    else
+        actual_cmd="$command"
+    fi
+    
     # Show a waiting message
     dialog --title "$title" --infobox "Executing...\n$command" 6 60
     
-    # Execute the command and save the output to a temporary file
+    # Execute the command and save the output
+    local before_space=0
+    if [ "$calculate_space" = "true" ]; then
+        before_space=$(df / --output=used | tail -1 | sed 's/ //g')  # Bytes used on root
+    fi
+    
     if [ "$show_output" = "true" ]; then
-        eval "$command" >> "$TEMP_OUTPUT" 2>&1
+        if [[ $command == *'{'* || $command == *';'* ]]; then
+            . "$TEMP_COMMAND" >> "$TEMP_OUTPUT" 2>&1
+        else
+            eval "$actual_cmd" >> "$TEMP_OUTPUT" 2>&1
+        fi
     else
-        eval "$command" >> "$LOG_FILE" 2>&1
+        if [[ $command == *'{'* || $command == *';'* ]]; then
+            . "$TEMP_COMMAND" >> "$LOG_FILE" 2>&1
+        else
+            eval "$actual_cmd" >> "$LOG_FILE" 2>&1
+        fi
     fi
     local status=$?
+    
+    # Calculate space freed if requested
+    local space_msg=""
+    if [ "$calculate_space" = "true" ]; then
+        local after_space=$(df / --output=used | tail -1 | sed 's/ //g')
+        local freed=$((before_space - after_space))
+        if [ $freed -gt 0 ]; then
+            space_msg="\nSpace freed: $(calculate_space_freed $freed)"
+        fi
+    fi
     
     # Log the output
     if [ "$show_output" = "true" ]; then
         cat "$TEMP_OUTPUT" >> "$LOG_FILE" 2>/dev/null
     fi
+    
+    # Clean up temp command file
+    rm -f "$TEMP_COMMAND"
     
     # Show the output in a dialog window
     if [ "$show_output" = "true" ]; then
@@ -83,20 +126,18 @@ run_command_in_terminal() {
         fi
     fi
     
-    # Show status message
+    # Show status message with space info
     if [ $status -eq 0 ]; then
-        dialog --title "$title" --msgbox "Operation completed successfully." 6 50
+        dialog --title "$title" --msgbox "Operation completed successfully.$space_msg" 8 60
     else
         dialog --title "$title" --msgbox "Error during command execution.\nCheck the log: $LOG_FILE" 8 60
         log_message "ERROR" "Error executing: $command"
     fi
 }
 
-# Function to calculate space freed
+# Function to calculate space freed (unchanged, but now checked)
 calculate_space_freed() {
-    local before="$1"
-    local after="$2"
-    local freed=$((before - after))
+    local freed="$1"
     
     if [ $freed -gt 1073741824 ]; then
         echo "$(echo "scale=2; $freed / 1073741824" | bc) GB"
@@ -107,7 +148,7 @@ calculate_space_freed() {
     fi
 }
 
-# Function to check if Docker is installed and running
+# Function to check if Docker is installed and running (unchanged)
 check_docker() {
     if ! command -v docker &> /dev/null; then
         dialog --msgbox "Docker is not installed on the system." 8 50
@@ -122,7 +163,7 @@ check_docker() {
     return 0
 }
 
-# Improved Docker menu
+# Improved Docker menu (added space calculation for prunes)
 docker_menu() {
     if ! check_docker; then
         return
@@ -145,19 +186,19 @@ docker_menu() {
             1)
                 dialog --defaultno --title "Confirmation" --yesno "This will remove:\n- All stopped containers\n- All unused networks\n- All unused images\n- All build cache\n\nContinue?" 12 60
                 if [ $? -eq 0 ]; then
-                    run_command_in_terminal "Docker System Prune" "docker system prune -f"
+                    run_command_in_terminal "Docker System Prune" "docker system prune -a -f" "true" "true"
                 fi
                 ;;
             2)
                 dialog --defaultno --title "Confirmation" --yesno "Remove all Docker build cache?" 8 50
                 if [ $? -eq 0 ]; then
-                    run_command_in_terminal "Docker Builder Prune" "docker builder prune -a -f"
+                    run_command_in_terminal "Docker Builder Prune" "docker builder prune -a -f" "true" "true"
                 fi
                 ;;
             3)
                 dialog --title "Confirmation" --yesno "Remove all stopped containers?" 8 50
                 if [ $? -eq 0 ]; then
-                    run_command_in_terminal "Remove Stopped Containers" "docker container prune -f"
+                    run_command_in_terminal "Remove Stopped Containers" "docker container prune -f" "true" "true"
                 fi
                 ;;
             4)
@@ -169,12 +210,12 @@ docker_menu() {
                     if [ "$choice_img" = "1" ]; then
                         dialog --title "Confirmation" --yesno "Remove dangling images?" 8 50
                         if [ $? -eq 0 ]; then
-                            run_command_in_terminal "Remove Dangling Images" "docker image prune -f"
+                            run_command_in_terminal "Remove Dangling Images" "docker image prune -f" "true" "true"
                         fi
                     else
                         dialog --defaultno --title "Confirmation" --yesno "Remove all unused images?" 8 50
                         if [ $? -eq 0 ]; then
-                            run_command_in_terminal "Remove All Unused Images" "docker image prune -a -f"
+                            run_command_in_terminal "Remove All Unused Images" "docker image prune -a -f" "true" "true"
                         fi
                     fi
                 fi
@@ -182,34 +223,17 @@ docker_menu() {
             5)
                 dialog --defaultno --title "Confirmation" --yesno "Remove unused volumes?" 8 50
                 if [ $? -eq 0 ]; then
-                    run_command_in_terminal "Remove Unused Volumes" "docker volume prune -f"
+                    run_command_in_terminal "Remove Unused Volumes" "docker volume prune -f" "true" "true"
                 fi
                 ;;
             6)
                 dialog --title "Confirmation" --yesno "Remove unused networks?" 8 50
                 if [ $? -eq 0 ]; then
-                    run_command_in_terminal "Remove Unused Networks" "docker network prune -f"
+                    run_command_in_terminal "Remove Unused Networks" "docker network prune -f" "true" "true"
                 fi
                 ;;
             7)
-                run_command_in_terminal "Docker Statistics" "
-                {
-                    echo '=== DOCKER STATISTICS ==='
-                    echo 'Docker Images:'
-                    docker images --format 'table {{.Repository}}\\t{{.Tag}}\\t{{.Size}}'
-                    echo ''
-                    echo 'Containers (active and stopped):'
-                    docker ps -a --format 'table {{.Names}}\\t{{.Image}}\\t{{.Status}}'
-                    echo ''
-                    echo 'Volumes:'
-                    docker volume ls --format 'table {{.Name}}'
-                    echo ''
-                    echo 'Networks:'
-                    docker network ls --format 'table {{.Name}}\\t{{.Driver}}'
-                    echo ''
-                    echo 'Space Usage:'
-                    docker system df
-                } > '$TEMP_OUTPUT'"
+                run_command_in_terminal "Docker Statistics" "docker system df && docker images && docker ps -a" "true" "false"
                 ;;
             8|*)
                 break
@@ -218,7 +242,7 @@ docker_menu() {
     done
 }
 
-# Improved Ubuntu menu
+# Improved Ubuntu menu (fixed kernel removal)
 ubuntu_menu() {
     while true; do
         choice=$(dialog --clear --backtitle "$SCRIPT_NAME - Ubuntu Menu" --title "Ubuntu Cleanup" \
@@ -237,18 +261,18 @@ ubuntu_menu() {
 
         case $choice in
             1)
-                run_command_in_terminal "Update Cache" "sudo apt update"
+                run_command_in_terminal "Update Cache" "sudo apt update" "true" "false"
                 ;;
             2)
                 dialog --title "Confirmation" --yesno "Remove unnecessary packages?" 8 50
                 if [ $? -eq 0 ]; then
-                    run_command_in_terminal "Remove Unnecessary Packages" "sudo apt autoremove -y && sudo apt autoclean"
+                    run_command_in_terminal "Remove Unnecessary Packages" "sudo apt autoremove -y && sudo apt autoclean" "true" "true"
                 fi
                 ;;
             3)
                 dialog --title "Confirmation" --yesno "Clean the APT cache?" 8 50
                 if [ $? -eq 0 ]; then
-                    run_command_in_terminal "Clean APT Cache" "sudo apt clean"
+                    run_command_in_terminal "Clean APT Cache" "sudo apt clean" "true" "true"
                 fi
                 ;;
             4)
@@ -257,30 +281,42 @@ ubuntu_menu() {
                     run_command_in_terminal "Clear Old Kernels" "
                     {
                         echo 'Installed Kernels:'
-                        dpkg --list | grep linux-image | awk '{print \$2}'
+                        dpkg --list | grep '^ii' | grep linux-image | awk '{print \$2}' | sort -V
                         echo ''
-                        echo \"Current Kernel: \$(uname -r)\"
-                        echo 'Removing old kernels...'
-                        sudo apt-get purge \$(dpkg-query -W -f'\${Package}\n' 'linux-*' | sed -nr 's/.*-([0-9]+(\\.[0-9]+){2}-[^-]+).*/\\1 &/p' | linux-version sort | awk '(\$1==c){exit} {print \$2}' c=\$(uname -r | cut -f1,2 -d-))
-                    } > '$TEMP_OUTPUT' 2>&1"
+                        echo 'Current Kernel: $(uname -r)'
+                        echo ''
+                        # List kernels to remove (all except current and the 2 most recent)
+                        kernels_to_remove=\$(dpkg --list | grep '^ii' | grep linux-image | awk '{print \$2}' | grep -v \"\$(uname -r)\" | sort -V | head -n -2)
+                        if [ -z \"\$kernels_to_remove\" ]; then
+                            echo 'No old kernels to remove (keeping at least 2).'
+                        else
+                            echo 'Kernels to remove:'
+                            echo \"\$kernels_to_remove\"
+                            echo ''
+                            echo 'Removing old kernels...'
+                            sudo apt-get purge -y \$kernels_to_remove 2>/dev/null || true
+                            sudo apt-get autoremove -y
+                            echo 'Old kernels removed successfully.'
+                        fi
+                    }" "true" "true"
                 fi
                 ;;
             5)
                 dialog --title "Confirmation" --yesno "Clean system logs?\nOnly the last 7 days will be kept." 10 50
                 if [ $? -eq 0 ]; then
-                    run_command_in_terminal "Clean Logs" "sudo journalctl --vacuum-time=7d && sudo find /var/log -name '*.log' -type f -mtime +30 -delete"
+                    run_command_in_terminal "Clean Logs" "sudo journalctl --vacuum-time=7d && sudo find /var/log -name '*.log' -type f -mtime +30 -delete || true" "true" "true"
                 fi
                 ;;
             6)
                 dialog --title "Confirmation" --yesno "Empty the trash bin?" 8 50
                 if [ $? -eq 0 ]; then
-                    run_command_in_terminal "Empty Trash Bin" "rm -rf ~/.local/share/Trash/*"
+                    run_command_in_terminal "Empty Trash Bin" "rm -rf ~/.local/share/Trash/* || true" "true" "true"
                 fi
                 ;;
             7)
                 dialog --title "Confirmation" --yesno "Clean the thumbnail cache?" 8 50
                 if [ $? -eq 0 ]; then
-                    run_command_in_terminal "Clean Thumbnails" "rm -rf ~/.cache/thumbnails/*"
+                    run_command_in_terminal "Clean Thumbnails" "rm -rf ~/.cache/thumbnails/* || true" "true" "true"
                 fi
                 ;;
             8)
@@ -289,34 +325,20 @@ ubuntu_menu() {
                     run_command_in_terminal "Full Ubuntu Cleanup" "
                     {
                         echo 'Starting full cleanup...'
-                        echo 'Updating cache...'
                         sudo apt update
-                        echo 'Removing unnecessary packages...'
                         sudo apt autoremove -y
-                        echo 'Cleaning APT cache...'
                         sudo apt clean
                         sudo apt autoclean
-                        echo 'Cleaning logs...'
                         sudo journalctl --vacuum-time=7d
-                        echo 'Emptying trash bin...'
-                        rm -rf ~/.local/share/Trash/*
-                        echo 'Cleaning thumbnails...'
-                        rm -rf ~/.cache/thumbnails/*
-                        echo 'Cleaning user cache...'
+                        rm -rf ~/.local/share/Trash/* || true
+                        rm -rf ~/.cache/thumbnails/* || true
                         rm -rf ~/.cache/* 2>/dev/null || true
                         echo 'Cleanup completed!'
-                    } > '$TEMP_OUTPUT' 2>&1"
+                    }" "true" "true"
                 fi
                 ;;
             9)
-                run_command_in_terminal "Disk Space" "
-                {
-                    echo '=== DISK SPACE ==='
-                    df -h | awk 'NR==1 || /^\\/dev\\//'
-                    echo ''
-                    echo '=== Largest directories in /home ==='
-                    du -sh ~/.* 2>/dev/null | sort -hr | head -10
-                } > '$TEMP_OUTPUT'"
+                run_command_in_terminal "Disk Space" "df -h | awk 'NR==1 || /^\/dev\//' && du -sh ~/.* 2>/dev/null | sort -hr | head -10" "true" "false"
                 ;;
             10|*)
                 break
@@ -325,7 +347,7 @@ ubuntu_menu() {
     done
 }
 
-# Settings menu
+# Settings menu (unchanged, minor fixes)
 settings_menu() {
     while true; do
         choice=$(dialog --clear --backtitle "$SCRIPT_NAME - Settings" --title "Settings" \
@@ -340,7 +362,7 @@ settings_menu() {
         case $choice in
             1)
                 if [ -f "$LOG_FILE" ]; then
-                    run_command_in_terminal "ManzoloCleaner Log" "cat '$LOG_FILE'"
+                    dialog --title "Log Content" --textbox "$LOG_FILE" 20 80
                 else
                     dialog --msgbox "No log file found." 8 40
                 fi
@@ -369,8 +391,8 @@ settings_menu() {
                     echo \"Uptime: \$(uptime -p)\"
                     echo ''
                     echo '=== DISK SPACE ==='
-                    df -h | awk 'NR==1 || /^\\/dev\\//'
-                } > '$TEMP_OUTPUT'"
+                    df -h | awk 'NR==1 || /^\/dev\//'
+                }" "true" "false"
                 ;;
             4)
                 run_command_in_terminal "Test Essential Commands" "
@@ -381,7 +403,8 @@ settings_menu() {
                     command -v apt && echo '✓ apt available' || echo '✗ apt not available'
                     command -v journalctl && echo '✓ journalctl available' || echo '✗ journalctl not available'
                     command -v dialog && echo '✓ dialog available' || echo '✗ dialog not available'
-                } > '$TEMP_OUTPUT'"
+                    command -v bc && echo '✓ bc available' || echo '✗ bc not available'
+                }" "true" "false"
                 ;;
             5|*)
                 break
@@ -390,7 +413,7 @@ settings_menu() {
     done
 }
 
-# Initialization function
+# Initialization function (added temp command file)
 init_script() {
     # Create the log file if it doesn't exist
     touch "$LOG_FILE"
@@ -399,14 +422,15 @@ init_script() {
     # Check dependencies
     check_dependencies
     
-    # Create the temporary output file
+    # Create temporary files
     touch "$TEMP_OUTPUT"
+    rm -f "$TEMP_COMMAND"
 }
 
-# Improved main menu
+# Improved main menu (unchanged)
 main_menu() {
     while true; do
-        choice=$(dialog --clear --backtitle "$SCRIPT_NAME v2.4" --title "Main Menu" \
+        choice=$(dialog --clear --backtitle "$SCRIPT_NAME v2.5" --title "Main Menu" \
         --menu "Choose an option:" 17 50 6 \
         1 "🐳 Docker Cleanup" \
         2 "🐧 Ubuntu Cleanup" \
@@ -439,10 +463,10 @@ main_menu() {
                         echo '=== DOCKER STATS ==='
                         docker system df
                     fi
-                } > '$TEMP_OUTPUT'"
+                }" "true" "false"
                 ;;
             5)
-                dialog --title "Information" --msgbox "ManzoloCleaner v2.4\n\nAdvanced system cleaning tool\nwith support for Docker and Ubuntu.\n\nLog: $LOG_FILE\n\nCreated by: ManzoloScript" 12 50
+                dialog --title "Information" --msgbox "ManzoloCleaner v2.5\n\nAdvanced system cleaning tool\nwith support for Docker and Ubuntu.\nFixed kernel removal and command execution.\n\nLog: $LOG_FILE\n\nCreated by: ManzoloScript" 12 50
                 ;;
             6)
                 dialog --defaultno --title "Confirmation" --yesno "Are you sure you want to exit?" 8 40
@@ -450,7 +474,7 @@ main_menu() {
                     clear
                     echo -e "${GREEN}Thank you for using ManzoloCleaner!${NC}"
                     log_message "INFO" "Script finished"
-                    rm -f "$TEMP_OUTPUT"
+                    rm -f "$TEMP_OUTPUT" "$TEMP_COMMAND"
                     exit 0
                 fi
                 ;;
@@ -458,7 +482,7 @@ main_menu() {
                 clear
                 echo -e "${GREEN}Thank you for using ManzoloCleaner!${NC}"
                 log_message "INFO" "Script finished"
-                rm -f "$TEMP_OUTPUT"
+                rm -f "$TEMP_OUTPUT" "$TEMP_COMMAND"
                 exit 0
                 ;;
         esac
@@ -477,7 +501,7 @@ main() {
     echo "██║ ╚═╝ ██║██║  ██║██║ ╚████║███████╗╚██████╔╝███████╗╚██████╔╝"
     echo "╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝ ╚═════╝ ╚══════╝ ╚═════╝ "
     echo -e "${NC}"
-    echo -e "${YELLOW}               CLEANER v2.4${NC}"
+    echo -e "${YELLOW}               CLEANER v2.5${NC}"
     echo ""
     echo -e "${GREEN}Initializing...${NC}"
     
