@@ -70,18 +70,57 @@ size_to_bytes() {
     local num=${size//[!0-9]/}
     local unit=${size//[0-9]/}
     
-    case $unit in
-        K|k) echo $((num * 1024)) ;;
-        M|m) echo $((num * 1024 * 1024)) ;;
-        G|g) echo $((num * 1024 * 1024 * 1024)) ;;
-        T|t) echo $((num * 1024 * 1024 * 1024 * 1024)) ;;
+    case ${unit^^} in
+        K) echo $((num * 1024)) ;;
+        M) echo $((num * 1024 * 1024)) ;;
+        G) echo $((num * 1024 * 1024 * 1024)) ;;
+        T) echo $((num * 1024 * 1024 * 1024 * 1024)) ;;
         *) echo $num ;;
     esac
 }
 
+# Convert bytes to human-readable format
+bytes_to_readable() {
+    local bytes=$1
+    if [ $bytes -ge $((1024**4)) ]; then
+        echo "$((bytes / (1024**4)))T"
+    elif [ $bytes -ge $((1024**3)) ]; then
+        echo "$((bytes / (1024**3)))G"
+    elif [ $bytes -ge $((1024**2)) ]; then
+        echo "$((bytes / (1024**2)))M"
+    elif [ $bytes -ge 1024 ]; then
+        echo "$((bytes / 1024))K"
+    else
+        echo "${bytes}B"
+    fi
+}
+
+# Convert size to MiB (mebibytes, 1024*1024 bytes) for parted
+size_to_mib() {
+    local size=$1
+    if [ "$size" = "remaining" ]; then
+        echo "remaining"
+        return
+    fi
+    local num=${size//[!0-9]/}
+    local unit=${size//[0-9]/}
+    
+    # Convert to bytes first for precise calculation
+    local bytes
+    case ${unit^^} in
+        K) bytes=$((num * 1024)) ;;
+        M) bytes=$((num * 1024 * 1024)) ;;
+        G) bytes=$((num * 1024 * 1024 * 1024)) ;;
+        T) bytes=$((num * 1024 * 1024 * 1024 * 1024)) ;;
+        *) bytes=$num ;;
+    esac
+    # Convert bytes to MiB (ceiling to ensure no loss)
+    echo $(( (bytes + 1024*1024 - 1) / (1024*1024) ))
+}
+
 # Function to get user input for disk configuration using whiptail
 interactive_disk_config() {
-    whiptail --title "Virtual Disk Creation" --msgbox "Welcome to the enhanced virtual disk creation tool.\n\nFeatures:\n- UEFI/MBR partition table support\n- Fixed/Sparse disk allocation\n- Multiple filesystem support\n- Swap partition support" 15 70
+    whiptail --title "Virtual Disk Creation" --msgbox "Welcome to the enhanced virtual disk creation tool.\n\nFeatures:\n- UEFI/MBR partition table support\n- Fixed/Sparse disk allocation\n- Multiple filesystem support\n- Swap partition support\n- Generate config from existing disk" 15 70
     
     while true; do
         DISK_NAME=$(whiptail --title "Disk Name" --inputbox "Enter the virtual disk file name:\n(e.g., 'my_disk.qcow2', 'system.raw')" 12 60 3>&1 1>&2 2>&3)
@@ -191,22 +230,6 @@ interactive_partition_config() {
             break
         fi
     done
-}
-
-# Convert bytes to human readable format
-bytes_to_readable() {
-    local bytes=$1
-    if [ $bytes -ge $((1024**4)) ]; then
-        echo "$((bytes / (1024**4)))T"
-    elif [ $bytes -ge $((1024**3)) ]; then
-        echo "$((bytes / (1024**3)))G"
-    elif [ $bytes -ge $((1024**2)) ]; then
-        echo "$((bytes / (1024**2)))M"
-    elif [ $bytes -ge 1024 ]; then
-        echo "$((bytes / 1024))K"
-    else
-        echo "${bytes}B"
-    fi
 }
 
 # Main function for interactive mode
@@ -349,19 +372,27 @@ create_and_format_disk() {
     fi
 }
 
-# Convert size string to MiB
+# Convert size string to MiB (mebibytes, 1024*1024 bytes) for parted
 size_to_mib() {
     local size=$1
+    if [ "$size" = "remaining" ]; then
+        echo "remaining"
+        return
+    fi
     local num=${size//[!0-9]/}
     local unit=${size//[0-9]/}
     
+    # Convert to bytes first for precise calculation
+    local bytes
     case ${unit^^} in
-        K) echo $((num / 1024)) ;;
-        M) echo $num ;;
-        G) echo $((num * 1024)) ;;
-        T) echo $((num * 1024 * 1024)) ;;
-        *) echo $((num / 1024 / 1024)) ;;
+        K) bytes=$((num * 1024)) ;;
+        M) bytes=$((num * 1024 * 1024)) ;;
+        G) bytes=$((num * 1024 * 1024 * 1024)) ;;
+        T) bytes=$((num * 1024 * 1024 * 1024 * 1024)) ;;
+        *) bytes=$num ;;
     esac
+    # Convert bytes to MiB (ceiling to ensure no loss)
+    echo $(( (bytes + 1024*1024 - 1) / (1024*1024) ))
 }
 
 # Function to create partitions
@@ -450,18 +481,21 @@ create_partitions() {
         
         log "Creating partition ${partition_number}: ${part_size} (${part_fs})"
         
-        local end_position
         local size_mib
-        
         if [ "$part_size" = "remaining" ]; then
-            end_position="100%"
             size_mib=$((total_disk_mib - used_mib))
+            if [ $size_mib -le 0 ]; then
+                error "No remaining space for partition ${partition_number}"
+                cleanup_device "$DEVICE"
+                exit 1
+            fi
+            end_position="100%"
         else
             size_mib=$(size_to_mib "$part_size")
             end_position=$((start_mib + size_mib))
-            
             if [ $end_position -gt $total_disk_mib ]; then
                 warning "Partition ${partition_number} size exceeds remaining disk space, adjusting to fit"
+                size_mib=$((total_disk_mib - used_mib))
                 end_position="100%"
             fi
         fi
@@ -477,29 +511,6 @@ create_partitions() {
                 ;;
             "ntfs"|"fat16"|"vfat"|"fat32")
                 part_name="Microsoft basic data"
-                if [ "$PARTITION_TABLE" = "mbr" ]; then
-                    case "$part_fs" in
-                        "fat16")
-                            if [ "$VERBOSE" -eq 1 ]; then
-                                sudo parted -s "${DEVICE}" set $partition_number type 0x06
-                            else
-                                sudo parted -s "${DEVICE}" set $partition_number type 0x06 >/dev/null 2>&1
-                            fi
-                            ;;
-                        "vfat"|"fat32")
-                            if [ "$VERBOSE" -eq 1 ]; then
-                                sudo parted -s "${DEVICE}" set $partition_number type 0x0b
-                            else
-                                sudo parted -s "${DEVICE}" set $partition_number type 0x0b >/dev/null 2>&1
-                            fi
-                            ;;
-                    esac
-                    if [ $? -ne 0 ]; then
-                        error "Failed to set partition type for partition ${partition_number}"
-                        cleanup_device "$DEVICE"
-                        exit 1
-                    fi
-                fi
                 ;;
             *)
                 part_name="Linux filesystem"
@@ -513,17 +524,24 @@ create_partitions() {
                 sudo parted -s "${DEVICE}" mkpart "\"${part_name}\"" "${start_mib}MiB" "${end_position}" >/dev/null 2>&1
             fi
         else
+            local fs_type
+            case "$part_fs" in
+                "fat16") fs_type="fat16" ;;
+                "vfat"|"fat32") fs_type="fat32" ;;
+                "swap") fs_type="linux-swap" ;;
+                *) fs_type="ext2" ;; # Default for MBR, will be formatted later
+            esac
             if [ "$end_position" = "100%" ]; then
                 if [ "$VERBOSE" -eq 1 ]; then
-                    sudo parted -s "${DEVICE}" mkpart "${part_type}" "${start_mib}MiB" "${end_position}"
+                    sudo parted -s "${DEVICE}" mkpart "${part_type}" "${fs_type}" "${start_mib}MiB" "${end_position}"
                 else
-                    sudo parted -s "${DEVICE}" mkpart "${part_type}" "${start_mib}MiB" "${end_position}" >/dev/null 2>&1
+                    sudo parted -s "${DEVICE}" mkpart "${part_type}" "${fs_type}" "${start_mib}MiB" "${end_position}" >/dev/null 2>&1
                 fi
             else
                 if [ "$VERBOSE" -eq 1 ]; then
-                    sudo parted -s "${DEVICE}" mkpart "${part_type}" "${start_mib}MiB" "${end_position}MiB"
+                    sudo parted -s "${DEVICE}" mkpart "${part_type}" "${fs_type}" "${start_mib}MiB" "${end_position}MiB"
                 else
-                    sudo parted -s "${DEVICE}" mkpart "${part_type}" "${start_mib}MiB" "${end_position}MiB" >/dev/null 2>&1
+                    sudo parted -s "${DEVICE}" mkpart "${part_type}" "${fs_type}" "${start_mib}MiB" "${end_position}MiB" >/dev/null 2>&1
                 fi
             fi
         fi
@@ -552,7 +570,8 @@ create_partitions() {
             start_mib=$end_position
             used_mib=$end_position
         else
-            break
+            start_mib=$total_disk_mib
+            used_mib=$total_disk_mib
         fi
         
         ((partition_number++))
@@ -723,6 +742,166 @@ format_partitions() {
     success "All partitions formatted successfully!"
 }
 
+# Function to generate config.sh from an existing disk image
+generate_config() {
+    local DISK_IMAGE=$1
+    local CONFIG_FILE="${DISK_IMAGE%.*}_config.sh"
+
+    if [ ! -f "${DISK_IMAGE}" ]; then
+        error "Disk image '${DISK_IMAGE}' not found."
+        exit 1
+    fi
+
+    log "Analyzing disk image ${DISK_IMAGE}..."
+
+    # Get disk format and size using qemu-img
+    local QEMU_INFO
+    QEMU_INFO=$(qemu-img info "${DISK_IMAGE}" 2>/dev/null)
+    if [ $? -ne 0 ]; then
+        error "Failed to read disk image info for ${DISK_IMAGE}"
+        exit 1
+    fi
+
+    DISK_NAME=$(basename "${DISK_IMAGE}")
+    DISK_FORMAT=$(echo "$QEMU_INFO" | grep "file format" | awk '{print $3}')
+    local disk_size_bytes=$(echo "$QEMU_INFO" | grep "virtual size" | grep -oP '\(\K[0-9]+(?=\s*bytes)')
+    DISK_SIZE=$(bytes_to_readable "$disk_size_bytes")
+    log "Disk info: Name=$DISK_NAME, Format=$DISK_FORMAT, Size=$DISK_SIZE"
+
+    # Determine partition table type
+    local DEVICE=""
+    if [ "$DISK_FORMAT" = "qcow2" ]; then
+        log "Loading qemu-nbd kernel module..."
+        if [ "$VERBOSE" -eq 1 ]; then
+            sudo modprobe nbd max_part=8
+        else
+            sudo modprobe nbd max_part=8 >/dev/null 2>&1
+        fi
+        if [ $? -ne 0 ]; then
+            error "Failed to load qemu-nbd kernel module."
+            exit 1
+        fi
+
+        for i in {0..15}; do
+            if [ ! -e "/sys/block/nbd$i/pid" ]; then
+                DEVICE="/dev/nbd$i"
+                break
+            fi
+        done
+
+        if [ -z "$DEVICE" ]; then
+            error "No available NBD devices"
+            exit 1
+        fi
+
+        log "Connecting ${DISK_IMAGE} to ${DEVICE} via qemu-nbd..."
+        if [ "$VERBOSE" -eq 1 ]; then
+            sudo qemu-nbd --connect="$DEVICE" "$DISK_IMAGE"
+        else
+            sudo qemu-nbd --connect="$DEVICE" "$DISK_IMAGE" >/dev/null 2>&1
+        fi
+        if [ $? -ne 0 ]; then
+            error "Failed to connect qcow2 image via qemu-nbd"
+            exit 1
+        fi
+
+        sleep 2
+    else
+        log "Setting up loop device for ${DISK_IMAGE}..."
+        if [ "$VERBOSE" -eq 1 ]; then
+            DEVICE=$(sudo losetup -f --show "${DISK_IMAGE}")
+        else
+            DEVICE=$(sudo losetup -f --show "${DISK_IMAGE}" 2>/dev/null)
+        fi
+        if [ $? -ne 0 ]; then
+            error "Failed to create loop device for ${DISK_IMAGE}"
+            exit 1
+        fi
+    fi
+
+    log "Using device: ${DEVICE}"
+
+    # Get partition table type and partition details
+    local PARTED_INFO
+    PARTED_INFO=$(LC_ALL=C sudo parted -s "${DEVICE}" print 2>/dev/null)
+    if [ $? -ne 0 ]; then
+        error "Failed to read partition table from ${DEVICE}"
+        cleanup_device "$DEVICE"
+        exit 1
+    fi
+
+    PARTITION_TABLE=$(echo "$PARTED_INFO" | grep -E "^Partition Table:" | awk '{print $3}' | tr '[:upper:]' '[:lower:]')
+    if [ -z "$PARTITION_TABLE" ]; then
+        error "Could not determine partition table type"
+        cleanup_device "$DEVICE"
+        exit 1
+    fi
+    log "Partition table type: $PARTITION_TABLE"
+
+    # Get partition details and populate PARTITIONS array
+    PARTITIONS=()
+    local part_output
+    part_output=$(echo "$PARTED_INFO" | LC_ALL=C awk '
+        /^[ ]*[0-9]+/ {
+            num=$1; start=$2; end=$3; size=$4; fs=$5; name=$6
+            if (fs == "" || fs == "unknown") fs="unknown"
+            if (fs == "linux-swap(v1)" || fs == "linux-swap") fs="swap"
+            if (fs == "fat16" || fs == "fat32" || fs == "vfat") name="Microsoft basic data"
+            else if (fs == "swap") name="Linux swap"
+            else if (fs == "ext4" || fs == "ext3" || fs == "xfs" || fs == "btrfs") name="Linux filesystem"
+            else if (name == "") name="-"
+            # Normalize size to MB or GB
+            if (size ~ /GB$/) {
+                size_val=substr(size, 1, length(size)-2) * 1000
+                unit="MB"
+                if (size_val >= 1000) { size_val=size_val/1000; unit="G" }
+            } else if (size ~ /MB$/) {
+                size_val=substr(size, 1, length(size)-2)
+                unit="MB"
+                if (size_val >= 1000) { size_val=size_val/1000; unit="G" }
+            } else {
+                size_val=size; unit=""
+            }
+            printf("%s:%s\n", sprintf("%.0f%s", size_val, unit), fs)
+        }')
+
+    # Populate PARTITIONS array in the main shell
+    while IFS=':' read -r size fs; do
+        if [ -n "$size" ] && [ -n "$fs" ]; then
+            PARTITIONS+=("${size}:${fs}")
+            log "Found partition: ${size} ($fs)"
+        fi
+    done <<< "$part_output"
+
+    if [ ${#PARTITIONS[@]} -eq 0 ]; then
+        warning "No partitions found on the disk image"
+    else
+        log "Total partitions found: ${#PARTITIONS[@]}"
+    fi
+
+    # Clean up
+    cleanup_device "$DEVICE"
+
+    # Generate config.sh
+    log "Generating configuration file: ${CONFIG_FILE}"
+    cat << EOF > "${CONFIG_FILE}"
+#!/bin/bash
+DISK_NAME="${DISK_NAME}"
+DISK_SIZE="${DISK_SIZE}"
+DISK_FORMAT="${DISK_FORMAT}"
+PARTITION_TABLE="${PARTITION_TABLE}"
+PREALLOCATION="off" # Note: Preallocation cannot be determined from disk image
+PARTITIONS=(
+EOF
+
+    for part in "${PARTITIONS[@]}"; do
+        echo "    \"${part}\"" >> "${CONFIG_FILE}"
+    done
+
+    echo ")" >> "${CONFIG_FILE}"
+    success "Configuration file '${CONFIG_FILE}' generated successfully."
+}
+
 # Show help
 show_help() {
     cat << EOF
@@ -731,6 +910,7 @@ Virtual Disk Creator - Enhanced Edition
 Usage:
   $0                      Start in interactive mode
   $0 <config_file>        Use configuration file
+  $0 --reverse <disk_image> Generate config.sh from an existing disk image
   $0 -h, --help           Show this help
   VERBOSE=1 $0            Enable verbose output for debugging
 
@@ -743,6 +923,7 @@ Features:
   - Interactive and configuration file modes
   - Verbose mode for detailed command output (set VERBOSE=1)
   - Displays final partition table in a tabular format after creation
+  - Generate config.sh from an existing disk image (--reverse)
 
 Configuration file example:
   DISK_NAME="example.raw"
@@ -765,6 +946,14 @@ case "${1:-}" in
     -h|--help)
         show_help
         exit 0
+        ;;
+    --reverse)
+        if [ "$#" -ne 2 ]; then
+            error "Usage: $0 --reverse <disk_image>"
+            exit 1
+        fi
+        check_dependencies
+        generate_config "$2"
         ;;
     "")
         check_dependencies
