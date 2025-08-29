@@ -113,3 +113,22 @@ parted_size_to_bytes() {
         echo "${size_str%.*}"
     fi
 }
+
+calculate_partition_sizes() {
+    local total_disk_mib=$(size_to_mib "$DISK_SIZE")
+    local logical_total_mib=0
+    local overhead_per_logical=32
+    local logical_overhead_mib=0
+
+    # Calculate total logical partition size
+    for part_info in "${PARTITIONS[@]}"; do
+        IFS=':' read -r part_size part_fs part_type <<< "${part_info}"
+        if [ "$part_type" = "logical" ] && [ "$part_size" != "remaining" ]; then
+            logical_total_mib=$((logical_total_mib + $(size_to_mib "$part_size")))
+        fi
+    done
+    
+    logical_overhead_mib=$((overhead_per_logical * $(echo "${PARTITIONS[*]}" | grep -c ":logical")))
+    
+    echo "$total_disk_mib:$logical_total_mib:$logical_overhead_mib"
+}
