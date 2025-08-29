@@ -137,42 +137,65 @@ format_partitions() {
     finalize_formatting "$DEVICE"
 }
 
+# Format partition with retry mechanism and better error handling
 format_single_partition() {
     local part_dev="$1"
     local part_fs="$2"
+    local max_retries="${3:-3}"
+    local retry_delay="${4:-2}"
     
     if [ ! -b "$part_dev" ]; then
-        error "Partition device $part_dev does not exist"
+        log_error "Partition device $part_dev does not exist"
         return 1
     fi
-
-    log "Formatting $part_dev as $part_fs..."
     
-    local success=0
+    if [ "$part_fs" = "none" ] || [ "$part_fs" = "msr" ]; then
+        log_debug "Skipping formatting for $part_dev (filesystem: ${part_fs:-none})"
+        return 0
+    fi
+    
+    log_info "Formatting $part_dev as $part_fs..."
+    
+    local cmd
     case "$part_fs" in
-        "swap") run_format_command "sudo mkswap $part_dev" ;;
-        "ext4") run_format_command "sudo mkfs.ext4 $part_dev" ;;
-        "ext3") run_format_command "sudo mkfs.ext3 $part_dev" ;;
-        "xfs") run_format_command "sudo mkfs.xfs $part_dev" ;;
-        "btrfs") run_format_command "sudo mkfs.btrfs $part_dev" ;;
-        "fat32"|"vfat") run_format_command "sudo mkfs.vfat -F 32 $part_dev" ;;
-        "fat16") run_format_command "sudo mkfs.vfat -F 16 $part_dev" ;;
-        "ntfs") run_format_command "sudo mkfs.ntfs -f $part_dev" ;;
-        *) 
-            log "Skipping formatting for $part_dev (no filesystem specified)"
-            return 0
+        "swap")  cmd="sudo mkswap '$part_dev'" ;;
+        "ext4")  cmd="sudo mkfs.ext4 -F '$part_dev'" ;;
+        "ext3")  cmd="sudo mkfs.ext3 -F '$part_dev'" ;;
+        "ext2")  cmd="sudo mkfs.ext2 -F '$part_dev'" ;;
+        "xfs")   cmd="sudo mkfs.xfs -f '$part_dev'" ;;
+        "btrfs") cmd="sudo mkfs.btrfs -f '$part_dev'" ;;
+        "fat32"|"vfat") cmd="sudo mkfs.vfat -F 32 '$part_dev'" ;;
+        "fat16") cmd="sudo mkfs.vfat -F 16 '$part_dev'" ;;
+        "ntfs")  cmd="sudo mkfs.ntfs -f '$part_dev'" ;;
+        *)
+            log_error "Unknown filesystem type: $part_fs"
+            return 1
             ;;
     esac
     
-    success=$?
+    # Try formatting with retries
+    for attempt in $(seq 1 $max_retries); do
+        log_debug "Format attempt $attempt/$max_retries for $part_dev"
+        
+        if [ "$VERBOSE" -eq 1 ]; then
+            eval "$cmd"
+        else
+            eval "$cmd" >/dev/null 2>&1
+        fi
+        
+        if [ $? -eq 0 ]; then
+            log_success "Successfully formatted $part_dev as $part_fs"
+            return 0
+        fi
+        
+        if [ $attempt -lt $max_retries ]; then
+            log_warn "Format attempt $attempt failed, retrying in ${retry_delay}s..."
+            sleep $retry_delay
+        fi
+    done
     
-    if [ $success -eq 0 ]; then
-        log "Successfully formatted $part_dev as $part_fs"
-    else
-        error "Failed to format $part_dev as $part_fs"
-    fi
-    
-    return $success
+    log_error "Failed to format $part_dev as $part_fs after $max_retries attempts"
+    return 1
 }
 
 run_format_command() {

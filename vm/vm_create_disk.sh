@@ -1,5 +1,40 @@
 #!/bin/bash
 
+# ==============================================================================
+# IMPROVED CORE FUNCTIONS FOR VIRTUAL DISK CREATOR
+# ==============================================================================
+
+# Global cleanup variables
+declare -g DEVICE=""
+declare -g CLEANUP_REGISTERED=0
+
+# ==============================================================================
+# ERROR HANDLING & CLEANUP
+# ==============================================================================
+
+# Register cleanup trap handlers
+register_cleanup() {
+    if [ "$CLEANUP_REGISTERED" -eq 0 ]; then
+        trap cleanup_on_exit EXIT INT TERM
+        CLEANUP_REGISTERED=1
+    fi
+}
+
+# Main cleanup function called on script exit
+cleanup_on_exit() {
+    local exit_code=$?
+    
+    if [ -n "$DEVICE" ]; then
+        log "Cleaning up device $DEVICE..."
+        cleanup_device "$DEVICE"
+    fi
+    
+    # Clean up any temporary files
+    rm -f /tmp/disk_creator_device_info 2>/dev/null
+    
+    exit $exit_code
+}
+
 # Define global variables for disk and partition configuration
 DISK_NAME=""
 DISK_SIZE=""
@@ -19,6 +54,8 @@ NC='\033[0m' # No Color
 # Determine the directory where the script is located (resolving symlinks)
 SCRIPT_PATH="$(readlink -f "$0")"
 SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+
+export LC_ALL=C
 
 shopt -s globstar
 

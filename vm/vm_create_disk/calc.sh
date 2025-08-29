@@ -1,24 +1,64 @@
 # Validate disk size format
 validate_size() {
-    local size=$1
-    if [[ ! $size =~ ^[0-9]+[KMGT]?$ ]]; then
+    local size="$1"
+    local min_bytes="${2:-1048576}"      # Default: 1MB minimum
+    local max_bytes="${3:-17592186044416}" # Default: 16TB maximum
+    
+    if [ -z "$size" ]; then
         return 1
     fi
+    
+    # Check format
+    if ! [[ "$size" =~ ^[0-9]+[KMGTPE]?$ ]]; then
+        return 1
+    fi
+    
+    # Convert and check bounds
+    local bytes
+    bytes=$(size_to_bytes "$size")
+    if [ $? -ne 0 ]; then
+        return 1
+    fi
+    
+    if [ "$bytes" -lt "$min_bytes" ] || [ "$bytes" -gt "$max_bytes" ]; then
+        return 1
+    fi
+    
     return 0
 }
 
 # Convert size to bytes for validation
 size_to_bytes() {
-    local size=$1
-    local num=${size//[!0-9]/}
-    local unit=${size//[0-9]/}
+    local size="$1"
+    local num unit
     
-    case ${unit^^} in
-        K) echo $((num * 1024)) ;;
-        M) echo $((num * 1024 * 1024)) ;;
-        G) echo $((num * 1024 * 1024 * 1024)) ;;
-        T) echo $((num * 1024 * 1024 * 1024 * 1024)) ;;
-        *) echo $num ;;
+    if [ -z "$size" ]; then
+        return 1
+    fi
+    
+    # Extract number and unit
+    if [[ "$size" =~ ^([0-9]+)([KMGTPE]?)$ ]]; then
+        num="${BASH_REMATCH[1]}"
+        unit="${BASH_REMATCH[2]^^}"
+    else
+        return 1
+    fi
+    
+    # Validate number is positive
+    if [ "$num" -le 0 ]; then
+        return 1
+    fi
+    
+    # Convert to bytes using 1024-based units consistently
+    case "$unit" in
+        "")  echo "$num" ;;
+        "K") echo $((num * 1024)) ;;
+        "M") echo $((num * 1024 * 1024)) ;;
+        "G") echo $((num * 1024 * 1024 * 1024)) ;;
+        "T") echo $((num * 1024 * 1024 * 1024 * 1024)) ;;
+        "P") echo $((num * 1024 * 1024 * 1024 * 1024 * 1024)) ;;
+        "E") echo $((num * 1024 * 1024 * 1024 * 1024 * 1024 * 1024)) ;;
+        *) return 1 ;;
     esac
 }
 
@@ -40,25 +80,21 @@ bytes_to_readable() {
 
 # Convert size to MiB (mebibytes, 1024*1024 bytes) for parted
 size_to_mib() {
-    local size=$1
+    local size="$1"
+    
     if [ "$size" = "remaining" ]; then
         echo "remaining"
         return
     fi
-    local num=${size//[!0-9]/}
-    local unit=${size//[0-9]/}
     
-    # Convert to bytes first for precise calculation
     local bytes
-    case ${unit^^} in
-        K) bytes=$((num * 1024)) ;;
-        M) bytes=$((num * 1024 * 1024)) ;;
-        G) bytes=$((num * 1024 * 1024 * 1024)) ;;
-        T) bytes=$((num * 1024 * 1024 * 1024 * 1024)) ;;
-        *) bytes=$num ;;
-    esac
-    # Convert bytes to MiB (ceiling to ensure no loss)
-    echo $(( (bytes + 1024*1024 - 1) / (1024*1024) ))
+    bytes=$(size_to_bytes "$size")
+    if [ $? -ne 0 ]; then
+        return 1
+    fi
+    
+    # Convert to MiB, rounding up to avoid truncation
+    echo $(( (bytes + 1048575) / 1048576 ))
 }
 
 # Convert size to exact megabytes (1048576 bytes) for precise partitioning
@@ -166,4 +202,39 @@ calculate_partition_sizes() {
     logical_overhead_mib=$((overhead_per_logical * $(echo "${PARTITIONS[*]}" | grep -c ":logical")))
     
     echo "$total_disk_mib:$logical_total_mib:$logical_overhead_mib"
+}
+
+bytes_to_human() {
+    local bytes="$1"
+    local precision="${2:-0}"  # Default to 0 for cleaner output
+    
+    export LC_NUMERIC=C
+    
+    if [ "$bytes" -lt 1024 ]; then
+        echo "${bytes}B"
+    elif [ "$bytes" -lt $((1024 * 1024)) ]; then
+        if [ "$precision" -eq 0 ]; then
+            echo "$((bytes / 1024))K"
+        else
+            local result=$(echo "scale=$precision; $bytes / 1024" | bc)
+            echo "${result}K"
+        fi
+    elif [ "$bytes" -lt $((1024 * 1024 * 1024)) ]; then
+        if [ "$precision" -eq 0 ]; then
+            echo "$((bytes / 1024 / 1024))M"
+        else
+            local result=$(echo "scale=$precision; $bytes / (1024*1024)" | bc)
+            echo "${result}M"
+        fi
+    elif [ "$bytes" -lt $((1024 * 1024 * 1024 * 1024)) ]; then
+        if [ "$precision" -eq 0 ]; then
+            echo "$((bytes / 1024 / 1024 / 1024))G"
+        else
+            local result=$(echo "scale=$precision; $bytes / (1024*1024*1024)" | bc)
+            echo "${result}G"
+        fi
+    else
+        local result=$(echo "scale=$precision; $bytes / (1024*1024*1024*1024)" | bc)
+        echo "${result}T"
+    fi
 }

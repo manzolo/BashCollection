@@ -1,66 +1,117 @@
 setup_device() {
-    declare -g DEVICE
-
+    register_cleanup
+    
     if [ "$DISK_FORMAT" = "qcow2" ]; then
         setup_qcow2_device
     else
         setup_loop_device
     fi
     
-    log "Using device: ${DEVICE}"
+    if [ $? -ne 0 ]; then
+        return 1
+    fi
+    
+    log_info "Using device: ${DEVICE}"
+    
+    # Wait for device to be ready
+    wait_for_device_ready "$DEVICE"
+    return $?
 }
 
-setup_qcow2_device() {
-    log "Loading qemu-nbd kernel module..."
-    if [ "$VERBOSE" -eq 1 ]; then
-        sudo modprobe nbd max_part=8
-    else
-        sudo modprobe nbd max_part=8 >/dev/null 2>&1
-    fi
+# Wait for device to be ready with timeout
+wait_for_device_ready() {
+    local device="$1"
+    local timeout="${2:-30}"
+    local count=0
     
-    if [ $? -ne 0 ]; then
-        error "Failed to load qemu-nbd kernel module."
-        exit 1
-    fi
-    
-    # Find available NBD device
-    for i in {0..15}; do
-        if [ ! -e "/sys/block/nbd$i/pid" ]; then
-            DEVICE="/dev/nbd$i"
-            break
+    while [ $count -lt $timeout ]; do
+        if [ -b "$device" ]; then
+            log_debug "Device $device is ready"
+            sudo partprobe "$device" >/dev/null 2>&1
+            udevadm settle 2>/dev/null
+            sleep 1
+            return 0
         fi
+        
+        sleep 1
+        ((count++))
     done
     
-    if [ -z "$DEVICE" ]; then
-        error "No available NBD devices"
-        exit 1
+    log_error "Device $device not ready after ${timeout}s timeout"
+    return 1
+}
+
+
+setup_qcow2_device() {
+    local nbd_device
+    
+    nbd_device=$(find_available_nbd)
+    if [ $? -ne 0 ]; then
+        log_error "No available NBD devices found"
+        return 1
     fi
     
-    log "Connecting ${DISK_NAME} to ${DEVICE} via qemu-nbd..."
+    DEVICE="$nbd_device"
+    
+    log_debug "Connecting ${DISK_NAME} to ${DEVICE} via qemu-nbd..."
+    
+    local cmd="sudo qemu-nbd --connect='$DEVICE' '$DISK_NAME'"
     if [ "$VERBOSE" -eq 1 ]; then
-        sudo qemu-nbd --connect="$DEVICE" "$DISK_NAME"
+        eval "$cmd"
     else
-        sudo qemu-nbd --connect="$DEVICE" "$DISK_NAME" >/dev/null 2>&1
+        eval "$cmd" >/dev/null 2>&1
     fi
     
     if [ $? -ne 0 ]; then
-        error "Failed to connect qcow2 image via qemu-nbd"
-        exit 1
+        log_error "Failed to connect qcow2 image via qemu-nbd"
+        DEVICE=""
+        return 1
     fi
     
-    sleep 2
+    return 0
 }
 
 setup_loop_device() {
-    log "Setting up loop device for ${DISK_NAME}..."
+    log_debug "Setting up loop device for ${DISK_NAME}..."
+    
+    local loop_device
     if [ "$VERBOSE" -eq 1 ]; then
-        DEVICE=$(sudo losetup -f --show "${DISK_NAME}")
+        loop_device=$(sudo losetup -f --show "$DISK_NAME")
     else
-        DEVICE=$(sudo losetup -f --show "${DISK_NAME}" 2>/dev/null)
+        loop_device=$(sudo losetup -f --show "$DISK_NAME" 2>/dev/null)
     fi
     
-    if [ $? -ne 0 ]; then
-        error "Failed to create loop device for ${DISK_NAME}"
-        exit 1
+    if [ $? -ne 0 ] || [ -z "$loop_device" ]; then
+        log_error "Failed to create loop device for ${DISK_NAME}"
+        return 1
     fi
+    
+    DEVICE="$loop_device"
+    return 0
+}
+
+# Find available NBD device efficiently
+find_available_nbd() {
+    local nbd_device
+    
+    # Check if nbd module is loaded
+    if ! lsmod | grep -q "^nbd "; then
+        log_debug "Loading NBD kernel module..."
+        if ! sudo modprobe nbd max_part=16; then
+            log_error "Failed to load NBD kernel module"
+            return 1
+        fi
+        sleep 1
+    fi
+    
+    # Find first available NBD device
+    for i in {0..15}; do
+        nbd_device="/dev/nbd$i"
+        if [ ! -e "/sys/block/nbd$i/pid" ] && ! fuser "$nbd_device" >/dev/null 2>&1; then
+            echo "$nbd_device"
+            return 0
+        fi
+    done
+    
+    return 1
 }
