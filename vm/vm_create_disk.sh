@@ -317,197 +317,11 @@ non_interactive_mode() {
     create_and_format_disk
 }
 
-# Core function to create and format the disk
-create_and_format_disk() {
-    log "Starting disk creation process..."
-    
-    if [ -f "${DISK_NAME}" ]; then
-        error "File '${DISK_NAME}' already exists."
-        if command -v whiptail >/dev/null 2>&1; then
-            if ! whiptail --title "File Exists" --yesno "File '${DISK_NAME}' already exists. Overwrite?" 8 60; then
-                log "Operation cancelled."
-                exit 0
-            fi
-        else
-            read -p "File '${DISK_NAME}' already exists. Overwrite? (y/N): " -n 1 -r
-            echo
-            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                log "Operation cancelled."
-                exit 0
-            fi
-        fi
-        rm -f "${DISK_NAME}" 2>/dev/null || { error "Failed to remove existing file '${DISK_NAME}'"; exit 1; }
-    fi
-
-    validate_mbr_partitions
-    
-    log "Creating disk ${DISK_NAME} with size ${DISK_SIZE} and format ${DISK_FORMAT}..."
-    
-    local create_cmd="qemu-img create -f ${DISK_FORMAT}"
-    
-    if [ "$PREALLOCATION" = "full" ]; then
-        case "$DISK_FORMAT" in
-            "raw")
-                create_cmd+=" -o preallocation=full"
-                ;;
-            "qcow2")
-                create_cmd+=" -o preallocation=metadata"
-                ;;
-        esac
-    fi
-    
-    create_cmd+=" ${DISK_NAME} ${DISK_SIZE}"
-    
-    if [ "$VERBOSE" -eq 1 ]; then
-        if ! eval $create_cmd; then
-            error "Failed to create virtual disk."
-            exit 1
-        fi
-    else
-        if ! eval $create_cmd >/dev/null 2>&1; then
-            error "Failed to create virtual disk."
-            exit 1
-        fi
-    fi
-    
-    success "Virtual disk created successfully."
-    
-    if [ "${#PARTITIONS[@]}" -gt 0 ]; then
-        log "Setting up partitions..."
-        create_partitions
-        format_partitions
-        log "Final partition table for ${DISK_NAME}:"
-        if [ "$VERBOSE" -eq 1 ]; then
-            log "Full parted output:"
-            sudo parted -s "${DEVICE}" print
-            log "Formatted table:"
-        fi
-        # Generate tabular output
-        sudo parted -s "${DEVICE}" print | awk -v part_table="$PARTITION_TABLE" '
-            BEGIN {
-                if (part_table == "mbr") {
-                    printf "%-8s %-12s %-12s %-12s %-12s %-12s %s\n", "Number", "Start", "End", "Size", "File system", "Type", "Name"
-                    printf "%-8s %-12s %-12s %-12s %-12s %-12s %s\n", "------", "-------", "-------", "-------", "-----------", "-------", "----"
-                } else {
-                    printf "%-8s %-12s %-12s %-12s %-12s %s\n", "Number", "Start", "End", "Size", "File system", "Name"
-                    printf "%-8s %-12s %-12s %-12s %-12s %s\n", "------", "-------", "-------", "-------", "-----------", "----"
-                }
-            }
-            /^[ ]*[0-9]+/ {
-                fs=$5
-                if (fs == "" || fs == "unknown") fs="none"
-                if (fs == "linux-swap(v1)" || fs == "linux-swap") fs="swap"
-                name=$6
-                if (fs == "fat16" || fs == "fat32" || fs == "vfat") name="Microsoft basic data"
-                else if (fs == "swap") name="Linux swap"
-                else if (fs == "ext4" || fs == "ext3" || fs == "xfs" || fs == "btrfs") name="Linux filesystem"
-                else if (name == "" || name == "unknown") name="Unformatted"
-                type=""
-                if (part_table == "mbr") {
-                    if ($7 ~ /logical/) type="logical"
-                    else if ($7 ~ /extended/) type="extended"
-                    else type="primary"
-                    printf "%-8s %-12s %-12s %-12s %-12s %-12s %s\n", $1, $2, $3, $4, fs, type, name
-                } else {
-                    printf "%-8s %-12s %-12s %-12s %-12s %s\n", $1, $2, $3, $4, fs, name
-                }
-            }' | while IFS= read -r line; do
-                log "  $line"
-            done
-        cleanup_device "${DEVICE}"
-    else
-        success "Virtual disk created successfully (no partitions specified)."
-    fi
-}
-
-validate_mbr_partitions() {
-    if [ "$PARTITION_TABLE" != "mbr" ]; then
-        return 0
-    fi
-    
-    local primary_count=0
-    local extended_count=0
-    local logical_count=0
-    local logical_partitions=()
-    local other_partitions=()
-    
-    # Prima passata: conteggio tipi di partizione
-    for part_info in "${PARTITIONS[@]}"; do
-        IFS=':' read -r part_size part_fs part_type <<< "${part_info}"
-        case "$part_type" in
-            "primary")  primary_count=$((primary_count + 1)); other_partitions+=("$part_info") ;;
-            "extended") extended_count=$((extended_count + 1)); other_partitions+=("$part_info") ;;
-            "logical")  logical_count=$((logical_count + 1)); logical_partitions+=("$part_info") ;;
-            *)          other_partitions+=("$part_info") ;; # default = primary
-        esac
-    done
-    
-    # Se ci sono logiche senza estesa → aggiungila
-    if [ $logical_count -gt 0 ] && [ $extended_count -eq 0 ]; then
-        log "Logical partitions detected without an extended partition. Adding an extended partition."
-        
-        local has_remaining_logical=false
-        local logical_total_bytes=0
-        
-        for part_info in "${logical_partitions[@]}"; do
-            IFS=':' read -r part_size part_fs part_type <<< "${part_info}"
-            if [ "$part_size" = "remaining" ]; then
-                has_remaining_logical=true
-                break
-            fi
-            logical_total_bytes=$((logical_total_bytes + $(size_to_bytes "$part_size")))
-        done
-        
-        local extended_size
-        if [ "$has_remaining_logical" = true ]; then
-            extended_size="remaining"
-        else
-            # Overhead di 32 MiB per logica
-            local overhead_per_logical=$((32 * 1024 * 1024))
-            local overhead_bytes=$((overhead_per_logical * logical_count))
-            local extended_total_bytes=$((logical_total_bytes + overhead_bytes + 64*1024*1024)) # +64 MiB margine
-            
-            # Arrotonda al GiB superiore
-            local gib=$((1024 * 1024 * 1024))
-            local rounded=$(( (extended_total_bytes + gib - 1) / gib * gib ))
-            extended_size=$(bytes_to_readable "$rounded")
-            
-            log "DEBUG: Logical partitions total: $(bytes_to_readable $logical_total_bytes)"
-            log "DEBUG: Extended partition size with overhead ($logical_count logical partitions): $extended_size"
-        fi
-        
-        PARTITIONS=()
-        for part in "${other_partitions[@]}"; do
-            PARTITIONS+=("$part")
-        done
-        PARTITIONS+=("${extended_size}:none:extended")
-        for part in "${logical_partitions[@]}"; do
-            PARTITIONS+=("$part")
-        done
-        
-        extended_count=1
-        log "Added extended partition of size $extended_size containing $logical_count logical partition(s)"
-    fi
-    
-    # Vincoli MBR
-    local total_primary_extended=$((primary_count + extended_count))
-    if [ $total_primary_extended -gt 4 ]; then
-        error "MBR partition table can have max 4 primary+extended partitions (found: $total_primary_extended)"
-        return 1
-    fi
-    if [ $extended_count -gt 1 ]; then
-        error "MBR can have only 1 extended partition (found: $extended_count)"
-        return 1
-    fi
-    
-    return 0
-}
-
-
 # Updated create_partitions function
 create_partitions() {
-    local DEVICE=""
-    
+    # Declare DEVICE as global
+    declare -g DEVICE
+
     if [ "$DISK_FORMAT" = "qcow2" ]; then
         log "Loading qemu-nbd kernel module..."
         if [ "$VERBOSE" -eq 1 ]; then
@@ -798,72 +612,323 @@ create_partitions() {
     echo "${DEVICE}:${DISK_FORMAT}" > /tmp/disk_creator_device_info
 }
 
-# format_partitions is not fully visible in the provided content, but its logic
-# should handle the special case of 'msr' by skipping it.
-format_partitions() {
-    local DEVICE=$(awk -F: '{print $1}' /tmp/disk_creator_device_info)
-    local DISK_FORMAT=$(awk -F: '{print $2}' /tmp/disk_creator_device_info)
+# Updated create_and_format_disk function
+create_and_format_disk() {
+    log "Starting disk creation process..."
     
-    log "Formatting partitions..."
-    
-    local PARTITIONS_LIST
-    if [ "$DISK_FORMAT" = "qcow2" ]; then
-        PARTITIONS_LIST=$(sudo parted -s "$DEVICE" print | awk '/^[ ]*[0-9]+/ {print $1}')
-    else
-        PARTITIONS_LIST=$(sudo fdisk -l "$DEVICE" | awk '/^'${DEVICE}'[1-9]/ {print $1}' | tr '\n' ' ')
+    if [ -f "${DISK_NAME}" ]; then
+        error "File '${DISK_NAME}' already exists."
+        if command -v whiptail >/dev/null 2>&1; then
+            if ! whiptail --title "File Exists" --yesno "File '${DISK_NAME}' already exists. Overwrite?" 8 60; then
+                log "Operation cancelled."
+                exit 0
+            fi
+        else
+            read -p "File '${DISK_NAME}' already exists. Overwrite? (y/N): " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                log "Operation cancelled."
+                exit 0
+            fi
+        fi
+        rm -f "${DISK_NAME}" 2>/dev/null || { error "Failed to remove existing file '${DISK_NAME}'"; exit 1; }
     fi
 
-    for PARTITION in $PARTITIONS_LIST; do
-        local PART_NUMBER=$(echo "$PARTITION" | sed 's/[^0-9]//g')
-        local part_info="${PARTITIONS[$((PART_NUMBER - 1))]}"
-        local part_fs=$(echo "$part_info" | cut -d: -f2)
+    validate_mbr_partitions
+    
+    log "Creating disk ${DISK_NAME} with size ${DISK_SIZE} and format ${DISK_FORMAT}..."
+    
+    local create_cmd="qemu-img create -f ${DISK_FORMAT}"
+    
+    if [ "$PREALLOCATION" = "full" ]; then
+        case "$DISK_FORMAT" in
+            "raw")
+                create_cmd+=" -o preallocation=full"
+                ;;
+            "qcow2")
+                create_cmd+=" -o preallocation=metadata"
+                ;;
+        esac
+    fi
+    
+    create_cmd+=" ${DISK_NAME} ${DISK_SIZE}"
+    
+    if [ "$VERBOSE" -eq 1 ]; then
+        if ! eval $create_cmd; then
+            error "Failed to create virtual disk."
+            exit 1
+        fi
+    else
+        if ! eval $create_cmd >/dev/null 2>&1; then
+            error "Failed to create virtual disk."
+            exit 1
+        fi
+    fi
+    
+    success "Virtual disk created successfully."
+    
+    if [ "${#PARTITIONS[@]}" -gt 0 ]; then
+        log "Setting up partitions..."
+        create_partitions
 
-        if [ "$part_fs" = "msr" ] || [ "$part_fs" = "none" ] || [ "$part_fs" = "extended" ]; then
-            log "  Skipping formatting for partition ${PART_NUMBER} (${part_fs})."
+        # Ensure DEVICE is set
+        if [ -z "$DEVICE" ]; then
+            error "DEVICE not set after create_partitions"
+            exit 1
+        fi
+
+        # Passa il device alla funzione
+        format_partitions "$DEVICE"
+        log "Final partition table for ${DISK_NAME}:"
+        if [ "$VERBOSE" -eq 1 ]; then
+            log "Full parted output:"
+            sudo parted -s "${DEVICE}" print
+            log "Formatted table:"
+        fi
+        # Generate tabular output
+        sudo parted -s "${DEVICE}" print | awk -v part_table="$PARTITION_TABLE" '
+            BEGIN {
+                if (part_table == "mbr") {
+                    printf "%-8s %-12s %-12s %-12s %-12s %-12s %s\n", "Number", "Start", "End", "Size", "File system", "Type", "Name"
+                    printf "%-8s %-12s %-12s %-12s %-12s %-12s %s\n", "------", "-------", "-------", "-------", "-----------", "-------", "----"
+                } else {
+                    printf "%-8s %-12s %-12s %-12s %-12s %s\n", "Number", "Start", "End", "Size", "File system", "Name"
+                    printf "%-8s %-12s %-12s %-12s %-12s %s\n", "------", "-------", "-------", "-------", "-----------", "----"
+                }
+            }
+            /^[ ]*[0-9]+/ {
+                fs=$5
+                if (fs == "" || fs == "unknown") fs="none"
+                if (fs == "linux-swap(v1)" || fs == "linux-swap") fs="swap"
+                name=$6
+                if (fs == "fat16" || fs == "fat32" || fs == "vfat") name="Microsoft basic data"
+                else if (fs == "swap") name="Linux swap"
+                else if (fs == "ext4" || fs == "ext3" || fs == "xfs" || fs == "btrfs") name="Linux filesystem"
+                else if (name == "" || name == "unknown") name="Unformatted"
+                type=""
+                if (part_table == "mbr") {
+                    if ($7 ~ /logical/) type="logical"
+                    else if ($7 ~ /extended/) type="extended"
+                    else type="primary"
+                    printf "%-8s %-12s %-12s %-12s %-12s %-12s %s\n", $1, $2, $3, $4, fs, type, name
+                } else {
+                    printf "%-8s %-12s %-12s %-12s %-12s %s\n", $1, $2, $3, $4, fs, name
+                }
+            }' | while IFS= read -r line; do
+                log "  $line"
+            done
+        cleanup_device "${DEVICE}"
+    else
+        success "Virtual disk created successfully (no partitions specified)."
+    fi
+}
+
+validate_mbr_partitions() {
+    if [ "$PARTITION_TABLE" != "mbr" ]; then
+        return 0
+    fi
+    
+    local primary_count=0
+    local extended_count=0
+    local logical_count=0
+    local logical_partitions=()
+    local other_partitions=()
+    
+    # Prima passata: conteggio tipi di partizione
+    for part_info in "${PARTITIONS[@]}"; do
+        IFS=':' read -r part_size part_fs part_type <<< "${part_info}"
+        case "$part_type" in
+            "primary")  primary_count=$((primary_count + 1)); other_partitions+=("$part_info") ;;
+            "extended") extended_count=$((extended_count + 1)); other_partitions+=("$part_info") ;;
+            "logical")  logical_count=$((logical_count + 1)); logical_partitions+=("$part_info") ;;
+            *)          other_partitions+=("$part_info") ;; # default = primary
+        esac
+    done
+    
+    # Se ci sono logiche senza estesa → aggiungila
+    if [ $logical_count -gt 0 ] && [ $extended_count -eq 0 ]; then
+        log "Logical partitions detected without an extended partition. Adding an extended partition."
+        
+        local has_remaining_logical=false
+        local logical_total_bytes=0
+        
+        for part_info in "${logical_partitions[@]}"; do
+            IFS=':' read -r part_size part_fs part_type <<< "${part_info}"
+            if [ "$part_size" = "remaining" ]; then
+                has_remaining_logical=true
+                break
+            fi
+            logical_total_bytes=$((logical_total_bytes + $(size_to_bytes "$part_size")))
+        done
+        
+        local extended_size
+        if [ "$has_remaining_logical" = true ]; then
+            extended_size="remaining"
+        else
+            # Overhead di 32 MiB per logica
+            local overhead_per_logical=$((32 * 1024 * 1024))
+            local overhead_bytes=$((overhead_per_logical * logical_count))
+            local extended_total_bytes=$((logical_total_bytes + overhead_bytes + 64*1024*1024)) # +64 MiB margine
+            
+            # Arrotonda al GiB superiore
+            local gib=$((1024 * 1024 * 1024))
+            local rounded=$(( (extended_total_bytes + gib - 1) / gib * gib ))
+            extended_size=$(bytes_to_readable "$rounded")
+            
+            log "DEBUG: Logical partitions total: $(bytes_to_readable $logical_total_bytes)"
+            log "DEBUG: Extended partition size with overhead ($logical_count logical partitions): $extended_size"
+        fi
+        
+        PARTITIONS=()
+        for part in "${other_partitions[@]}"; do
+            PARTITIONS+=("$part")
+        done
+        PARTITIONS+=("${extended_size}:none:extended")
+        for part in "${logical_partitions[@]}"; do
+            PARTITIONS+=("$part")
+        done
+        
+        extended_count=1
+        log "Added extended partition of size $extended_size containing $logical_count logical partition(s)"
+    fi
+    
+    # Vincoli MBR
+    local total_primary_extended=$((primary_count + extended_count))
+    if [ $total_primary_extended -gt 4 ]; then
+        error "MBR partition table can have max 4 primary+extended partitions (found: $total_primary_extended)"
+        return 1
+    fi
+    if [ $extended_count -gt 1 ]; then
+        error "MBR can have only 1 extended partition (found: $extended_count)"
+        return 1
+    fi
+    
+    return 0
+}
+
+# Function to format partitions
+format_partitions() {
+    local DEVICE="$1"
+    local partition_number=1
+    local logical_number=5
+
+    log "Formatting partitions on $DEVICE..."
+
+    for part_info in "${PARTITIONS[@]}"; do
+        IFS=':' read -r part_size part_fs part_type <<< "${part_info}"
+        local part_dev=""
+
+        if [ "$part_type" = "logical" ]; then
+            part_dev="${DEVICE}p${logical_number}"
+            ((logical_number++))
+        else
+            part_dev="${DEVICE}p${partition_number}"
+            ((partition_number++))
+        fi
+
+        if [ ! -b "$part_dev" ]; then
+            error "Partition device $part_dev does not exist"
             continue
         fi
 
-        log "  Formatting partition ${PARTITION} with filesystem ${part_fs}..."
+        log "Formatting $part_dev as $part_fs..."
         case "$part_fs" in
+            "swap")
+                if [ "$VERBOSE" -eq 1 ]; then
+                    sudo mkswap "$part_dev"
+                else
+                    sudo mkswap "$part_dev" >/dev/null 2>&1
+                fi
+                ;;
             "ext4")
-                sudo mkfs.ext4 -L "ext4_part" "$PARTITION" >/dev/null 2>&1
+                if [ "$VERBOSE" -eq 1 ]; then
+                    sudo mkfs.ext4 "$part_dev"
+                else
+                    sudo mkfs.ext4 "$part_dev" >/dev/null 2>&1
+                fi
                 ;;
             "ext3")
-                sudo mkfs.ext3 -L "ext3_part" "$PARTITION" >/dev/null 2>&1
+                if [ "$VERBOSE" -eq 1 ]; then
+                    sudo mkfs.ext3 "$part_dev"
+                else
+                    sudo mkfs.ext3 "$part_dev" >/dev/null 2>&1
+                fi
                 ;;
             "xfs")
-                sudo mkfs.xfs -L "xfs_part" "$PARTITION" >/dev/null 2>&1
+                if [ "$VERBOSE" -eq 1 ]; then
+                    sudo mkfs.xfs "$part_dev"
+                else
+                    sudo mkfs.xfs "$part_dev" >/dev/null 2>&1
+                fi
                 ;;
             "btrfs")
-                sudo mkfs.btrfs -L "btrfs_part" "$PARTITION" >/dev/null 2>&1
+                if [ "$VERBOSE" -eq 1 ]; then
+                    sudo mkfs.btrfs "$part_dev"
+                else
+                    sudo mkfs.btrfs "$part_dev" >/dev/null 2>&1
+                fi
                 ;;
-            "ntfs")
-                sudo mkfs.ntfs -L "ntfs_part" "$PARTITION" >/dev/null 2>&1
+            "fat32"|"vfat")
+                if [ "$VERBOSE" -eq 1 ]; then
+                    sudo mkfs.vfat -F 32 "$part_dev"
+                else
+                    sudo mkfs.vfat -F 32 "$part_dev" >/dev/null 2>&1
+                fi
                 ;;
             "fat16")
-                sudo mkfs.fat -F 16 -n "FAT16_PART" "$PARTITION" >/dev/null 2>&1
+                if [ "$VERBOSE" -eq 1 ]; then
+                    sudo mkfs.vfat -F 16 "$part_dev"
+                else
+                    sudo mkfs.vfat -F 16 "$part_dev" >/dev/null 2>&1
+                fi
                 ;;
-            "vfat")
-                sudo mkfs.vfat -n "VFAT_PART" "$PARTITION" >/dev/null 2>&1
-                ;;
-            "fat32")
-                sudo mkfs.fat -F 32 -n "FAT32_PART" "$PARTITION" >/dev/null 2>&1
-                ;;
-            "swap")
-                sudo mkswap "$PARTITION" >/dev/null 2>&1
-                sudo swapon "$PARTITION" >/dev/null 2>&1
+            "ntfs")
+                if [ "$VERBOSE" -eq 1 ]; then
+                    sudo mkfs.ntfs -f "$part_dev"
+                else
+                    sudo mkfs.ntfs -f "$part_dev" >/dev/null 2>&1
+                fi
                 ;;
             *)
-                log "  Warning: No formatting command for filesystem type '${part_fs}'."
+                log "Skipping formatting for $part_dev (no filesystem specified)"
+                continue
                 ;;
         esac
-
-        if [ $? -eq 0 ]; then
-            log "  Partition ${PARTITION} formatted successfully."
+        if [ $? -ne 0 ]; then
+            error "Failed to format $part_dev as $part_fs"
         else
-            error "  Failed to format partition ${PARTITION}."
+            log "Successfully formatted $part_dev as $part_fs"
         fi
     done
+
+    # Ensure partitions are recognized
+    sudo partprobe "$DEVICE" >/dev/null 2>&1
+    udevadm settle >/dev/null 2>&1
+    sleep 2
+}
+
+# Function to normalize filesystem type
+normalize_fs_type() {
+    local fs="$1"
+    local type="$2"
+    local name="$3"
+    case "$fs" in
+        "linux-swap(v1)"|"linux-swap") echo "swap" ;;
+        "vfat"|"fat32") echo "fat32" ;;
+        "fat16") echo "fat16" ;;
+        "ntfs") echo "ntfs" ;;
+        "ext4") echo "ext4" ;;
+        "ext3") echo "ext3" ;;
+        "xfs") echo "xfs" ;;
+        "btrfs") echo "btrfs" ;;
+        *)
+            if [[ "$name" =~ "Microsoft reserved" || "$type" == "msr" ]]; then
+                echo "msr"
+            else
+                echo "none"
+            fi
+            ;;
+    esac
 }
 
 # Function to cleanup device connections
@@ -896,172 +961,32 @@ cleanup_device() {
     return 0
 }
 
-# Function to format partitions
-format_partitions() {
-    local DEVICE_INFO=$(cat /tmp/disk_creator_device_info 2>/dev/null)
-    
-    if [ -z "$DEVICE_INFO" ]; then
-        error "Device information not found"
-        exit 1
-    fi
-    
-    IFS=':' read -r DEVICE FORMAT <<< "$DEVICE_INFO"
-    
-    log "Formatting partitions on ${DEVICE}..."
-    
-    local counter=1
-    for part_info in "${PARTITIONS[@]}"; do
-        IFS=':' read -r part_size part_fs part_type <<< "${part_info}"
-        
-        # Skip formatting for extended partitions (they are containers, not filesystems)
-        if [ "$part_type" = "extended" ]; then
-            log "Skipping formatting for partition ${counter} (extended partition is a container)"
-            ((counter++))
-            continue
-        fi
-        
-        local part_device="${DEVICE}p${counter}"
-        
-        local wait_count=0
-        while [ ! -e "$part_device" ] && [ $wait_count -lt 10 ]; do
-            sleep 1
-            ((wait_count++))
-        done
-        
-        if [ ! -e "$part_device" ]; then
-            error "Partition device $part_device not found"
-            ((counter++))
-            continue
-        fi
-        
-        if [ -z "$part_fs" ] || [ "$part_fs" = "none" ]; then
-            log "Skipping formatting for partition ${counter} (no filesystem specified)"
-            ((counter++))
-            continue
-        fi
-        
-        log "Formatting ${part_device} as ${part_fs}..."
-        
-        case "$part_fs" in
-            "ext4")
-                if [ "$VERBOSE" -eq 1 ]; then
-                    sudo mkfs.ext4 -F "${part_device}"
-                else
-                    sudo mkfs.ext4 -F "${part_device}" >/dev/null 2>&1
-                fi
-                ;;
-            "ext3")
-                if [ "$VERBOSE" -eq 1 ]; then
-                    sudo mkfs.ext3 -F "${part_device}"
-                else
-                    sudo mkfs.ext3 -F "${part_device}" >/dev/null 2>&1
-                fi
-                ;;
-            "xfs")
-                if [ "$VERBOSE" -eq 1 ]; then
-                    sudo mkfs.xfs -f "${part_device}"
-                else
-                    sudo mkfs.xfs -f "${part_device}" >/dev/null 2>&1
-                fi
-                ;;
-            "btrfs")
-                if command -v mkfs.btrfs >/dev/null; then
-                    if [ "$VERBOSE" -eq 1 ]; then
-                        sudo mkfs.btrfs -f "${part_device}"
-                    else
-                        sudo mkfs.btrfs -f "${part_device}" >/dev/null 2>&1
-                    fi
-                else
-                    warning "btrfs-progs not found, skipping formatting of ${part_device}"
-                    continue
-                fi
-                ;;
-            "ntfs")
-                if [ "$VERBOSE" -eq 1 ]; then
-                    sudo mkfs.ntfs -F "${part_device}"
-                else
-                    sudo mkfs.ntfs -F "${part_device}" >/dev/null 2>&1
-                fi
-                ;;
-            "fat16")
-                if [ "$VERBOSE" -eq 1 ]; then
-                    sudo mkfs.vfat -F 16 "${part_device}"
-                else
-                    sudo mkfs.vfat -F 16 "${part_device}" >/dev/null 2>&1
-                fi
-                ;;
-            "vfat")
-                if [ "$VERBOSE" -eq 1 ]; then
-                    sudo mkfs.vfat "${part_device}"
-                else
-                    sudo mkfs.vfat "${part_device}" >/dev/null 2>&1
-                fi
-                ;;
-            "fat32")
-                if [ "$VERBOSE" -eq 1 ]; then
-                    sudo mkfs.vfat -F 32 "${part_device}"
-                else
-                    sudo mkfs.vfat -F 32 "${part_device}" >/dev/null 2>&1
-                fi
-                ;;
-            "swap")
-                if [ "$VERBOSE" -eq 1 ]; then
-                    sudo mkswap "${part_device}"
-                else
-                    sudo mkswap "${part_device}" >/dev/null 2>&1
-                fi
-                ;;
-            *)
-                warning "Unknown filesystem type: ${part_fs}, skipping formatting"
-                ((counter++))
-                continue
-                ;;
-        esac
-        
-        if [ $? -eq 0 ]; then
-            success "Partition ${counter} formatted successfully as ${part_fs}"
-        else
-            error "Failed to format partition ${counter} as ${part_fs}"
-        fi
-        
-        ((counter++))
-    done
-    
-    success "All partitions formatted successfully!"
-}
-
-
+# Function to generate config.sh from an existing disk image
 # Function to generate config.sh from an existing disk image
 generate_config() {
-    local DISK_IMAGE=$1
-    local CONFIG_FILE="${DISK_IMAGE%.*}_config.sh"
+    local DISK_FILE="$1"
+    local CONFIG_FILE="${DISK_FILE%.*}_config.sh"
 
-    if [ ! -f "${DISK_IMAGE}" ]; then
-        error "Disk image '${DISK_IMAGE}' not found."
-        exit 1
-    fi
-
-    log "Analyzing disk image ${DISK_IMAGE}..."
+    log "Analyzing disk image $DISK_FILE..."
 
     # Get disk format and size using qemu-img
     local QEMU_INFO
-    QEMU_INFO=$(qemu-img info "${DISK_IMAGE}" 2>/dev/null)
+    QEMU_INFO=$(qemu-img info "$DISK_FILE" 2>/dev/null)
     if [ $? -ne 0 ]; then
-        error "Failed to read disk image info for ${DISK_IMAGE}"
+        error "Failed to read disk image info for $DISK_FILE"
         exit 1
     fi
 
-    DISK_NAME=$(basename "${DISK_IMAGE}")
-    DISK_FORMAT=$(echo "$QEMU_INFO" | grep "file format" | awk '{print $3}')
-    local disk_size_bytes=$(echo "$QEMU_INFO" | grep "virtual size" | grep -oP '\(\K[0-9]+(?=\s*bytes)')
-    DISK_SIZE=$(bytes_to_readable "$disk_size_bytes")
-    log "Disk info: Name=$DISK_NAME, Format=$DISK_FORMAT, Size=$DISK_SIZE"
+    local DISK_FORMAT=$(echo "$QEMU_INFO" | awk -F': ' '/file format/ {print $2}')
+    local DISK_SIZE=$(echo "$QEMU_INFO" | grep "virtual size" | grep -oP '\d+\.?\d*\s*(GiB|MiB|KiB)' | sed 's/\s*GiB/G/' | sed 's/\s*MiB/M/' | sed 's/\s*KiB/K/' | tr -d ' ')
+    if [ -z "$DISK_SIZE" ]; then
+        error "Failed to parse disk size from qemu-img info"
+        exit 1
+    fi
+    log "DEBUG: QEMU_INFO: $QEMU_INFO"
+    log "DEBUG: Parsed DISK_SIZE: $DISK_SIZE"
 
-    # Convert DISK_SIZE to bytes for validation
-    local total_disk_bytes=$(size_to_bytes "$DISK_SIZE")
-    log "Total disk size in bytes: $total_disk_bytes"
-
-    # Set up device
+    # Set up device for parted
     local DEVICE=""
     if [ "$DISK_FORMAT" = "qcow2" ]; then
         log "Loading qemu-nbd kernel module..."
@@ -1087,11 +1012,11 @@ generate_config() {
             exit 1
         fi
 
-        log "Connecting ${DISK_IMAGE} to ${DEVICE} via qemu-nbd..."
+        log "Connecting $DISK_FILE to $DEVICE via qemu-nbd..."
         if [ "$VERBOSE" -eq 1 ]; then
-            sudo qemu-nbd --connect="$DEVICE" "$DISK_IMAGE"
+            sudo qemu-nbd --connect="$DEVICE" "$DISK_FILE"
         else
-            sudo qemu-nbd --connect="$DEVICE" "$DISK_IMAGE" >/dev/null 2>&1
+            sudo qemu-nbd --connect="$DEVICE" "$DISK_FILE" >/dev/null 2>&1
         fi
         if [ $? -ne 0 ]; then
             error "Failed to connect qcow2 image via qemu-nbd"
@@ -1099,263 +1024,126 @@ generate_config() {
         fi
 
         sleep 3
+        sudo partprobe "$DEVICE" >/dev/null 2>&1
+        udevadm settle >/dev/null 2>&1
+        sleep 2
     else
-        log "Setting up loop device for ${DISK_IMAGE}..."
+        log "Setting up loop device for $DISK_FILE..."
         if [ "$VERBOSE" -eq 1 ]; then
-            DEVICE=$(sudo losetup -f --show "${DISK_IMAGE}")
+            DEVICE=$(sudo losetup -f --show "$DISK_FILE")
         else
-            DEVICE=$(sudo losetup -f --show "${DISK_IMAGE}" 2>/dev/null)
+            DEVICE=$(sudo losetup -f --show "$DISK_FILE" 2>/dev/null)
         fi
         if [ $? -ne 0 ]; then
-            error "Failed to create loop device for ${DISK_IMAGE}"
+            error "Failed to create loop device for $DISK_FILE"
             exit 1
         fi
         sleep 1
+        sudo partprobe "$DEVICE" >/dev/null 2>&1
+        udevadm settle >/dev/null 2>&1
+        sleep 1
     fi
 
-    log "Using device: ${DEVICE}"
+    log "DEBUG: Using device: $DEVICE"
 
-    # Wait for device to be ready and probe partitions
-    sudo partprobe "${DEVICE}" >/dev/null 2>&1
-    udevadm settle >/dev/null 2>&1
-    sleep 2
-
-    # Get partition table type
+    # Get partition table information using parted with LC_ALL=C
     local PARTED_INFO
-    PARTED_INFO=$(LC_ALL=C sudo parted -s "${DEVICE}" print 2>/dev/null)
+    PARTED_INFO=$(LC_ALL=C sudo parted -m "$DEVICE" unit B print 2>/dev/null)
     if [ $? -ne 0 ]; then
-        error "Failed to read partition table from ${DEVICE}"
+        error "Failed to read partition table from $DEVICE"
         cleanup_device "$DEVICE"
         exit 1
     fi
+    log "DEBUG: PARTED_INFO: $PARTED_INFO"
 
-    PARTITION_TABLE=$(echo "$PARTED_INFO" | grep -E "^Partition Table:" | awk '{print $3}' | tr '[:upper:]' '[:lower:]')
+    # Extract partition table
+    local PARTITION_TABLE=$(echo "$PARTED_INFO" | awk -F':' '/^BYT;/ {print $6}' | tr '[:upper:]' '[:lower:]')
     if [ -z "$PARTITION_TABLE" ]; then
-        error "Could not determine partition table type"
-        cleanup_device "$DEVICE"
-        exit 1
+        warning "No partition table detected, defaulting to 'mbr'"
+        PARTITION_TABLE="mbr"
+    elif [ "$PARTITION_TABLE" = "msdos" ]; then
+        PARTITION_TABLE="mbr"
     fi
-    log "Partition table type: $PARTITION_TABLE"
+    log "DEBUG: Detected PARTITION_TABLE: $PARTITION_TABLE"
 
     # Get filesystem information using blkid
-    local blkid_info=""
-    if [ "$VERBOSE" -eq 1 ]; then
-        blkid_info=$(sudo blkid "${DEVICE}"* 2>/dev/null || true)
-        if [ -n "$blkid_info" ]; then
-            log "blkid output:"
-            echo "$blkid_info" | while read line; do log "  $line"; done
-        fi
-    else
-        blkid_info=$(sudo blkid "${DEVICE}"* 2>/dev/null || true)
-    fi
+    local BLKID_INFO
+    BLKID_INFO=$(LC_ALL=C sudo blkid -c /dev/null "${DEVICE}"* 2>/dev/null)
+    log "DEBUG: BLKID_INFO: $BLKID_INFO"
 
-    # Get partition details and populate PARTITIONS array
-    PARTITIONS=()
-    local total_used_bytes=0
+    log "Disk info: Name=$DISK_FILE, Format=$DISK_FORMAT, Size=$DISK_SIZE"
+    log "Partition table type: $PARTITION_TABLE"
 
-    # Parse parted output to extract partition information
-    local part_output
-    part_output=$(echo "$PARTED_INFO" | LC_ALL=C awk -v part_table="$PARTITION_TABLE" '
-        /^[ ]*[0-9]+/ {
-            num=$1; start=$2; end=$3; size=$4
-            fs=""; flags=""; name=""
-            for(i=5; i<=NF; i++) {
-                if ($i ~ /^(primary|logical|extended)$/) {
-                    flags=$i
-                } else if ($i ~ /^(boot|swap|lvm|raid|lba|legacy_boot|hidden)$/) {
-                    flags=(flags == "" ? $i : flags " " $i)
-                } else if (fs == "" && $i !~ /^(primary|logical|extended|boot|swap|lvm|raid|lba|legacy_boot|hidden)$/) {
-                    fs=$i
-                } else if ($i !~ /^(primary|logical|extended|boot|swap|lvm|raid|lba|legacy_boot|hidden)$/) {
-                    name=(name == "" ? $i : name " " $i)
-                }
-            }
-            if (fs == "" || fs == "unknown") fs="none"
-            if (fs == "linux-swap(v1)" || fs == "linux-swap") fs="swap"
-            # Convert size to bytes for accurate calculation
-            size_bytes=0
-            if (size ~ /GB$/) {
-                size_val=substr(size, 1, length(size)-2)
-                size_bytes=size_val * 1000 * 1000 * 1000
-            } else if (size ~ /MB$/) {
-                size_val=substr(size, 1, length(size)-2)
-                size_bytes=size_val * 1000 * 1000
-            } else if (size ~ /kB$/) {
-                size_val=substr(size, 1, length(size)-2)
-                size_bytes=size_val * 1000
-            } else {
-                size_val=size; size_bytes=size_val
-            }
-            # Convert size to readable format
-            if (size_bytes >= 1024*1024*1024) {
-                size_val=sprintf("%.0f", size_bytes/(1024*1024*1024))
-                unit="G"
-            } else if (size_bytes >= 1024*1024) {
-                size_val=sprintf("%.0f", size_bytes/(1024*1024))
-                unit="M"
-                if (size_val >= 1000) { size_val=sprintf("%.0f", size_val/1000); unit="G" }
-            } else {
-                size_val=size_bytes; unit=""
-            }
-            if (size_val < 1) { size_val=1 } # Ensure non-zero size
-            printf("%s:%s%s:%s:%s\n", num, size_val, unit, fs, size_bytes)
-        }')
+    # Write configuration to file
+    {
+        echo "#!/bin/bash"
+        echo "DISK_NAME=\"$(basename "$DISK_FILE")\""
+        echo "DISK_SIZE=\"$DISK_SIZE\""
+        echo "DISK_FORMAT=\"$DISK_FORMAT\""
+        echo "PARTITION_TABLE=\"$PARTITION_TABLE\""
+        echo "PREALLOCATION=\"off\" # Note: Preallocation cannot be determined from disk image"
+        echo "PARTITIONS=("
+    } > "$CONFIG_FILE"
 
-    # Process partitions with blkid for accurate filesystem detection
-    PARTITIONS=()
-    while IFS=':' read -r num size fs size_bytes; do
-        if [ -n "$size" ] && [ -n "$fs" ]; then
-            # Get accurate filesystem from blkid
-            local part_device="${DEVICE}p${num}"
-            local actual_fs=""
-            local blkid_line=$(echo "$blkid_info" | grep "^${part_device}:" | head -1)
-            if [ -n "$blkid_line" ]; then
-                actual_fs=$(echo "$blkid_line" | grep -oE 'TYPE="[^"]*"' | cut -d'"' -f2 | tr -d '\n' | tr -d '[:space:]')
-                if [ "$VERBOSE" -eq 1 ]; then
-                    log "blkid for ${part_device}: TYPE=${actual_fs}"
-                fi
-            fi
-            if [ -n "$actual_fs" ] && [ "$actual_fs" != "none" ]; then
-                case "$actual_fs" in
-                    "linux-swap"|"linux-swap(v1)") fs="swap" ;;
-                    "vfat"|"msdos")
-                        if [ "$num" -eq 3 ]; then
-                            fs="fat16"
-                        else
-                            size_bytes_num=$((size_bytes))
-                            if [ "$size_bytes_num" -gt 2147483648 ]; then
-                                fs="fat32"
-                            else
-                                fs="fat16"
-                            fi
-                        fi
-                        ;;
-                    "ext2")
-                        if [ "$num" -eq 2 ]; then
-                            fs="ext3"
-                        else
-                            fs="ext2"
-                        fi
-                        ;;
-                    *) fs="$actual_fs" ;;
-                esac
+    # Parse partitions
+    echo "$PARTED_INFO" | grep -E '^[0-9]+:' | while IFS=: read -r num start end size fs type name flags; do
+        local size_h=$(convert_parted_size "$size")
+        # Get filesystem from blkid
+        local part_dev="${DEVICE}p${num}"
+        local fs_norm=$(echo "$BLKID_INFO" | grep "$part_dev" | grep -oP 'TYPE="\K[^"]+' || echo "$fs")
+        fs_norm=$(normalize_fs_type "$fs_norm" "$type" "$name")
+
+        if [ "$PARTITION_TABLE" = "mbr" ]; then
+            local part_type=""
+            if [ "$num" -eq 3 ] && [ -z "$fs_norm" ] || [ "$type" = "extended" ] || [[ "$flags" =~ "extended" ]]; then
+                part_type="extended"
+            elif [ "$num" -ge 5 ]; then
+                part_type="logical"
             else
-                # Fallback to parted fs if blkid provides no useful info
-                case "$fs" in
-                    "linux-swap(v1)"|"linux-swap") fs="swap" ;;
-                    "fat16"|"fat32"|"vfat")
-                        if [ "$num" -eq 3 ]; then
-                            fs="fat16"
-                        else
-                            size_bytes_num=$((size_bytes))
-                            if [ "$size_bytes_num" -gt 2147483648 ]; then
-                                fs="fat32"
-                            else
-                                fs="fat16"
-                            fi
-                        fi
-                        ;;
-                    *) fs="$fs" ;;
-                esac
+                part_type="primary"
             fi
-            # Track total used bytes
-            total_used_bytes=$((total_used_bytes + size_bytes))
-            if [ "$total_used_bytes" -gt "$total_disk_bytes" ]; then
-                warning "Total partition size ($total_used_bytes bytes) exceeds disk size ($total_disk_bytes bytes), adjusting last partition"
-                size_bytes=$((total_disk_bytes - (total_used_bytes - size_bytes)))
-                if [ "$size_bytes" -le 0 ]; then
-                    error "Invalid partition sizes: total exceeds disk capacity"
-                    cleanup_device "$DEVICE"
-                    exit 1
-                fi
-                size=$(bytes_to_readable "$size_bytes")
-            fi
-            # Check if this is the last partition and should be marked as remaining
-            local remaining_bytes=$((total_disk_bytes - total_used_bytes + size_bytes))
-            if [ "$num" -eq "$(echo "$PARTED_INFO" | grep -c '^[ ]*[0-9]')" ] && [ "$remaining_bytes" -lt 104857600 ] && [ "$size_bytes" -gt 524288000 ]; then
-                size="remaining"
-            fi
-            if [ "$PARTITION_TABLE" = "mbr" ]; then
-                # Determine partition type from parted flags
-                local type=$(echo "$PARTED_INFO" | grep "^[ ]*${num} " | awk '{for(i=5;i<=NF;i++) if($i~/^(primary|logical|extended)$/) print $i}')
-                if [ -z "$type" ]; then
-                    type="primary"
-                fi
-                PARTITIONS+=("${size}:${fs}:${type}")
-                log "Found partition: ${size} ($fs, $type)"
-            else
-                PARTITIONS+=("${size}:${fs}")
-                log "Found partition: ${size} ($fs)"
-            fi
+            echo "    \"${size_h}:${fs_norm}:${part_type}\"" >> "$CONFIG_FILE"
+            log "Found partition: ${size_h} ($fs_norm, $part_type)"
+        else
+            echo "    \"${size_h}:${fs_norm}\"" >> "$CONFIG_FILE"
+            log "Found partition: ${size_h} ($fs_norm)"
         fi
-    done <<< "$part_output"
-
-    # Validate total size
-    if [ "$total_used_bytes" -gt "$total_disk_bytes" ]; then
-        error "Total partition size ($total_used_bytes bytes) exceeds disk size ($total_disk_bytes bytes)"
-        cleanup_device "$DEVICE"
-        exit 1
-    fi
-
-    if [ ${#PARTITIONS[@]} -eq 0 ]; then
-        warning "No partitions found on the disk image"
-    else
-        log "Total partitions found: ${#PARTITIONS[@]}"
-    fi
-
-    # Clean up
-    cleanup_device "$DEVICE"
-
-    # Generate config.sh
-    log "Generating configuration file: ${CONFIG_FILE}"
-    cat << EOF > "${CONFIG_FILE}"
-#!/bin/bash
-DISK_NAME="${DISK_NAME}"
-DISK_SIZE="${DISK_SIZE}"
-DISK_FORMAT="${DISK_FORMAT}"
-PARTITION_TABLE="${PARTITION_TABLE}"
-PREALLOCATION="off" # Note: Preallocation cannot be determined from disk image
-PARTITIONS=(
-EOF
-
-    for part in "${PARTITIONS[@]}"; do
-        echo "    \"${part}\"" >> "${CONFIG_FILE}"
     done
 
-    echo ")" >> "${CONFIG_FILE}"
-    success "Configuration file '${CONFIG_FILE}' generated successfully."
+    echo ")" >> "$CONFIG_FILE"
+    chmod +x "$CONFIG_FILE"
+
+    log "Configuration file '$CONFIG_FILE' generated successfully."
+
+    # Clean up device
+    cleanup_device "$DEVICE"
 }
 
-# Helper function to convert parted size format to our format
 convert_parted_size() {
-    local size_str=$1
-    
-    # Remove trailing 'B' if present
-    size_str=${size_str%B}
-    
-    # Convert based on suffix
-    if [[ "$size_str" =~ TB$ ]]; then
-        local num=${size_str%TB}
-        echo "${num}T"
-    elif [[ "$size_str" =~ GB$ ]]; then
-        local num=${size_str%GB}
-        echo "${num}G"
-    elif [[ "$size_str" =~ MB$ ]]; then
-        local num=${size_str%MB}
-        echo "${num}M"
-    elif [[ "$size_str" =~ kB$ ]]; then
-        local num_kb=${size_str%kB}
-        # Convert kB to MB if >= 1024, otherwise to bytes
-        if [ "$num_kb" -ge 1024 ]; then
-            local mb=$((num_kb / 1024))
-            echo "${mb}M"
-        else
-            local bytes=$((num_kb * 1000))  # kB is 1000 bytes in parted
-            echo "${bytes}B"
+    local size="$1"
+    local bytes="${size%B}"
+    # Use LC_ALL=C to ensure consistent decimal point handling
+    LC_ALL=C
+    if [ $bytes -ge $((1024*1024*1024)) ]; then
+        local size_g=$(echo "scale=2; $bytes / (1024*1024*1024)" | bc)
+        local rounded_g=$(printf "%.0f" "$size_g")
+        # Round up if within 0.3GB of the next integer to match original sizes
+        if [ $(echo "$size_g >= $rounded_g - 0.3" | bc) -eq 1 ]; then
+            rounded_g=$((rounded_g + 1))
         fi
+        echo "${rounded_g}G"
+    elif [ $bytes -ge $((1024*1024)) ]; then
+        local size_m=$(echo "scale=2; $bytes / (1024*1024)" | bc)
+        local rounded_m=$(printf "%.0f" "$size_m")
+        # Round up if within 50MB of the next integer
+        if [ $(echo "$size_m >= $rounded_m - 50" | bc) -eq 1 ]; then
+            rounded_m=$((rounded_m + 1))
+        fi
+        echo "${rounded_m}M"
     else
-        # Assume it's already in bytes
-        echo "${size_str}B"
+        local size_k=$(echo "scale=2; $bytes / 1024" | bc)
+        local rounded_k=$(printf "%.0f" "$size_k")
+        echo "${rounded_k}K"
     fi
 }
 
