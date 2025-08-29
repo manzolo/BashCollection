@@ -272,6 +272,38 @@ analyze_disk_with_lsblk() {
     return 0
 }
 
+normalize_fs_type() {
+    local raw_fs="$1"
+    local part_type="$2"   # opzionale: ID partizione (esadecimale)
+
+    case "$raw_fs" in
+        vfat)
+            # Distinguere fat32 vs fat16 in base al tipo partizione
+            if [[ "$part_type" == "0xc" || "$part_type" == "0xb" ]]; then
+                echo "fat32"
+            elif [[ "$part_type" == "0x6" || "$part_type" == "0xe" ]]; then
+                echo "fat16"
+            else
+                echo "fat32"   # fallback
+            fi
+            ;;
+        ntfs)   echo "ntfs" ;;
+        ext2)   echo "ext2" ;;
+        ext3)   echo "ext3" ;;
+        ext4)   echo "ext4" ;;
+        swap)   echo "swap" ;;
+        xfs)    echo "xfs" ;;
+        btrfs)  echo "btrfs" ;;
+        *)
+            # Se non riconosciuto, prova a usare il codice partizione
+            case "$part_type" in
+                0x5|0xf) echo "none" ;;   # extended: non formattata
+                *)       echo "none" ;;
+            esac
+            ;;
+    esac
+}
+
 # --- Main Execution ---
 
 main() {
@@ -311,6 +343,9 @@ main() {
         "raw gpt full 2G:btrfs 2G:xfs 2G:ntfs"
         "raw mbr off 5G:ntfs:primary remaining:ext4:primary"
         "raw mbr full 3G:xfs:primary 2G:ntfs:primary remaining:vfat:primary"
+        "qcow2 gpt full 100M:fat32 16M:msr 9G:ntfs 500M:ntfs"
+        "qcow2 gpt metadata 512M:fat32 8G:ext4 1512M:swap"
+        "raw mbr full 9G:ntfs:primary"
     )
 
     # Set up trap for cleanup on exit or interrupt
@@ -380,12 +415,44 @@ main() {
         # Test the --info option and lsblk analysis
         log "INFO" "Testing --info option with lsblk..."
         if run_command "$SCRIPT_PATH --info \"$disk_file\"" "Disk info for $disk_file" && analyze_disk_with_lsblk "$disk_file"; then
-            log "SUCCESS" "Test $total_tests PASSED"
-            passed_tests=$((passed_tests + 1))
+            log "SUCCESS" "Info test PASSED for Test $total_tests"
         else
             log "ERROR" "Disk info test failed."
             failed_tests=$((failed_tests + 1))
+            continue
         fi
+
+        # Test the --reverse option
+        log "INFO" "Testing --reverse option..."
+        reverse_config="${disk_file%.*}_config.sh"
+        if run_command "$SCRIPT_PATH --reverse \"$disk_file\"" "Reverse config generation for $disk_file"; then
+            if [[ -f "$reverse_config" ]]; then
+                log "SUCCESS" "Reverse config file generated: $reverse_config"
+                # Basic validation of the generated config
+                if grep -q "DISK_NAME=" "$reverse_config" && \
+                   grep -q "DISK_SIZE=" "$reverse_config" && \
+                   grep -q "DISK_FORMAT=" "$reverse_config" && \
+                   grep -q "PARTITION_TABLE=" "$reverse_config"; then
+                    log "SUCCESS" "Reverse config validation PASSED"
+                else
+                    log "ERROR" "Reverse config validation FAILED: missing variables"
+                    failed_tests=$((failed_tests + 1))
+                    continue
+                fi
+            else
+                log "ERROR" "Reverse config file not found: $reverse_config"
+                failed_tests=$((failed_tests + 1))
+                continue
+            fi
+        else
+            log "ERROR" "Reverse config generation failed."
+            failed_tests=$((failed_tests + 1))
+            continue
+        fi
+
+        # If we reach here, the test is fully passed
+        log "SUCCESS" "Test $total_tests PASSED"
+        passed_tests=$((passed_tests + 1))
     done
     
     # Print a summary of the test results

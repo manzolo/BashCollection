@@ -207,7 +207,7 @@ interactive_partition_config() {
             fi
         done
         
-        local PART_FS=$(whiptail --title "Filesystem Type" --menu "Choose a filesystem (or none for unformatted):" 20 70 10 \
+        local PART_FS=$(whiptail --title "Filesystem Type" --menu "Choose a filesystem (or none for unformatted):" 20 70 11 \
         "none" "No filesystem (unformatted)" \
         "ext4" "Standard Linux filesystem (recommended)" \
         "ext3" "Older Linux filesystem" \
@@ -217,7 +217,8 @@ interactive_partition_config() {
         "fat16" "FAT16 filesystem (legacy Windows/DOS)" \
         "vfat" "VFAT filesystem (FAT with long filename support)" \
         "fat32" "FAT32 filesystem (Windows compatible)" \
-        "swap" "Linux swap partition" 3>&1 1>&2 2>&3)
+        "swap" "Linux swap partition" \
+        "msr" "Microsoft Reserved Partition (GPT only)" 3>&1 1>&2 2>&3)
         
         if [ $? -ne 0 ]; then
             break
@@ -370,7 +371,7 @@ create_and_format_disk() {
     fi
     
     success "Virtual disk created successfully."
-
+    
     if [ "${#PARTITIONS[@]}" -gt 0 ]; then
         log "Setting up partitions..."
         create_partitions
@@ -427,91 +428,83 @@ validate_mbr_partitions() {
     local primary_count=0
     local extended_count=0
     local logical_count=0
-    local total_size_bytes=0
-    local disk_size_bytes=$(size_to_bytes "$DISK_SIZE")
+    local logical_partitions=()
+    local other_partitions=()
     
-    # Prima passata: contare i tipi di partizione e le dimensioni
+    # Prima passata: conteggio tipi di partizione
     for part_info in "${PARTITIONS[@]}"; do
         IFS=':' read -r part_size part_fs part_type <<< "${part_info}"
-        
         case "$part_type" in
-            "primary")
-                primary_count=$((primary_count + 1))
-                ;;
-            "extended")
-                extended_count=$((extended_count + 1))
-                ;;
-            "logical")
-                logical_count=$((logical_count + 1))
-                ;;
+            "primary")  primary_count=$((primary_count + 1)); other_partitions+=("$part_info") ;;
+            "extended") extended_count=$((extended_count + 1)); other_partitions+=("$part_info") ;;
+            "logical")  logical_count=$((logical_count + 1)); logical_partitions+=("$part_info") ;;
+            *)          other_partitions+=("$part_info") ;; # default = primary
         esac
-        
-        # Calcolare la dimensione per la validazione
-        if [ "$part_size" != "remaining" ]; then
-            total_size_bytes=$((total_size_bytes + $(size_to_bytes "$part_size")))
-        fi
     done
     
-    # Verifica del requisito della partizione estesa
+    # Se ci sono logiche senza estesa → aggiungila
     if [ $logical_count -gt 0 ] && [ $extended_count -eq 0 ]; then
         log "Logical partitions detected without an extended partition. Adding an extended partition."
-        local logical_size_bytes=0
-        local new_partitions=()
         
-        # Calcolare la dimensione totale delle partizioni logiche
-        for part_info in "${PARTITIONS[@]}"; do
+        local has_remaining_logical=false
+        local logical_total_bytes=0
+        
+        for part_info in "${logical_partitions[@]}"; do
             IFS=':' read -r part_size part_fs part_type <<< "${part_info}"
-            if [ "$part_type" = "logical" ]; then
-                if [ "$part_size" = "remaining" ]; then
-                    error "Logical partition cannot use 'remaining' size"
-                    return 1
-                fi
-                logical_size_bytes=$((logical_size_bytes + $(size_to_bytes "$part_size")))
+            if [ "$part_size" = "remaining" ]; then
+                has_remaining_logical=true
+                break
             fi
+            logical_total_bytes=$((logical_total_bytes + $(size_to_bytes "$part_size")))
         done
         
-        # Aggiungere 1 MiB di overhead per ogni partizione logica
-        local extended_size_bytes=$((logical_size_bytes + (logical_count * 1024 * 1024))) # 1MiB per partizione logica
-        local extended_size=$(bytes_to_readable "$extended_size_bytes")
+        local extended_size
+        if [ "$has_remaining_logical" = true ]; then
+            extended_size="remaining"
+        else
+            # Overhead di 32 MiB per logica
+            local overhead_per_logical=$((32 * 1024 * 1024))
+            local overhead_bytes=$((overhead_per_logical * logical_count))
+            local extended_total_bytes=$((logical_total_bytes + overhead_bytes + 64*1024*1024)) # +64 MiB margine
+            
+            # Arrotonda al GiB superiore
+            local gib=$((1024 * 1024 * 1024))
+            local rounded=$(( (extended_total_bytes + gib - 1) / gib * gib ))
+            extended_size=$(bytes_to_readable "$rounded")
+            
+            log "DEBUG: Logical partitions total: $(bytes_to_readable $logical_total_bytes)"
+            log "DEBUG: Extended partition size with overhead ($logical_count logical partitions): $extended_size"
+        fi
         
-        # Ricostruire l'array PARTITIONS con la partizione estesa
-        for part_info in "${PARTITIONS[@]}"; do
-            IFS=':' read -r part_size part_fs part_type <<< "${part_info}"
-            if [ "$part_type" = "logical" ]; then
-                if [ ${#new_partitions[@]} -eq 0 ] || [ "${new_partitions[-1]}" != "extended" ]; then
-                    new_partitions+=("${extended_size}:none:extended")
-                fi
-            fi
-            new_partitions+=("$part_info")
+        PARTITIONS=()
+        for part in "${other_partitions[@]}"; do
+            PARTITIONS+=("$part")
+        done
+        PARTITIONS+=("${extended_size}:none:extended")
+        for part in "${logical_partitions[@]}"; do
+            PARTITIONS+=("$part")
         done
         
-        # Aggiornare l'array PARTITIONS
-        PARTITIONS=("${new_partitions[@]}")
         extended_count=1
+        log "Added extended partition of size $extended_size containing $logical_count logical partition(s)"
     fi
     
-    # Validare i conteggi
+    # Vincoli MBR
     local total_primary_extended=$((primary_count + extended_count))
     if [ $total_primary_extended -gt 4 ]; then
-        error "MBR partition table can have maximum 4 primary+extended partitions (found: $total_primary_extended)"
+        error "MBR partition table can have max 4 primary+extended partitions (found: $total_primary_extended)"
         return 1
     fi
-    
     if [ $extended_count -gt 1 ]; then
-        error "MBR partition table can have maximum 1 extended partition (found: $extended_count)"
-        return 1
-    fi
-    
-    # Validare la dimensione totale
-    if [ "$total_size_bytes" -gt "$disk_size_bytes" ]; then
-        error "Total partition size exceeds disk size ($DISK_SIZE)"
+        error "MBR can have only 1 extended partition (found: $extended_count)"
         return 1
     fi
     
     return 0
 }
 
-# Function to create partitions
+
+# Updated create_partitions function
 create_partitions() {
     local DEVICE=""
     
@@ -587,11 +580,14 @@ create_partitions() {
         exit 1
     fi
     
-    # Aspettare che le partizioni siano visibili al kernel
+    # Wait for partition devices to be created
     log "Waiting for partition devices to be created..."
     sudo partprobe "${DEVICE}"
     udevadm settle
     sleep 2
+    
+    # Debug: Print the partition array before processing
+    log "DEBUG: Processing partitions: ${PARTITIONS[*]}"
     
     local start_mib=1
     local partition_number=1
@@ -599,15 +595,31 @@ create_partitions() {
     local used_mib=1
     local extended_start_mib=0
     local extended_end_mib=0
-    local in_extended=false
-    local logical_count=0
+    local logical_start_mib=0
     
+    # Calculate total logical partition size for validation
+    local logical_total_mib=0
+    for part_info in "${PARTITIONS[@]}"; do
+        IFS=':' read -r part_size part_fs part_type <<< "${part_info}"
+        if [ "$part_type" = "logical" ] && [ "$part_size" != "remaining" ]; then
+            logical_total_mib=$((logical_total_mib + $(size_to_mib "$part_size")))
+        fi
+    done
+    local overhead_per_logical=32 # MiB per logical partition for EBR and alignment
+    local logical_overhead_mib=$((overhead_per_logical * $(echo "${PARTITIONS[*]}" | grep -c ":logical")))
+    
+    # First pass: create primary and extended partitions
     for part_info in "${PARTITIONS[@]}"; do
         IFS=':' read -r part_size part_fs part_type <<< "${part_info}"
         if [ -z "$part_type" ] && [ "$PARTITION_TABLE" = "mbr" ]; then
             part_type="primary"
         fi
-        
+
+        # Skip logical partitions in the first pass
+        if [ "$part_type" = "logical" ]; then
+            continue
+        fi
+
         log "Creating partition ${partition_number}: ${part_size} (${part_fs:-none}, ${part_type:-none})"
         
         local size_mib
@@ -629,11 +641,22 @@ create_partitions() {
             fi
         fi
         
+        # For extended partition, ensure it can hold all logical partitions plus overhead
+        if [ "$part_type" = "extended" ] && [ "$part_size" != "remaining" ]; then
+            local extended_size_mib=$(size_to_mib "$part_size")
+            if [ $((logical_total_mib + logical_overhead_mib)) -gt $extended_size_mib ]; then
+                error "Extended partition size ($part_size) is too small to hold logical partitions ($logical_total_mib MiB + $logical_overhead_mib MiB overhead)"
+                cleanup_device "$DEVICE"
+                exit 1
+            fi
+        fi
+        
         local part_name=""
         case "${part_fs:-unknown}" in
             "swap") part_name="Linux_swap" ;;
             "ext4"|"ext3"|"xfs"|"btrfs") part_name="Linux_filesystem" ;;
             "ntfs"|"fat16"|"vfat"|"fat32") part_name="Microsoft_basic_data" ;;
+            "msr") part_name="Microsoft_reserved_partition" ;;
             *) part_name="Unformatted" ;;
         esac
 
@@ -647,50 +670,34 @@ create_partitions() {
             "ext3") parted_fs_type="ext3" ;;
             "xfs") parted_fs_type="xfs" ;;
             "btrfs") parted_fs_type="btrfs" ;;
+            "msr") parted_fs_type="" ;;
             *) parted_fs_type="" ;;
         esac
         
         if [ "$PARTITION_TABLE" = "gpt" ]; then
-            if [ "$VERBOSE" -eq 1 ]; then
-                sudo parted -s "${DEVICE}" mkpart "${part_name}" "${parted_fs_type}" "${start_mib}MiB" "${end_position}"
+            if [ "$part_fs" = "msr" ]; then
+                if [ "$VERBOSE" -eq 1 ]; then
+                    sudo parted -s "${DEVICE}" mkpart "${part_name}" "" "${start_mib}MiB" "${end_position}"
+                else
+                    sudo parted -s "${DEVICE}" mkpart "${part_name}" "" "${start_mib}MiB" "${end_position}" >/dev/null 2>&1
+                fi
             else
-                sudo parted -s "${DEVICE}" mkpart "${part_name}" "${parted_fs_type}" "${start_mib}MiB" "${end_position}" >/dev/null 2>&1
+                if [ "$VERBOSE" -eq 1 ]; then
+                    sudo parted -s "${DEVICE}" mkpart "${part_name}" "${parted_fs_type}" "${start_mib}MiB" "${end_position}"
+                else
+                    sudo parted -s "${DEVICE}" mkpart "${part_name}" "${parted_fs_type}" "${start_mib}MiB" "${end_position}" >/dev/null 2>&1
+                fi
             fi
         else
             if [ "$part_type" = "extended" ]; then
-                in_extended=true
-                extended_start_mib=$start_mib
-                extended_end_mib=$end_position
                 if [ "$VERBOSE" -eq 1 ]; then
                     sudo parted -s "${DEVICE}" mkpart "${part_type}" "${start_mib}MiB" "${end_position}"
                 else
                     sudo parted -s "${DEVICE}" mkpart "${part_type}" "${start_mib}MiB" "${end_position}" >/dev/null 2>&1
                 fi
-            elif [ "$part_type" = "logical" ]; then
-                if [ "$in_extended" = false ]; then
-                    error "Cannot create logical partition without an extended partition"
-                    cleanup_device "$DEVICE"
-                    exit 1
-                fi
-                # La prima partizione logica inizia subito dopo l'inizio della partizione estesa
-                # Ogni partizione logica successiva aggiunge 1MiB di offset per l'EBR
-                if [ $logical_count -eq 0 ]; then
-                    start_mib=$extended_start_mib
-                else
-                    start_mib=$((extended_start_mib + logical_count))
-                fi
-                end_position=$((start_mib + size_mib))
-                if [ $end_position -gt $extended_end_mib ]; then
-                    error "Logical partition ${partition_number} exceeds extended partition boundaries"
-                    cleanup_device "$DEVICE"
-                    exit 1
-                fi
-                if [ "$VERBOSE" -eq 1 ]; then
-                    sudo parted -s "${DEVICE}" mkpart "${part_type}" "${parted_fs_type}" "${start_mib}MiB" "${end_position}MiB"
-                else
-                    sudo parted -s "${DEVICE}" mkpart "${part_type}" "${parted_fs_type}" "${start_mib}MiB" "${end_position}MiB" >/dev/null 2>&1
-                fi
-                logical_count=$((logical_count + 1)) # Incrementa il contatore delle partizioni logiche
+                extended_start_mib=$(sudo parted -s "${DEVICE}" print | awk '/extended/ {print int($2)}')
+                extended_end_mib=$(sudo parted -s "${DEVICE}" print | awk '/extended/ {print int($3)}')
+                logical_start_mib=$((extended_start_mib + 1)) # Start logical partitions after EBR
             else
                 if [ "$VERBOSE" -eq 1 ]; then
                     sudo parted -s "${DEVICE}" mkpart "${part_type}" "${parted_fs_type}" "${start_mib}MiB" "${end_position}"
@@ -699,39 +706,164 @@ create_partitions() {
                 fi
             fi
         fi
-        if [ $? -ne 0 ]; then
-            error "Failed to create partition ${partition_number}"
+        
+        local parted_exit_code=$?
+        if [ $parted_exit_code -ne 0 ]; then
+            error "Failed to create partition ${partition_number} (exit code: $parted_exit_code)"
             cleanup_device "$DEVICE"
             exit 1
         fi
         
-        case "${part_fs:-unknown}" in
-            "swap")
-                if [ "$VERBOSE" -eq 1 ]; then
-                    sudo parted -s "${DEVICE}" set $partition_number swap on
-                else
-                    sudo parted -s "${DEVICE}" set $partition_number swap on >/dev/null 2>&1
-                fi
-                if [ $? -ne 0 ]; then
-                    error "Failed to set swap flag for partition ${partition_number}"
-                    cleanup_device "$DEVICE"
-                    exit 1
-                fi
-                ;;
-        esac
+        # Update start position for next partition (only for non-logical partitions)
+        if [ "$part_type" != "logical" ]; then
+            start_mib=$(sudo parted -s "${DEVICE}" print | awk -v num="$partition_number" '$1 == num {print int($3)}')
+            used_mib=$start_mib
+        fi
+        ((partition_number++))
+    done
+
+    # Now handle the logical partitions
+    log "Creating logical partitions..."
+    for part_info in "${PARTITIONS[@]}"; do
+        IFS=':' read -r part_size part_fs part_type <<< "${part_info}"
+        if [ "$part_type" != "logical" ]; then
+            continue
+        fi
+
+        log "Creating logical partition: ${part_size} (${part_fs})"
         
-        if [ "$end_position" != "100%" ]; then
-            start_mib=$end_position
-            used_mib=$end_position
+        local parted_fs_type
+        case "${part_fs:-unknown}" in
+            "swap") parted_fs_type="linux-swap" ;;
+            "vfat"|"fat32") parted_fs_type="fat32" ;;
+            "fat16") parted_fs_type="fat16" ;;
+            "ntfs") parted_fs_type="ntfs" ;;
+            "ext4") parted_fs_type="ext4" ;;
+            "ext3") parted_fs_type="ext3" ;;
+            "xfs") parted_fs_type="xfs" ;;
+            "btrfs") parted_fs_type="btrfs" ;;
+            *) parted_fs_type="" ;;
+        esac
+
+        local part_end_position
+        if [ "$part_size" = "remaining" ]; then
+            part_end_position=$((extended_end_mib - 1)) # Leave 1 MiB for EBR
         else
-            start_mib=$total_disk_mib
-            used_mib=$total_disk_mib
+            local size_mib=$(size_to_mib "$part_size")
+            part_end_position=$((logical_start_mib + size_mib))
+            
+            if [ $part_end_position -gt $((extended_end_mib - 1)) ]; then
+                error "Logical partition size ($part_size) exceeds remaining space in extended partition ($((extended_end_mib - logical_start_mib)) MiB available)"
+                cleanup_device "$DEVICE"
+                exit 1
+            fi
         fi
         
+        if [ "$VERBOSE" -eq 1 ]; then
+            sudo parted -s "${DEVICE}" mkpart logical "${parted_fs_type}" "${logical_start_mib}MiB" "${part_end_position}MiB"
+        else
+            sudo parted -s "${DEVICE}" mkpart logical "${parted_fs_type}" "${logical_start_mib}MiB" "${part_end_position}MiB" >/dev/null 2>&1
+        fi
+        
+        local parted_exit_code=$?
+        if [ $parted_exit_code -ne 0 ]; then
+            error "Failed to create logical partition (exit code: $parted_exit_code)"
+            cleanup_device "$DEVICE"
+            exit 1
+        fi
+
+        local actual_end_mib=$(sudo parted -s "${DEVICE}" print | awk '/logical/ {print int($3)}' | tail -1)
+        if [[ ! -z "$actual_end_mib" ]]; then
+            logical_start_mib=$((actual_end_mib + 1)) # Add 1 MiB for next EBR
+        fi
+        
+        sleep 2
+        sudo partprobe "${DEVICE}" >/dev/null 2>&1
+        sleep 1
+
         ((partition_number++))
     done
     
+    # Final check: wait for all partitions to appear
+    log "Waiting for all partitions to be recognized..."
+    sleep 3
+    sudo partprobe "${DEVICE}" >/dev/null 2>&1
+    sleep 2
+    
+    # Debug: List what partitions actually exist
+    log "DEBUG: Checking partition devices:"
+    ls -la "${DEVICE}"* 2>/dev/null | while IFS= read -r line; do log "DEBUG: $line"; done
+    
+    # Write device info to a temporary file for cleanup function
     echo "${DEVICE}:${DISK_FORMAT}" > /tmp/disk_creator_device_info
+}
+
+# format_partitions is not fully visible in the provided content, but its logic
+# should handle the special case of 'msr' by skipping it.
+format_partitions() {
+    local DEVICE=$(awk -F: '{print $1}' /tmp/disk_creator_device_info)
+    local DISK_FORMAT=$(awk -F: '{print $2}' /tmp/disk_creator_device_info)
+    
+    log "Formatting partitions..."
+    
+    local PARTITIONS_LIST
+    if [ "$DISK_FORMAT" = "qcow2" ]; then
+        PARTITIONS_LIST=$(sudo parted -s "$DEVICE" print | awk '/^[ ]*[0-9]+/ {print $1}')
+    else
+        PARTITIONS_LIST=$(sudo fdisk -l "$DEVICE" | awk '/^'${DEVICE}'[1-9]/ {print $1}' | tr '\n' ' ')
+    fi
+
+    for PARTITION in $PARTITIONS_LIST; do
+        local PART_NUMBER=$(echo "$PARTITION" | sed 's/[^0-9]//g')
+        local part_info="${PARTITIONS[$((PART_NUMBER - 1))]}"
+        local part_fs=$(echo "$part_info" | cut -d: -f2)
+
+        if [ "$part_fs" = "msr" ] || [ "$part_fs" = "none" ] || [ "$part_fs" = "extended" ]; then
+            log "  Skipping formatting for partition ${PART_NUMBER} (${part_fs})."
+            continue
+        fi
+
+        log "  Formatting partition ${PARTITION} with filesystem ${part_fs}..."
+        case "$part_fs" in
+            "ext4")
+                sudo mkfs.ext4 -L "ext4_part" "$PARTITION" >/dev/null 2>&1
+                ;;
+            "ext3")
+                sudo mkfs.ext3 -L "ext3_part" "$PARTITION" >/dev/null 2>&1
+                ;;
+            "xfs")
+                sudo mkfs.xfs -L "xfs_part" "$PARTITION" >/dev/null 2>&1
+                ;;
+            "btrfs")
+                sudo mkfs.btrfs -L "btrfs_part" "$PARTITION" >/dev/null 2>&1
+                ;;
+            "ntfs")
+                sudo mkfs.ntfs -L "ntfs_part" "$PARTITION" >/dev/null 2>&1
+                ;;
+            "fat16")
+                sudo mkfs.fat -F 16 -n "FAT16_PART" "$PARTITION" >/dev/null 2>&1
+                ;;
+            "vfat")
+                sudo mkfs.vfat -n "VFAT_PART" "$PARTITION" >/dev/null 2>&1
+                ;;
+            "fat32")
+                sudo mkfs.fat -F 32 -n "FAT32_PART" "$PARTITION" >/dev/null 2>&1
+                ;;
+            "swap")
+                sudo mkswap "$PARTITION" >/dev/null 2>&1
+                sudo swapon "$PARTITION" >/dev/null 2>&1
+                ;;
+            *)
+                log "  Warning: No formatting command for filesystem type '${part_fs}'."
+                ;;
+        esac
+
+        if [ $? -eq 0 ]; then
+            log "  Partition ${PARTITION} formatted successfully."
+        else
+            error "  Failed to format partition ${PARTITION}."
+        fi
+    done
 }
 
 # Function to cleanup device connections
