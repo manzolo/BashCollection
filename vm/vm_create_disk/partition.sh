@@ -14,12 +14,24 @@ create_partitions() {
         exit 1
     fi
     
-    # Calculate sizes
-    IFS=':' read -r total_disk_mib logical_total_mib logical_overhead_mib <<< $(calculate_partition_sizes)
+    # Calculate sizes in MB for exact positioning
+    local total_disk_mb=$(size_to_exact_mb "$DISK_SIZE")
+    local logical_total_mb=0
+    local logical_overhead_mb=0
+
+    # Calculate total logical partition size
+    for part_info in "${PARTITIONS[@]}"; do
+        IFS=':' read -r part_size part_fs part_type <<< "${part_info}"
+        if [ "$part_type" = "logical" ] && [ "$part_size" != "remaining" ]; then
+            logical_total_mb=$((logical_total_mb + $(size_to_exact_mb "$part_size")))
+        fi
+    done
+    
+    logical_overhead_mb=$((1 * $(echo "${PARTITIONS[*]}" | grep -c ":logical")))
     
     # Create primary and extended partitions
-    IFS=':' read -r next_partition_number start_mib <<< $(create_primary_partitions \
-        "$DEVICE" 1 "$total_disk_mib" "$logical_total_mib" "$logical_overhead_mib")
+    IFS=':' read -r next_partition_number start_mb <<< $(create_primary_partitions \
+        "$DEVICE" 1 "$total_disk_mb" "$logical_total_mb" "$logical_overhead_mb")
     
     if [ $? -ne 0 ]; then
         cleanup_device "$DEVICE"
@@ -28,24 +40,68 @@ create_partitions() {
     
     # Create logical partitions if needed
     if [ $(echo "${PARTITIONS[*]}" | grep -c ":logical") -gt 0 ]; then
-        create_logical_partitions "$DEVICE" "$start_mib" "$total_disk_mib"
+        create_logical_partitions "$DEVICE" "$start_mb" "$total_disk_mb"
         if [ $? -ne 0 ]; then
             cleanup_device "$DEVICE"
             exit 1
         fi
     fi
     
+    # Debug: Print partition table and device list
+    log "DEBUG: Partition table after creation:"
+    sudo parted -s "${DEVICE}" print >&2
+    log "DEBUG: Partition devices:"
+    ls -la "${DEVICE}"* >&2
+    
     # Final cleanup and verification
     finalize_partitions "$DEVICE"
+}
+
+verify_partition_sizes() {
+    local device="$1"
+    
+    log "Verifying partition sizes..."
+    
+    sudo parted -s "$device" unit MB print | awk '
+        /^[ ]*[0-9]+/ {
+            part_num = $1
+            start = $2 + 0
+            end = $3 + 0
+            size = $4 + 0
+            expected_size = expected_sizes[part_num]
+            
+            if (expected_size != "" && expected_size != "remaining") {
+                size_diff = (size > expected_size) ? size - expected_size : expected_size - size
+                if (size_diff > 2) { # Allow 2MB tolerance for overhead
+                    printf "WARNING: Partition %d: expected %dMB, got %dMB (diff: %dMB)\n", 
+                           part_num, expected_size, size, size_diff
+                } else {
+                    printf "OK: Partition %d: %dMB (expected %dMB)\n", part_num, size, expected_size
+                }
+            }
+        }
+    ' expected_sizes="$(
+        for i in "${!PARTITIONS[@]}"; do
+            IFS=':' read -r size fs type <<< "${PARTITIONS[$i]}"
+            if [ "$size" != "remaining" ]; then
+                echo "$((i+1)):$(size_to_exact_mb "$size")"
+            fi
+        done
+    )"
 }
 
 finalize_partitions() {
     local device="$1"
     
     log "Waiting for all partitions to be recognized..."
-    sleep 3
-    sudo partprobe "${device}" >/dev/null 2>&1
     sleep 2
+    sudo partprobe "${device}" >/dev/null 2>&1
+    sleep 1
+    
+    # Verify partition sizes
+    if [ "$VERBOSE" -eq 1 ]; then
+        verify_partition_sizes "$device"
+    fi
     
     # Debug info
     log "DEBUG: Checking partition devices:"
@@ -169,13 +225,14 @@ wait_for_partitions() {
 
 create_primary_partitions() {
     local device="$1"
-    local start_mib="$2"
-    local total_disk_mib="$3"
-    local logical_total_mib="$4"
-    local logical_overhead_mib="$5"
+    local start_mb="$2"
+    local total_disk_mb="$3"
+    local logical_total_mb="$4"
+    local logical_overhead_mb="$5"
     
     local partition_number=1
-    local used_mib="$start_mib"
+    
+    log "DEBUG: Starting primary partition creation with start_mb=$start_mb, total_disk_mb=$total_disk_mb"
     
     for part_info in "${PARTITIONS[@]}"; do
         IFS=':' read -r part_size part_fs part_type <<< "${part_info}"
@@ -189,21 +246,25 @@ create_primary_partitions() {
             part_type="primary"
         fi
 
-        create_single_partition "$device" "$part_size" "$part_fs" "$part_type" \
-            "$partition_number" "$start_mib" "$total_disk_mib" \
-            "$logical_total_mib" "$logical_overhead_mib"
+        log "DEBUG: Processing partition $partition_number: size=$part_size, fs=$part_fs, type=$part_type"
+        
+        # Get updated start position from create_single_partition
+        local new_start_mb
+        new_start_mb=$(create_single_partition "$device" "$part_size" "$part_fs" "$part_type" \
+            "$partition_number" "$start_mb" "$total_disk_mb" \
+            "$logical_total_mb" "$logical_overhead_mb")
         
         if [ $? -ne 0 ]; then
+            error "Failed to create partition $partition_number"
             return 1
         fi
         
-        # Update positions
-        start_mib=$(sudo parted -s "${device}" print | awk -v num="$partition_number" '$1 == num {print int($3)}')
-        used_mib="$start_mib"
+        start_mb=$new_start_mb
+        log "DEBUG: Updated start_mb=$start_mb for partition $partition_number"
         ((partition_number++))
     done
     
-    echo "$partition_number:$start_mib"
+    echo "$partition_number:$start_mb"
 }
 
 create_single_partition() {
@@ -212,90 +273,116 @@ create_single_partition() {
     local part_fs="$3"
     local part_type="$4"
     local partition_number="$5"
-    local start_mib="$6"
-    local total_disk_mib="$7"
-    local logical_total_mib="$8"
-    local logical_overhead_mib="$9"
+    local start_mb="$6"
+    local total_disk_mb="$7"
+    local logical_total_mb="$8"
+    local logical_overhead_mb="$9"
     
-    log "Creating partition ${partition_number}: ${part_size} (${part_fs:-none}, ${part_type:-none})"
-    
-    local size_mib
-    local end_position
-    
-    if [ "$part_size" = "remaining" ]; then
-        size_mib=$((total_disk_mib - start_mib))
-        if [ $size_mib -le 0 ]; then
-            error "No remaining space for partition ${partition_number}"
-            return 1
-        fi
-        end_position="100%"
-    else
-        size_mib=$(size_to_mib "$part_size")
-        end_position=$((start_mib + size_mib))
-        if [ $end_position -gt $total_disk_mib ]; then
-            warning "Partition ${partition_number} size exceeds remaining disk space, adjusting to fit"
-            size_mib=$((total_disk_mib - start_mib))
+    {
+        log "Creating partition ${partition_number}: ${part_size} (${part_fs:-none}, ${part_type:-none})"
+        
+        local size_mb
+        local end_position
+        local end_mb
+
+        if [ "$part_size" = "remaining" ]; then
+            size_mb=$((total_disk_mb - start_mb))
+            if [ $size_mb -le 0 ]; then
+                error "No remaining space for partition ${partition_number}"
+                exit 1
+            fi
             end_position="100%"
-        fi
-    fi
-    
-    # Validate extended partition size
-    if [ "$part_type" = "extended" ] && [ "$part_size" != "remaining" ]; then
-        local extended_size_mib=$(size_to_mib "$part_size")
-        if [ $((logical_total_mib + logical_overhead_mib)) -gt $extended_size_mib ]; then
-            error "Extended partition size too small for logical partitions"
-            return 1
-        fi
-    fi
-    
-    local parted_args=()
-    local part_name=$(get_partition_name "$part_fs")
-    local parted_fs_type=$(get_parted_fs_type "$part_fs")
-    
-    if [ "$PARTITION_TABLE" = "gpt" ]; then
-        if [ "$part_fs" = "msr" ]; then
-            parted_args=("${device}" mkpart "${part_name}" "" "${start_mib}MiB" "${end_position}")
         else
-            parted_args=("${device}" mkpart "${part_name}" "${parted_fs_type}" "${start_mib}MiB" "${end_position}")
+            size_mb=$(size_to_exact_mb "$part_size")
+            if [ $? -ne 0 ]; then
+                error "Invalid size format for partition ${partition_number}: $part_size"
+                exit 1
+            fi
+            end_mb=$((start_mb + size_mb))
+            if [ $end_mb -gt $total_disk_mb ]; then
+                warning "Partition ${partition_number} size exceeds remaining disk space, adjusting to fit"
+                size_mb=$((total_disk_mb - start_mb))
+                end_position="100%"
+            else
+                end_position="${end_mb}MB"
+            fi
         fi
-    else
-        if [ "$part_type" = "extended" ]; then
-            parted_args=("${device}" mkpart "${part_type}" "${start_mib}MiB" "${end_position}")
+        
+        # Validate extended partition size
+        if [ "$part_type" = "extended" ] && [ "$part_size" != "remaining" ]; then
+            local extended_size_mb=$(size_to_exact_mb "$part_size")
+            if [ $((logical_total_mb + logical_overhead_mb)) -gt $extended_size_mb ]; then
+                error "Extended partition size too small for logical partitions"
+                exit 1
+            fi
+        fi
+        
+        local parted_args=()
+        local part_name=$(get_partition_name "$part_fs")
+        local parted_fs_type=$(get_parted_fs_type "$part_fs")
+        
+        # Use MB instead of MiB for exact positioning
+        local start_position="${start_mb}MB"
+        
+        if [ "$PARTITION_TABLE" = "gpt" ]; then
+            if [ "$part_fs" = "msr" ]; then
+                parted_args=("${device}" mkpart "${part_name}" "" "${start_position}" "${end_position}")
+            else
+                parted_args=("${device}" mkpart "${part_name}" "${parted_fs_type}" "${start_position}" "${end_position}")
+            fi
         else
-            parted_args=("${device}" mkpart "${part_type}" "${parted_fs_type}" "${start_mib}MiB" "${end_position}")
+            if [ "$part_type" = "extended" ]; then
+                parted_args=("${device}" mkpart "${part_type}" "${start_position}" "${end_position}")
+            else
+                parted_args=("${device}" mkpart "${part_type}" "${parted_fs_type}" "${start_position}" "${end_position}")
+            fi
         fi
-    fi
-    
-    if [ "$VERBOSE" -eq 1 ]; then
-        sudo parted -s "${parted_args[@]}"
-    else
-        sudo parted -s "${parted_args[@]}" >/dev/null 2>&1
-    fi
-    
-    if [ $? -ne 0 ]; then
-        error "Failed to create partition ${partition_number}"
-        return 1
-    fi
-    
-    return 0
+        
+        log "DEBUG: Running parted command: parted -s ${parted_args[*]}"
+        if [ "$VERBOSE" -eq 1 ]; then
+            sudo parted -s "${parted_args[@]}"
+        else
+            sudo parted -s "${parted_args[@]}" >/dev/null 2>&1
+        fi
+        
+        if [ $? -ne 0 ]; then
+            error "Failed to create partition ${partition_number} with command: parted -s ${parted_args[*]}"
+            exit 1
+        fi
+        
+        # Ensure partition table is updated
+        log "DEBUG: Running partprobe and udevadm settle"
+        sudo partprobe "${device}" >/dev/null 2>&1
+        udevadm settle >/dev/null 2>&1
+        sleep 1
+        
+        # Update start position for next partition exactly
+        if [ "$part_size" = "remaining" ]; then
+            start_mb=$total_disk_mb
+        else
+            start_mb=$end_mb
+        fi
+    } >&2  # Redirect all log output to stderr
+
+    echo "$start_mb"  # Output only start_mb to stdout
 }
 
 create_logical_partitions() {
     local device="$1"
-    local extended_start_mib="$2"
-    local total_disk_mib="$3"
+    local extended_start_mb="$2"
+    local total_disk_mb="$3"
     
     log "Creating logical partitions..."
     
-    # Get extended partition boundaries
-    local extended_info=$(sudo parted -s "${device}" print | awk '/extended/ {print int($2) ":" int($3)}')
+    # Get extended partition boundaries in MB
+    local extended_info=$(sudo parted -s "${device}" unit MB print | awk '/extended/ {print int($2) ":" int($3)}')
     if [ -z "$extended_info" ]; then
         error "Extended partition not found for logical partitions"
         return 1
     fi
     
-    IFS=':' read -r extended_start_mib extended_end_mib <<< "$extended_info"
-    local logical_start_mib=$((extended_start_mib + 1)) # Start logical partitions after EBR
+    IFS=':' read -r extended_start_mb extended_end_mb <<< "$extended_info"
+    local logical_start_mb=$((extended_start_mb + 1)) # Start logical partitions after EBR
     
     local logical_number=5
     
@@ -309,45 +396,38 @@ create_logical_partitions() {
         log "Creating logical partition ${logical_number}: ${part_size} (${part_fs})"
         
         local parted_fs_type=$(get_parted_fs_type "$part_fs")
-        local part_end_position
+        local part_end_mb
         
-        # Calculate end position
+        # Calculate end position in MB
         if [ "$part_size" = "remaining" ]; then
-            part_end_position=$((extended_end_mib - 1)) # Leave 1 MiB for EBR
+            part_end_mb=$((extended_end_mb - 1)) # Leave 1 MB for EBR
         else
-            local size_mib=$(size_to_mib "$part_size")
-            part_end_position=$((logical_start_mib + size_mib))
+            local size_mb=$(size_to_exact_mb "$part_size")
+            part_end_mb=$((logical_start_mb + size_mb))
             
-            if [ $part_end_position -gt $((extended_end_mib - 1)) ]; then
-                error "Logical partition size ($part_size) exceeds remaining space in extended partition ($((extended_end_mib - logical_start_mib)) MiB available)"
+            if [ $part_end_mb -gt $((extended_end_mb - 1)) ]; then
+                error "Logical partition size ($part_size) exceeds remaining space in extended partition ($((extended_end_mb - logical_start_mb)) MB available)"
                 return 1
             fi
         fi
         
-        # Create the logical partition
+        # Create the logical partition with exact MB positioning
         if [ "$VERBOSE" -eq 1 ]; then
-            sudo parted -s "${device}" mkpart logical "${parted_fs_type}" "${logical_start_mib}MiB" "${part_end_position}MiB"
+            sudo parted -s "${device}" mkpart logical "${parted_fs_type}" "${logical_start_mb}MB" "${part_end_mb}MB"
         else
-            sudo parted -s "${device}" mkpart logical "${parted_fs_type}" "${logical_start_mib}MiB" "${part_end_position}MiB" >/dev/null 2>&1
+            sudo parted -s "${device}" mkpart logical "${parted_fs_type}" "${logical_start_mb}MB" "${part_end_mb}MB" >/dev/null 2>&1
         fi
         
-        local parted_exit_code=$?
-        if [ $parted_exit_code -ne 0 ]; then
-            error "Failed to create logical partition ${logical_number} (exit code: $parted_exit_code)"
+        if [ $? -ne 0 ]; then
+            error "Failed to create logical partition ${logical_number}"
             return 1
         fi
 
-        # Update start position for next logical partition
-        local actual_end_mib=$(sudo parted -s "${device}" print | awk -v num="$logical_number" '$1 == num {print int($3)}')
-        if [ -n "$actual_end_mib" ]; then
-            logical_start_mib=$((actual_end_mib + 1)) # Add 1 MiB for next EBR
-        else
-            error "Failed to get end position for logical partition ${logical_number}"
-            return 1
-        fi
+        # Update start position exactly for next logical partition
+        logical_start_mb=$((part_end_mb + 1)) # Add 1 MB for next EBR
         
         # Refresh partition table
-        sleep 2
+        sleep 1
         sudo partprobe "${device}" >/dev/null 2>&1
         sleep 1
 

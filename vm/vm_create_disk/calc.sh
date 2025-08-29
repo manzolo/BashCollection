@@ -61,6 +61,41 @@ size_to_mib() {
     echo $(( (bytes + 1024*1024 - 1) / (1024*1024) ))
 }
 
+# Convert size to exact megabytes (1048576 bytes) for precise partitioning
+size_to_exact_mb() {
+    local size=$1
+    if [ "$size" = "remaining" ]; then
+        echo "remaining"
+        return
+    fi
+    
+    local num=${size//[!0-9]/}
+    local unit=${size//[0-9]/}
+    
+    case ${unit^^} in
+        K) echo $((num * 1024 / 1024)) ;;      # KB to MB
+        M) echo $num ;;                        # MB stays MB
+        G) echo $((num * 1024)) ;;             # GB to MB
+        T) echo $((num * 1024 * 1024)) ;;      # TB to MB
+        *) echo $((num / 1024 / 1024)) ;;      # bytes to MB
+    esac
+}
+
+# Convert size to exact bytes for validation
+size_to_exact_bytes() {
+    local size=$1
+    local num=${size//[!0-9]/}
+    local unit=${size//[0-9]/}
+    
+    case ${unit^^} in
+        K) echo $((num * 1024)) ;;
+        M) echo $((num * 1024 * 1024)) ;;
+        G) echo $((num * 1024 * 1024 * 1024)) ;;
+        T) echo $((num * 1024 * 1024 * 1024 * 1024)) ;;
+        *) echo $num ;;
+    esac
+}
+
 convert_parted_size() {
     local size="$1"
     local bytes="${size%B}"
