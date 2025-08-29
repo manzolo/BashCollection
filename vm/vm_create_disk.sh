@@ -962,7 +962,6 @@ cleanup_device() {
 }
 
 # Function to generate config.sh from an existing disk image
-# Function to generate config.sh from an existing disk image
 generate_config() {
     local DISK_FILE="$1"
     local CONFIG_FILE="${DISK_FILE%.*}_config.sh"
@@ -1056,15 +1055,16 @@ generate_config() {
     fi
     log "DEBUG: PARTED_INFO: $PARTED_INFO"
 
-    # Extract partition table
-    local PARTITION_TABLE=$(echo "$PARTED_INFO" | awk -F':' '/^BYT;/ {print $6}' | tr '[:upper:]' '[:lower:]')
-    if [ -z "$PARTITION_TABLE" ]; then
-        warning "No partition table detected, defaulting to 'mbr'"
+    # Check for partition table type using blkid
+    log "DEBUG: BLKID_INFO: $(sudo blkid "${DEVICE}" 2>/dev/null)"
+    if sudo blkid "${DEVICE}" | grep -q 'PTTYPE="gpt"'; then
+        log "DEBUG: Detected PARTITION_TABLE: gpt"
+        PARTITION_TABLE="gpt"
+    else
+        log "DEBUG: Detected PARTITION_TABLE: mbr"
         PARTITION_TABLE="mbr"
-    elif [ "$PARTITION_TABLE" = "msdos" ]; then
-        PARTITION_TABLE="mbr"
+        warning "No GPT partition table detected, defaulting to 'mbr'"
     fi
-    log "DEBUG: Detected PARTITION_TABLE: $PARTITION_TABLE"
 
     # Get filesystem information using blkid
     local BLKID_INFO
