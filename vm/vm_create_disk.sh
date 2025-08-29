@@ -798,105 +798,7 @@ create_partitions() {
     echo "${DEVICE}:${DISK_FORMAT}" > /tmp/disk_creator_device_info
 }
 
-# format_partitions is not fully visible in the provided content, but its logic
-# should handle the special case of 'msr' by skipping it.
-format_partitions() {
-    local DEVICE=$(awk -F: '{print $1}' /tmp/disk_creator_device_info)
-    local DISK_FORMAT=$(awk -F: '{print $2}' /tmp/disk_creator_device_info)
-    
-    log "Formatting partitions..."
-    
-    local PARTITIONS_LIST
-    if [ "$DISK_FORMAT" = "qcow2" ]; then
-        PARTITIONS_LIST=$(sudo parted -s "$DEVICE" print | awk '/^[ ]*[0-9]+/ {print $1}')
-    else
-        PARTITIONS_LIST=$(sudo fdisk -l "$DEVICE" | awk '/^'${DEVICE}'[1-9]/ {print $1}' | tr '\n' ' ')
-    fi
-
-    for PARTITION in $PARTITIONS_LIST; do
-        local PART_NUMBER=$(echo "$PARTITION" | sed 's/[^0-9]//g')
-        local part_info="${PARTITIONS[$((PART_NUMBER - 1))]}"
-        local part_fs=$(echo "$part_info" | cut -d: -f2)
-
-        if [ "$part_fs" = "msr" ] || [ "$part_fs" = "none" ] || [ "$part_fs" = "extended" ]; then
-            log "  Skipping formatting for partition ${PART_NUMBER} (${part_fs})."
-            continue
-        fi
-
-        log "  Formatting partition ${PARTITION} with filesystem ${part_fs}..."
-        case "$part_fs" in
-            "ext4")
-                sudo mkfs.ext4 -L "ext4_part" "$PARTITION" >/dev/null 2>&1
-                ;;
-            "ext3")
-                sudo mkfs.ext3 -L "ext3_part" "$PARTITION" >/dev/null 2>&1
-                ;;
-            "xfs")
-                sudo mkfs.xfs -L "xfs_part" "$PARTITION" >/dev/null 2>&1
-                ;;
-            "btrfs")
-                sudo mkfs.btrfs -L "btrfs_part" "$PARTITION" >/dev/null 2>&1
-                ;;
-            "ntfs")
-                sudo mkfs.ntfs -L "ntfs_part" "$PARTITION" >/dev/null 2>&1
-                ;;
-            "fat16")
-                sudo mkfs.fat -F 16 -n "FAT16_PART" "$PARTITION" >/dev/null 2>&1
-                ;;
-            "vfat")
-                sudo mkfs.vfat -n "VFAT_PART" "$PARTITION" >/dev/null 2>&1
-                ;;
-            "fat32")
-                sudo mkfs.fat -F 32 -n "FAT32_PART" "$PARTITION" >/dev/null 2>&1
-                ;;
-            "swap")
-                sudo mkswap "$PARTITION" >/dev/null 2>&1
-                sudo swapon "$PARTITION" >/dev/null 2>&1
-                ;;
-            *)
-                log "  Warning: No formatting command for filesystem type '${part_fs}'."
-                ;;
-        esac
-
-        if [ $? -eq 0 ]; then
-            log "  Partition ${PARTITION} formatted successfully."
-        else
-            error "  Failed to format partition ${PARTITION}."
-        fi
-    done
-}
-
-# Function to cleanup device connections
-cleanup_device() {
-    local DEVICE=$1
-    
-    if [[ "$DEVICE" =~ /dev/nbd ]]; then
-        log "Disconnecting ${DEVICE}..."
-        if [ "$VERBOSE" -eq 1 ]; then
-            sudo qemu-nbd --disconnect "$DEVICE"
-        else
-            sudo qemu-nbd --disconnect "$DEVICE" >/dev/null 2>&1
-        fi
-        if [ $? -ne 0 ]; then
-            warning "Failed to disconnect ${DEVICE}, but continuing."
-            return 1
-        fi
-    else
-        log "Releasing loop device ${DEVICE}..."
-        if [ "$VERBOSE" -eq 1 ]; then
-            sudo losetup -d "$DEVICE"
-        else
-            sudo losetup -d "$DEVICE" >/dev/null 2>&1
-        fi
-        if [ $? -ne 0 ]; then
-            warning "Failed to release loop device ${DEVICE}, but continuing."
-            return 1
-        fi
-    fi
-    return 0
-}
-
-# Function to format partitions
+# Function to format partitions (CORRECTED VERSION)
 format_partitions() {
     local DEVICE_INFO=$(cat /tmp/disk_creator_device_info 2>/dev/null)
     
@@ -909,34 +811,42 @@ format_partitions() {
     
     log "Formatting partitions on ${DEVICE}..."
     
-    local counter=1
-    for part_info in "${PARTITIONS[@]}"; do
-        IFS=':' read -r part_size part_fs part_type <<< "${part_info}"
+    # Get actual partition numbers from parted instead of assuming sequential numbering
+    local actual_partitions=$(sudo parted -s "${DEVICE}" print | awk '/^[ ]*[0-9]+/ {print $1}' | sort -n)
+    local partition_index=0
+    
+    for part_num in $actual_partitions; do
+        local part_info="${PARTITIONS[$partition_index]}"
+        IFS=':' read -r part_size part_fs part_type <<< "$part_info"
+        
+        log "Processing partition $part_num: size=$part_size, fs=$part_fs, type=$part_type"
         
         # Skip formatting for extended partitions (they are containers, not filesystems)
         if [ "$part_type" = "extended" ]; then
-            log "Skipping formatting for partition ${counter} (extended partition is a container)"
-            ((counter++))
+            log "Skipping formatting for partition ${part_num} (extended partition is a container)"
+            ((partition_index++))
             continue
         fi
         
-        local part_device="${DEVICE}p${counter}"
+        local part_device="${DEVICE}p${part_num}"
         
+        # Wait for partition device to appear
         local wait_count=0
         while [ ! -e "$part_device" ] && [ $wait_count -lt 10 ]; do
+            log "Waiting for partition device $part_device to appear... ($wait_count/10)"
             sleep 1
             ((wait_count++))
         done
         
         if [ ! -e "$part_device" ]; then
             error "Partition device $part_device not found"
-            ((counter++))
+            ((partition_index++))
             continue
         fi
         
         if [ -z "$part_fs" ] || [ "$part_fs" = "none" ]; then
-            log "Skipping formatting for partition ${counter} (no filesystem specified)"
-            ((counter++))
+            log "Skipping formatting for partition ${part_num} (no filesystem specified)"
+            ((partition_index++))
             continue
         fi
         
@@ -973,6 +883,7 @@ format_partitions() {
                     fi
                 else
                     warning "btrfs-progs not found, skipping formatting of ${part_device}"
+                    ((partition_index++))
                     continue
                 fi
                 ;;
@@ -1013,23 +924,52 @@ format_partitions() {
                 ;;
             *)
                 warning "Unknown filesystem type: ${part_fs}, skipping formatting"
-                ((counter++))
+                ((partition_index++))
                 continue
                 ;;
         esac
         
         if [ $? -eq 0 ]; then
-            success "Partition ${counter} formatted successfully as ${part_fs}"
+            success "Partition ${part_num} formatted successfully as ${part_fs}"
         else
-            error "Failed to format partition ${counter} as ${part_fs}"
+            error "Failed to format partition ${part_num} as ${part_fs}"
         fi
         
-        ((counter++))
+        ((partition_index++))
     done
     
     success "All partitions formatted successfully!"
 }
 
+# Function to cleanup device connections
+cleanup_device() {
+    local DEVICE=$1
+    
+    if [[ "$DEVICE" =~ /dev/nbd ]]; then
+        log "Disconnecting ${DEVICE}..."
+        if [ "$VERBOSE" -eq 1 ]; then
+            sudo qemu-nbd --disconnect "$DEVICE"
+        else
+            sudo qemu-nbd --disconnect "$DEVICE" >/dev/null 2>&1
+        fi
+        if [ $? -ne 0 ]; then
+            warning "Failed to disconnect ${DEVICE}, but continuing."
+            return 1
+        fi
+    else
+        log "Releasing loop device ${DEVICE}..."
+        if [ "$VERBOSE" -eq 1 ]; then
+            sudo losetup -d "$DEVICE"
+        else
+            sudo losetup -d "$DEVICE" >/dev/null 2>&1
+        fi
+        if [ $? -ne 0 ]; then
+            warning "Failed to release loop device ${DEVICE}, but continuing."
+            return 1
+        fi
+    fi
+    return 0
+}
 
 # Function to generate config.sh from an existing disk image
 generate_config() {
