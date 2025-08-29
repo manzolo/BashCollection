@@ -1,3 +1,5 @@
+#!/bin/bash
+
 # Function to generate config.sh from an existing disk image
 generate_config() {
     local DISK_FILE="$1"
@@ -114,6 +116,12 @@ generate_config() {
     log "Disk info: Name=$DISK_FILE, Format=$DISK_FORMAT, Size=$DISK_SIZE"
     log "Partition table type: $PARTITION_TABLE"
 
+    # Calculate total disk size in bytes for remaining partition check
+    local TOTAL_DISK_SIZE=$DISK_SIZE_BYTES
+    local USED_SIZE=0
+    local PARTITION_COUNT=$(echo "$PARTED_INFO" | grep -E '^[0-9]+:' | wc -l)
+    local CURRENT_PARTITION=0
+
     # Write configuration to file
     {
         echo "#!/bin/bash"
@@ -128,17 +136,32 @@ generate_config() {
     # Parse partitions with precise size calculation
     echo "$PARTED_INFO" | grep -E '^[0-9]+:' | while IFS=: read -r num start end size fs type name flags; do
         local size_bytes="${size%B}"
+        ((CURRENT_PARTITION++))
+        USED_SIZE=$((USED_SIZE + size_bytes))
+
         # Calculate size in human-readable format with precise rounding
         local size_h
         if [ $size_bytes -ge $((1024*1024*1024)) ]; then
             # Convert to GB, round up if close to the next GB
             local size_g=$(echo "scale=2; $size_bytes / (1024*1024*1024)" | bc)
-            size_h=$(echo "scale=0; ($size_g + 0.25) / 1" | bc)
-            # Adjust for alignment (within 50MB to account for GPT overhead)
-            if [ $((size_bytes % (1024*1024*1024))) -le $((50*1024*1024)) ] && [ $size_h -gt 0 ]; then
+            size_h=$(echo "scale=0; ($size_g + 0.05) / 1" | bc)
+            # Adjust for alignment (within 200MB to account for GPT/MBR overhead)
+            if [ $((size_bytes % (1024*1024*1024))) -le $((200*1024*1024)) ] && [ $size_h -gt 0 ]; then
                 size_h=$size_h
             fi
-            size_h="${size_h}G"
+            # Check if this is the last partition and uses most of the remaining space
+            if [ $CURRENT_PARTITION -eq $PARTITION_COUNT ]; then
+                local remaining_space=$((TOTAL_DISK_SIZE - USED_SIZE + size_bytes))
+                local remaining_g=$(echo "scale=2; $remaining_space / (1024*1024*1024)" | bc)
+                # Use 'remaining' if the partition takes up 5% or more of the remaining space
+                if [ $(echo "$remaining_g > 0 && ($size_bytes / $remaining_space) >= 0.05" | bc) -eq 1 ]; then
+                    size_h="remaining"
+                else
+                    size_h="${size_h}G"
+                fi
+            else
+                size_h="${size_h}G"
+            fi
         elif [ $size_bytes -ge $((1024*1024)) ]; then
             # Convert to MB, round to nearest integer
             local size_m=$(echo "scale=2; $size_bytes / (1024*1024)" | bc)
@@ -154,9 +177,15 @@ generate_config() {
         # Get filesystem from blkid, fallback to parted
         local part_dev="${DEVICE}p${num}"
         local fs_norm=$(echo "$BLKID_INFO" | grep "$part_dev" | grep -oP 'TYPE="\K[^"]+' || echo "$fs")
-        # Prioritize blkid for swap detection
+        # Prioritize blkid for most filesystems, use parted for fat16
         if [ "$fs_norm" = "swap" ] || [ "$fs_norm" = "linux-swap(v1)" ] || [ "$fs_norm" = "linux-swap" ]; then
             fs_norm="swap"
+        elif [ "$fs_norm" = "ext3" ] || [ "$fs" = "ext3" ]; then
+            fs_norm="ext3"
+        elif [ "$fs" = "fat16" ]; then
+            fs_norm="fat16"
+        elif [ "$fs_norm" = "vfat" ]; then
+            fs_norm=$(normalize_fs_type "$fs_norm" "$type" "$name")
         else
             fs_norm=$(normalize_fs_type "$fs_norm" "$type" "$name")
         fi
