@@ -1,3 +1,4 @@
+# vm_disk_manager
 <img width="1416" height="664" alt="image" src="https://github.com/user-attachments/assets/8045a3e3-ed5b-4653-9cd8-21b568b7c004" />
 
 <img width="1416" height="664" alt="image" src="https://github.com/user-attachments/assets/69550569-ef86-49b6-8c88-920756369d4e" />
@@ -44,6 +45,8 @@
 
 <img width="1416" height="664" alt="image" src="https://github.com/user-attachments/assets/c4e7d798-a43c-45b8-a8d4-436ac63445fd" />
 
+# vm_create_disk
+<img width="1713" height="906" alt="image" src="https://github.com/user-attachments/assets/bac31c61-e0ad-4968-b04a-fb9fc2605167" />
 
 
 
