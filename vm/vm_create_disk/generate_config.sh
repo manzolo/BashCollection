@@ -14,7 +14,8 @@ generate_config() {
     fi
 
     local DISK_FORMAT=$(echo "$QEMU_INFO" | awk -F': ' '/file format/ {print $2}')
-    local DISK_SIZE=$(echo "$QEMU_INFO" | grep "virtual size" | grep -oP '\d+\.?\d*\s*(GiB|MiB|KiB)' | sed 's/\s*GiB/G/' | sed 's/\s*MiB/M/' | sed 's/\s*KiB/K/' | tr -d ' ')
+    local DISK_SIZE_BYTES=$(echo "$QEMU_INFO" | grep "virtual size" | grep -oP '\(\K[0-9]+(?=\s*bytes)')
+    local DISK_SIZE=$(bytes_to_readable "$DISK_SIZE_BYTES")
     if [ -z "$DISK_SIZE" ]; then
         error "Failed to parse disk size from qemu-img info"
         exit 1
@@ -92,15 +93,17 @@ generate_config() {
     fi
     log "DEBUG: PARTED_INFO: $PARTED_INFO"
 
-    # Check for partition table type using blkid
-    log "DEBUG: BLKID_INFO: $(sudo blkid "${DEVICE}" 2>/dev/null)"
-    if sudo blkid "${DEVICE}" | grep -q 'PTTYPE="gpt"'; then
-        log "DEBUG: Detected PARTITION_TABLE: gpt"
+    # Determine partition table type
+    if echo "$PARTED_INFO" | grep -E "^/dev/.*:gpt:" >/dev/null; then
         PARTITION_TABLE="gpt"
-    else
-        log "DEBUG: Detected PARTITION_TABLE: mbr"
+        log "DEBUG: Detected PARTITION_TABLE: gpt"
+    elif echo "$PARTED_INFO" | grep -E "^/dev/.*:msdos:" >/dev/null; then
         PARTITION_TABLE="mbr"
-        warning "No GPT partition table detected, defaulting to 'mbr'"
+        log "DEBUG: Detected PARTITION_TABLE: mbr"
+    else
+        error "Failed to determine partition table type"
+        cleanup_device "$DEVICE"
+        exit 1
     fi
 
     # Get filesystem information using blkid
@@ -122,17 +125,45 @@ generate_config() {
         echo "PARTITIONS=("
     } > "$CONFIG_FILE"
 
-    # Parse partitions
+    # Parse partitions with precise size calculation
     echo "$PARTED_INFO" | grep -E '^[0-9]+:' | while IFS=: read -r num start end size fs type name flags; do
-        local size_h=$(convert_parted_size "$size")
-        # Get filesystem from blkid
+        local size_bytes="${size%B}"
+        # Calculate size in human-readable format with precise rounding
+        local size_h
+        if [ $size_bytes -ge $((1024*1024*1024)) ]; then
+            # Convert to GB, round up if close to the next GB
+            local size_g=$(echo "scale=2; $size_bytes / (1024*1024*1024)" | bc)
+            size_h=$(echo "scale=0; ($size_g + 0.25) / 1" | bc)
+            # Adjust for alignment (within 50MB to account for GPT overhead)
+            if [ $((size_bytes % (1024*1024*1024))) -le $((50*1024*1024)) ] && [ $size_h -gt 0 ]; then
+                size_h=$size_h
+            fi
+            size_h="${size_h}G"
+        elif [ $size_bytes -ge $((1024*1024)) ]; then
+            # Convert to MB, round to nearest integer
+            local size_m=$(echo "scale=2; $size_bytes / (1024*1024)" | bc)
+            size_h=$(echo "scale=0; ($size_m + 0.5) / 1" | bc)
+            size_h="${size_h}M"
+        else
+            # Convert to KB, round to nearest integer
+            local size_k=$(echo "scale=2; $size_bytes / 1024" | bc)
+            size_h=$(echo "scale=0; ($size_k + 0.5) / 1" | bc)
+            size_h="${size_h}K"
+        fi
+
+        # Get filesystem from blkid, fallback to parted
         local part_dev="${DEVICE}p${num}"
         local fs_norm=$(echo "$BLKID_INFO" | grep "$part_dev" | grep -oP 'TYPE="\K[^"]+' || echo "$fs")
-        fs_norm=$(normalize_fs_type "$fs_norm" "$type" "$name")
+        # Prioritize blkid for swap detection
+        if [ "$fs_norm" = "swap" ] || [ "$fs_norm" = "linux-swap(v1)" ] || [ "$fs_norm" = "linux-swap" ]; then
+            fs_norm="swap"
+        else
+            fs_norm=$(normalize_fs_type "$fs_norm" "$type" "$name")
+        fi
 
         if [ "$PARTITION_TABLE" = "mbr" ]; then
             local part_type=""
-            if [ "$num" -eq 3 ] && [ -z "$fs_norm" ] || [ "$type" = "extended" ] || [[ "$flags" =~ "extended" ]]; then
+            if [ "$type" = "extended" ] || [[ "$flags" =~ "extended" ]]; then
                 part_type="extended"
             elif [ "$num" -ge 5 ]; then
                 part_type="logical"
