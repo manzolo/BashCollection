@@ -1,3 +1,4 @@
-chroot/manzolo_chroot.sh mchroot
-cleaner/manzolo_cleaner.sh mcleaner
-backup/manzolo_backup_home.sh mbackup
+chroot/manzolo_chroot.sh#mchroot
+cleaner/manzolo_cleaner.sh#mcleaner
+backup/manzolo_backup_home.sh#mbackup
+vm/test_vm_create_disk.sh#mtest
