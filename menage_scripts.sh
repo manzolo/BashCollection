@@ -15,8 +15,9 @@ SCRIPT_BASE_DIR="/usr/local/share/scripts"  # For script directories and subdire
 # Directory in cui si trova questo script
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
-# File di ignore nella root
+# File di ignore e mapping nella root
 IGNORE_FILE="$SCRIPT_DIR/.manzoloignore"
+MAP_FILE="$SCRIPT_DIR/.manzolomap"
 
 # Check if the script is run with root permissions
 if [ "$(id -u)" -ne 0 ]; then
@@ -24,8 +25,9 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-# Array globali per pattern di esclusione e file trovati
+# Array globali per pattern di esclusione, mapping e file trovati
 declare -a IGNORE_PATTERNS
+declare -A NAME_MAPPINGS
 declare -a INCLUDED_FILES
 declare -a EXCLUDED_FILES
 
@@ -60,7 +62,68 @@ load_ignore_patterns() {
     fi
 }
 
-# Funzione per controllare se un file è escluso dai pattern
+# Funzione per caricare le mappature dei nomi dal file .manzolomap
+load_name_mappings() {
+    local debug_mode="${1:-false}"
+    NAME_MAPPINGS=()
+    
+    if [ "$debug_mode" = "true" ]; then
+        echo -e "${YELLOW}>> Loading name mappings from: $MAP_FILE${NC}"
+    fi
+    
+    if [ -f "$MAP_FILE" ]; then
+        while IFS= read -r line; do
+            # Ignora righe vuote e commenti
+            line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            if [ -n "$line" ] && [[ ! "$line" =~ ^# ]]; then
+                # Dividi la riga in file_path e new_name
+                if [[ "$line" =~ ^([^[:space:]]+)[[:space:]]+(.+)$ ]]; then
+                    local file_path="${BASH_REMATCH[1]}"
+                    local new_name="${BASH_REMATCH[2]}"
+                    NAME_MAPPINGS["$file_path"]="$new_name"
+                    if [ "$debug_mode" = "true" ]; then
+                        echo -e "   ${CYAN}→ Mapping: $file_path -> $new_name${NC}"
+                    fi
+                fi
+            fi
+        done < "$MAP_FILE"
+        
+        if [ "$debug_mode" = "true" ]; then
+            echo -e "${YELLOW}>> Total name mappings loaded: ${#NAME_MAPPINGS[@]}${NC}"
+        fi
+    else
+        if [ "$debug_mode" = "true" ]; then
+            echo -e "${YELLOW}>> No .manzolomap file found, using default names${NC}"
+        fi
+    fi
+}
+
+# Funzione per ottenere il nome del comando per un file
+get_command_name() {
+    local script_path="$1"
+    local relative_path="${script_path#$SCRIPT_DIR/}"
+    
+    # Debug output to see what's happening
+    if [ "$debug_mode" = "true" ]; then
+        echo -e " ${CYAN}→ Checking mapping for: $relative_path${NC}"
+    fi
+    
+    # Check if there's a custom mapping
+    if [ -n "${NAME_MAPPINGS[$relative_path]}" ]; then
+        if [ "$debug_mode" = "true" ]; then
+            echo -e " ${GREEN}→ Found mapping: $relative_path -> ${NAME_MAPPINGS[$relative_path]}${NC}"
+        fi
+        echo "${NAME_MAPPINGS[$relative_path]}"
+    else
+        # Use the filename without extension as fallback
+        local fallback_name=$(basename "$script_path" .sh)
+        if [ "$debug_mode" = "true" ]; then
+            echo -e " ${YELLOW}→ No mapping found, using fallback: $fallback_name${NC}"
+        fi
+        echo "$fallback_name"
+    fi
+}
+
 is_file_excluded() {
     local file_path="$1"
     local relative_path="${file_path#$SCRIPT_DIR/}"
@@ -137,17 +200,18 @@ install_scripts() {
     else
         echo -e "${BLUE}>>> Installing executable scripts into: $SCRIPT_BASE_DIR and $INSTALL_DIR${NC}"
     fi
-    
+
     mkdir -p "$SCRIPT_BASE_DIR"
 
-    # Carica i pattern di esclusione e trova i file
+    # Carica i pattern di esclusione, mappature e trova i file
     load_ignore_patterns "$debug_mode"
+    load_name_mappings "$debug_mode"
     find_executable_scripts "$debug_mode"
-    
+
     if [ "$debug_mode" = "true" ]; then
         print_file_summary
     fi
-    
+
     # Copia tutte le sottocartelle mantenendo la struttura
     while IFS= read -r dir; do
         local relative_dir="${dir#$SCRIPT_DIR/}"
@@ -157,24 +221,24 @@ install_scripts() {
         cp -r "$dir" "$SCRIPT_BASE_DIR/"
         chmod -R 755 "$SCRIPT_BASE_DIR/$relative_dir"
     done < <(find "$SCRIPT_DIR" -mindepth 1 -maxdepth 1 -type d)
-    
+
     # Crea i symlink solo per i file inclusi
     for script_path in "${INCLUDED_FILES[@]}"; do
-        local script_name=$(basename "$script_path" .sh)
+        local command_name=$(get_command_name "$script_path")  # MODIFICATO: Usa get_command_name
         local target_path="$SCRIPT_BASE_DIR/${script_path#$SCRIPT_DIR/}"
-        
+
         # Controlla se esiste già un comando di sistema con lo stesso nome
-        if command -v "$script_name" >/dev/null 2>&1 && [ ! -L "$INSTALL_DIR/$script_name" ]; then
-            echo -e "  ${RED}⚠ Warning: '$script_name' conflicts with system command. Skipping.${NC}"
+        if command -v "$command_name" >/dev/null 2>&1 && [ ! -L "$INSTALL_DIR/$command_name" ]; then
+            echo -e " ${RED}⚠ Warning: '$command_name' conflicts with system command. Skipping.${NC}"
             continue
         fi
-        
-        ln -sf "$target_path" "$INSTALL_DIR/$script_name"
+
+        ln -sf "$target_path" "$INSTALL_DIR/$command_name"
         if [ "$debug_mode" = "true" ]; then
-            echo -e "  ${GREEN}✔ Symlink created:${NC} ${YELLOW}$script_name${NC} -> ${BLUE}${script_path#$SCRIPT_DIR/}${NC}"
+            echo -e " ${GREEN}✔ Symlink created:${NC} ${YELLOW}$command_name${NC} -> ${BLUE}${script_path#$SCRIPT_DIR/}${NC}"
         fi
     done
-    
+
     echo -e "\n${GREEN}Installation complete!${NC} ${#INCLUDED_FILES[@]} scripts are now available in your PATH."
     if [ "$debug_mode" = "false" ]; then
         echo -e "You may need to restart your shell for changes to take effect."
@@ -189,38 +253,40 @@ uninstall_scripts() {
     else
         echo -e "${BLUE}>>> Uninstalling scripts from: $INSTALL_DIR and $SCRIPT_BASE_DIR${NC}"
     fi
-    
+
     # Carica i pattern di esclusione e trova i file
     load_ignore_patterns "$debug_mode"
+    load_name_mappings "$debug_mode"  # AGGIUNTO: Carica le mappature
     find_executable_scripts "$debug_mode"
-    
+
     if [ "$debug_mode" = "true" ]; then
         print_file_summary
     fi
-    
+
     # Rimuovi i symlink per i file inclusi
     for script_path in "${INCLUDED_FILES[@]}"; do
-        local script_name=$(basename "$script_path" .sh)
-        if [ -L "$INSTALL_DIR/$script_name" ]; then
-            rm "$INSTALL_DIR/$script_name"
+        local command_name=$(get_command_name "$script_path")  # MODIFICATO: Usa get_command_name
+        
+        if [ -L "$INSTALL_DIR/$command_name" ]; then
+            rm "$INSTALL_DIR/$command_name"
             if [ "$debug_mode" = "true" ]; then
-                echo -e "  ${RED}✖ Symlink removed:${NC} ${YELLOW}$script_name${NC}"
+                echo -e " ${RED}✖ Symlink removed:${NC} ${YELLOW}$command_name${NC}"
             fi
         else
             if [ "$debug_mode" = "true" ]; then
-                echo -e "  ${YELLOW}→ Symlink not found:${NC} ${YELLOW}$script_name${NC}. Skipping."
+                echo -e " ${YELLOW}→ Symlink not found:${NC} ${YELLOW}$command_name${NC}. Skipping."
             fi
         fi
     done
-    
+
     # Rimuovi la directory base
     if [ -d "$SCRIPT_BASE_DIR" ]; then
         rm -rf "$SCRIPT_BASE_DIR"
         if [ "$debug_mode" = "true" ]; then
-            echo -e "  ${RED}✖ Directory removed:${NC} ${YELLOW}$SCRIPT_BASE_DIR${NC}"
+            echo -e " ${RED}✖ Directory removed:${NC} ${YELLOW}$SCRIPT_BASE_DIR${NC}"
         fi
     fi
-    
+
     echo -e "\n${GREEN}Uninstallation complete!${NC}"
 }
 
@@ -229,24 +295,25 @@ list_scripts() {
     if [ "$1" = "--debug" ]; then
         debug_mode="true"
     fi
-    
+
     # Carica i pattern di esclusione e trova i file
     load_ignore_patterns "$debug_mode"
+    load_name_mappings "$debug_mode"  # AGGIUNTO: Carica anche le mappature
     find_executable_scripts "$debug_mode"
-    
+
     if [ "$debug_mode" = "true" ]; then
         print_file_summary
     fi
-    
+
     echo -e "${BLUE}>>> Available commands:${NC}"
-    
+
     if [ ${#INCLUDED_FILES[@]} -eq 0 ]; then
-        echo -e "  ${YELLOW}No executable scripts found.${NC}"
+        echo -e " ${YELLOW}No executable scripts found.${NC}"
     else
         for script_path in "${INCLUDED_FILES[@]}"; do
-            local script_name=$(basename "$script_path" .sh)
+            local command_name=$(get_command_name "$script_path")  # MODIFICATO: Usa get_command_name
             local relative_path="${script_path#$SCRIPT_DIR/}"
-            echo -e "  ${GREEN}•${NC} ${YELLOW}$script_name${NC} ${BLUE}($relative_path)${NC}"
+            echo -e " ${GREEN}•${NC} ${YELLOW}$command_name${NC} ${BLUE}($relative_path)${NC}"
         done
         echo -e "\n${GREEN}Total:${NC} ${YELLOW}${#INCLUDED_FILES[@]} commands.${NC}"
     fi

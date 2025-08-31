@@ -1,0 +1,3 @@
+chroot/manzolo_chroot.sh mchroot
+cleaner/manzolo_cleaner.sh mcleaner
+backup/manzolo_backup_home.sh mbackup

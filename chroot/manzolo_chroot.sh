@@ -35,7 +35,7 @@ CHROOT_USER=""
 CHROOT_PROCESSES=()
 
 # Scan and "source" .sh file recursive.
-for script in "$SCRIPT_DIR/$SCRIPT_NAME/"*.sh; do
+for script in "$SCRIPT_DIR/manzolo_chroot/"*.sh; do
     if [ -f "$script" ]; then
         source "$script"
     else
