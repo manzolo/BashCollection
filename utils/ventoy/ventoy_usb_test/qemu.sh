@@ -16,7 +16,7 @@ build_qemu_command() {
     esac
     
     # USB drive
-    qemu_cmd+=(-drive file="$DISK",format="$FORMAT",if=none,id=usb-drive)
+    qemu_cmd+=(-drive file="$DISK",format="$FORMAT",cache=none,if=none,id=usb-drive)
     
     # KVM if available
     if [[ -c /dev/kvm && -r /dev/kvm ]]; then
