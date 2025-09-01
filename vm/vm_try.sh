@@ -164,16 +164,28 @@ QEMU_OPTS=(
     "-m" "$VM_RAM"
     "-smp" "$VM_CPUS"
     "$QEMU_ACCEL_OPTS"
-    "-drive" "file=$DISK,format=$DISK_FORMAT,media=disk"
     "-netdev" "user,id=net0"
     "-device" "virtio-net-pci,netdev=net0"
     "-vga" "virtio"
     "-display" "sdl"
+    "-usb"
+    "-device" "usb-tablet"  # Better mouse control
 )
 
-# Add ISO drive if provided
-if [ -n "$ISO" ]; then
-    QEMU_OPTS+=("-drive" "file=$ISO,format=raw,media=cdrom,readonly=on")
+# Configure disk and ISO based on boot mode for proper boot priority
+if [ "$BOOT_MODE" = "uefi" ] && [ -n "$ISO" ]; then
+    # UEFI mode with ISO: use explicit bootindex for guaranteed ISO priority
+    QEMU_OPTS+=("-drive" "file=$ISO,format=raw,media=cdrom,readonly=on,if=none,id=cd0")
+    QEMU_OPTS+=("-device" "ide-cd,drive=cd0,bootindex=0")  # ISO gets highest priority
+    QEMU_OPTS+=("-drive" "file=$DISK,format=$DISK_FORMAT,media=disk,if=none,id=hd0")
+    QEMU_OPTS+=("-device" "ahci,id=ahci")  # SATA controller
+    QEMU_OPTS+=("-device" "ide-hd,drive=hd0,bus=ahci.0,bootindex=1")  # Disk on SATA
+else
+    # MBR mode or UEFI without ISO: traditional configuration
+    QEMU_OPTS+=("-drive" "file=$DISK,format=$DISK_FORMAT,media=disk")
+    if [ -n "$ISO" ]; then
+        QEMU_OPTS+=("-drive" "file=$ISO,format=raw,media=cdrom,readonly=on")
+    fi
 fi
 
 # Configure boot mode based on user selection
@@ -201,16 +213,15 @@ if [ "$BOOT_MODE" = "uefi" ]; then
     fi
     
     QEMU_OPTS+=("-bios" "$OVMF_PATH")
-    # Set boot order: ISO first if provided, then hard drive
-    if [ -n "$ISO" ]; then
-        QEMU_OPTS+=("-boot" "order=d,menu=on")  # Boot only from CD-ROM with boot menu
-    else
-        QEMU_OPTS+=("-boot" "order=c")
+    # For UEFI, boot order is handled by bootindex (if ISO present) or traditional method
+    if [ -z "$ISO" ]; then
+        QEMU_OPTS+=("-boot" "order=c")  # Boot from hard disk only
     fi
+    # If ISO is present, bootindex already handles the order
 else # MBR
     # Set boot order: ISO first if provided, then hard drive
     if [ -n "$ISO" ]; then
-        QEMU_OPTS+=("-boot" "order=d,menu=on")  # Boot only from CD-ROM with boot menu
+        QEMU_OPTS+=("-boot" "order=d,menu=on")  # Boot from CD-ROM with menu
     else
         QEMU_OPTS+=("-boot" "order=c")
     fi
