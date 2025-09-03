@@ -53,6 +53,17 @@ create_and_format_disk() {
             "qcow2")
                 create_cmd+=" -o preallocation=metadata"
                 ;;
+            "vpc")
+                create_cmd+=" -o subformat=fixed"
+                ;;
+        esac
+    else
+        case "$DISK_FORMAT" in
+            "vpc")
+                #TODO: fix it
+                #create_cmd+=" -o subformat=dynamic"
+                create_cmd+=" -o subformat=fixed"
+                ;;
         esac
     fi
     
@@ -88,51 +99,65 @@ create_and_format_disk() {
             sudo parted -s "${DEVICE}" print >&2
             log "Formatted table:" >&2
         fi
+        # Genera la tabella finale usando awk e column
         sudo parted -s "${DEVICE}" print | awk -v part_table="$PARTITION_TABLE" '
         BEGIN {
+            # Colori ANSI (opzionale)
+            BLUE="\033[1;34m"
+            RESET="\033[0m"
+            # Intestazione della tabella
             if (part_table == "mbr") {
-                printf "%-8s %-12s %-12s %-12s %-12s %-12s %s\n", "Number", "Start", "End", "Size", "File system", "Type", "Name"
-                printf "%-8s %-12s %-12s %-12s %-12s %-12s %s\n", "------", "-------", "-------", "-------", "-----------", "-------", "----"
+                printf "%sNumber\tStart\tEnd\tSize\tFile system\tType\tName%s\n", BLUE, RESET
+                printf "%s------\t-----\t-----\t-----\t-----------\t----\t----%s\n", BLUE, RESET
             } else {
-                printf "%-8s %-12s %-12s %-12s %-12s %s\n", "Number", "Start", "End", "Size", "File system", "Name"
-                printf "%-8s %-12s %-12s %-12s %-12s %s\n", "------", "-------", "-------", "-------", "-----------", "----"
+                printf "%sNumber\tStart\tEnd\tSize\tFile system\tName%s\n", BLUE, RESET
+                printf "%s------\t-----\t-----\t-----\t-----------\t----%s\n", BLUE, RESET
             }
         }
         /^[ ]*[0-9]+/ {
-            # Remove units (B, kB, MB, etc.) and convert to bytes
+            # Rimuovi le unità e converti in byte
             start=$2; sub(/[a-zA-Z]+$/, "", start); start=start + 0
             end=$3; sub(/[a-zA-Z]+$/, "", end); end=end + 0
             size=$4; sub(/[a-zA-Z]+$/, "", size); size=size + 0
-            # Convert kB or MB to bytes if needed
+            # Converti kB, MB o GB in byte
             if ($2 ~ /kB$/) start *= 1000
             else if ($2 ~ /MB$/) start *= 1000000
+            else if ($2 ~ /GB$/) start *= 1000000000
             if ($3 ~ /kB$/) end *= 1000
             else if ($3 ~ /MB$/) end *= 1000000
+            else if ($3 ~ /GB$/) end *= 1000000000
             if ($4 ~ /kB$/) size *= 1000
             else if ($4 ~ /MB$/) size *= 1000000
+            else if ($4 ~ /GB$/) size *= 1000000000
             number=$1
             fs=$5
             if (fs == "" || fs == "unknown") fs="none"
             if (fs == "linux-swap(v1)" || fs == "linux-swap") fs="swap"
             name=$6
-            if (fs == "fat16" || fs == "fat32" || fs == "vfat") name="Microsoft basic data"
-            else if (fs == "swap") name="Linux swap"
-            else if (fs == "ext4" || fs == "ext3" || fs == "xfs" || fs == "btrfs") name="Linux filesystem"
+            if (fs == "fat16" || fs == "fat32" || fs == "vfat") name="MS Basic Data"
+            else if (fs == "swap") name="Linux Swap"
+            else if (fs == "ext4" || fs == "ext3" || fs == "xfs" || fs == "btrfs") name="Linux FS"
+            else if (fs == "ntfs") name="MS Basic Data"
+            else if (name == "Microsoft_reserved_partition") name="MS Reserved"
             else if (name == "" || name == "unknown") name="Unformatted"
-            # Convert to MiB
+            # Converti in MiB
             start_mib=start / 1048576
             end_mib=end / 1048576
             size_mib=size / 1048576
-            type=""
+            # Converti in formato human-friendly (MiB o GB)
+            start_str = (start_mib >= 1024) ? sprintf("%.2f GB", start_mib / 1024) : sprintf("%.2f MiB", start_mib)
+            end_str = (end_mib >= 1024) ? sprintf("%.2f GB", end_mib / 1024) : sprintf("%.2f MiB", end_mib)
+            size_str = (size_mib >= 1024) ? sprintf("%.2f GB", size_mib / 1024) : sprintf("%.2f MiB", size_mib)
+            # Output con tabulazioni
             if (part_table == "mbr") {
                 if ($7 ~ /logical/) type="logical"
                 else if ($7 ~ /extended/) type="extended"
                 else type="primary"
-                printf "%-8s %-12.2fMiB %-12.2fMiB %-12.2fMiB %-12s %-12s %s\n", number, start_mib, end_mib, size_mib, fs, type, name
+                printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", number, start_str, end_str, size_str, fs, type, name
             } else {
-                printf "%-8s %-12.2fMiB %-12.2fMiB %-12.2fMiB %-12s %s\n", number, start_mib, end_mib, size_mib, fs, name
+                printf "%s\t%s\t%s\t%s\t%s\t%s\n", number, start_str, end_str, size_str, fs, name
             }
-        }'
+        }' | column -t -s $'\t'
         cleanup_device "$DEVICE"
     else
         success "Virtual disk created successfully (no partitions specified)." >&2
