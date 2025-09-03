@@ -357,54 +357,56 @@ detect_filesystem_type() {
     local parted_type="$4"
     local parted_name="$5"
     
-    # Try blkid first (most reliable) - clean up the grep pattern
-    local blkid_fs=$(echo "$BLKID_INFO" | grep "^$part_dev:" | sed 's/.*TYPE="\([^"]*\)".*/\1/' | head -1)
+    # blkid first (most reliable)
+    local blkid_fs
+    blkid_fs=$(echo "$BLKID_INFO" | grep "^$part_dev:" | sed -n 's/.*TYPE="\([^"]*\)".*/\1/p' | head -1)
     
     if [ -n "$blkid_fs" ]; then
         case "$blkid_fs" in
             "linux-swap"|"linux-swap(v1)") echo "swap" ;;
             "vfat")
-                # Distinguish between fat16, fat32, and vfat by checking SEC_TYPE
-                local fat_variant=$(echo "$BLKID_INFO" | grep "^$part_dev:" | sed 's/.*SEC_TYPE="\([^"]*\)".*/\1/' | head -1)
+                # Distinzione fat16/fat32
+                local fat_variant
+                fat_variant=$(echo "$BLKID_INFO" | grep "^$part_dev:" | sed -n 's/.*SEC_TYPE="\([^"]*\)".*/\1/p' | head -1)
                 case "$fat_variant" in
                     "msdos") echo "fat16" ;;
-                    *) 
-                        # Check if it was originally fat16 based on parted info
-                        if [ "$parted_fs" = "fat16" ]; then
-                            echo "fat16"
-                        else
-                            echo "fat32"
-                        fi
-                        ;;
+                    *) [ "$parted_fs" = "fat16" ] && echo "fat16" || echo "fat32" ;;
                 esac
                 ;;
-            "ext2") 
-                # Check if it was originally ext3 based on parted info
-                if [ "$parted_fs" = "ext3" ]; then
-                    echo "ext3"
-                else
-                    echo "ext2"
-                fi
+            "ext2")
+                [ "$parted_fs" = "ext3" ] && echo "ext3" || echo "ext2"
                 ;;
             *) echo "$blkid_fs" ;;
         esac
         return 0
     fi
-    
-    # Fallback to parted information - clean single value
-    if [ -n "$parted_fs" ]; then
+
+    # Fallback to parted information
+    if [ -n "$parted_fs" ] && [ "$parted_fs" != "unknown" ]; then
         case "$parted_fs" in
             "linux-swap"|"linux-swap(v1)") echo "swap" ;;
+            "msftres") echo "msr" ;;   # <- qui normalizziamo la MSR
             *) echo "$parted_fs" ;;
         esac
-    else
-        # Last resort: analyze partition type
-        if [[ "$parted_name" =~ "Microsoft reserved" ]] || [ "$parted_type" = "msr" ]; then
-            echo "msr"
-        else
-            echo "none"
-        fi
+        return 0
     fi
+
+    # 3. Detection MSR
+    if [[ "$parted_name" =~ [Mm]icrosoft ]] && [[ "$parted_name" =~ [Rr]eserved ]]; then
+        echo "msr"
+        return 0
+    fi
+    if [ "$parted_type" = "msftres" ]; then
+        echo "msr"
+        return 0
+    fi
+    if [[ "$parted_name" =~ "msftres" ]]; then
+        echo "msr"
+        return 0
+    fi
+
+    # 4. Default
+    echo "none"
 }
 
 # Determine MBR partition type from parted output
