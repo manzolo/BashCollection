@@ -45,11 +45,12 @@ declare -a PARTITIONS=()
 VERBOSE=${VERBOSE:-0} # Verbosity flag (0 = silent, 1 = verbose)
 
 # Color codes for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+declare -r RED='\033[0;31m'
+declare -r GREEN='\033[0;32m'
+declare -r YELLOW='\033[1;33m'
+declare -r BLUE='\033[0;34m'
+declare -r GRAY='\033[0;37m'
+declare -r NC='\033[0m'
 
 # Determine the directory where the script is located (resolving symlinks)
 SCRIPT_PATH="$(readlink -f "$0")"
@@ -70,6 +71,8 @@ for script in "$SCRIPT_DIR/vm_create_disk/"**/*.sh; do
 done
 
 shopt -u globstar
+
+#demo_logging
 
 # Main logic
 case "${1:-}" in

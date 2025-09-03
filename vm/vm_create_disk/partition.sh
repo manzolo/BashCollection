@@ -51,10 +51,11 @@ create_partitions() {
     fi
     
     # Debug: Print partition table and device list
-    log "DEBUG: Partition table after creation:"
-    sudo parted -s "${DEVICE}" print >&2
-    log "DEBUG: Partition devices:"
-    ls -la "${DEVICE}"* >&2
+    log_debug "Partition table after creation:"
+    log_debug "$(sudo parted -s "${DEVICE}" print 2>&1)"
+
+    log_debug "Partition devices:"
+    log_debug "$(ls -la "${DEVICE}"* 2>&1)"
     
     # Final cleanup and verification
     finalize_partitions "$DEVICE"
@@ -74,8 +75,8 @@ finalize_partitions() {
     fi
     
     # Debug info
-    log "DEBUG: Checking partition devices:"
-    ls -la "${device}"* 2>/dev/null | while IFS= read -r line; do log "DEBUG: $line"; done
+    log_debug "Checking partition devices:"
+    ls -la "${device}"* 2>/dev/null | while IFS= read -r line; do log_debug "$line"; done
     
     # Save device info for cleanup
     echo "${device}:${DISK_FORMAT}" > /tmp/disk_creator_device_info
@@ -288,7 +289,7 @@ create_single_partition() {
             fi
         fi
         
-        log "DEBUG: Running parted command: parted -s ${parted_args[*]}"
+        log_debug "Running parted command: parted -s ${parted_args[*]}"
         if [ "$VERBOSE" -eq 1 ]; then
             sudo parted -s "${parted_args[@]}"
         else
@@ -301,7 +302,7 @@ create_single_partition() {
         fi
         
         # Ensure partition table is updated
-        log "DEBUG: Running partprobe and udevadm settle"
+        log_debug "Running partprobe and udevadm settle"
         sudo partprobe "${device}" >/dev/null 2>&1
         udevadm settle >/dev/null 2>&1
         sleep 1
@@ -326,7 +327,7 @@ create_primary_partitions() {
     
     local partition_number=1
     
-    log "DEBUG: Starting primary partition creation with start_sectors=$start_sectors, total_sectors=$total_sectors"
+    log_debug "Starting primary partition creation with start_sectors=$start_sectors, total_sectors=$total_sectors"
     
     for part_info in "${PARTITIONS[@]}"; do
         IFS=':' read -r part_size part_fs part_type <<< "${part_info}"
@@ -340,7 +341,7 @@ create_primary_partitions() {
             part_type="primary"
         fi
 
-        log "DEBUG: Processing partition $partition_number: size=$part_size, fs=$part_fs, type=$part_type"
+        log_debug "Processing partition $partition_number: size=$part_size, fs=$part_fs, type=$part_type"
         
         # Get updated start position from create_single_partition
         local new_start_sectors
@@ -354,7 +355,7 @@ create_primary_partitions() {
         fi
         
         start_sectors=$new_start_sectors
-        log "DEBUG: Updated start_sectors=$start_sectors for partition $partition_number"
+        log_debug "Updated start_sectors=$start_sectors for partition $partition_number"
         ((partition_number++))
     done
     

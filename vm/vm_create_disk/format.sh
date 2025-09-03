@@ -19,7 +19,7 @@ create_and_format_disk() {
         rm -f "${DISK_NAME}" 2>/dev/null || { error "Failed to remove existing file '${DISK_NAME}'" >&2; exit 1; }
     fi
 
-    log "DEBUG: PARTITIONS array: ${PARTITIONS[*]}" >&2
+    log_debug "PARTITIONS array: ${PARTITIONS[*]}" >&2
     
     # Validate total partition sizes
     local total_disk_bytes=$(size_to_bytes "$DISK_SIZE")
@@ -42,7 +42,7 @@ create_and_format_disk() {
     log "Creating disk ${DISK_NAME} with size ${DISK_SIZE} and format ${DISK_FORMAT}..." >&2
     
     local disk_bytes=$(size_to_bytes "$DISK_SIZE")
-    log "DEBUG: Disk size in bytes: $disk_bytes" >&2
+    log_debug "Disk size in bytes: $disk_bytes" >&2
     local create_cmd="qemu-img create -f ${DISK_FORMAT}"
     
     if [ "$PREALLOCATION" = "full" ]; then

@@ -50,8 +50,8 @@ validate_mbr_partitions() {
             local rounded=$(( (extended_total_bytes + gib - 1) / gib * gib ))
             extended_size=$(bytes_to_readable "$rounded")
             
-            log "DEBUG: Logical partitions total: $(bytes_to_readable $logical_total_bytes)"
-            log "DEBUG: Extended partition size with overhead ($logical_count logical partitions): $extended_size"
+            log_debug "Logical partitions total: $(bytes_to_readable $logical_total_bytes)"
+            log_debug "Extended partition size with overhead ($logical_count logical partitions): $extended_size"
         fi
         
         PARTITIONS=()
