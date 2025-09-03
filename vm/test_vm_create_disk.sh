@@ -272,6 +272,321 @@ analyze_disk_with_lsblk() {
     return 0
 }
 
+validate_reverse_config() {
+    local original_config="$1"
+    local reverse_config="$2"
+    local test_name="$3"
+    
+    log "INFO" "Validating reverse config for $test_name..."
+    
+    if [[ ! -f "$original_config" || ! -f "$reverse_config" ]]; then
+        log "ERROR" "Config files not found for validation"
+        return 1
+    fi
+    
+    # Source both configs to get their variables
+    local orig_temp=$(mktemp)
+    local rev_temp=$(mktemp)
+    
+    # Extract variables from original config
+    source "$original_config"
+    local orig_disk_name="$DISK_NAME"
+    local orig_disk_size="$DISK_SIZE" 
+    local orig_disk_format="$DISK_FORMAT"
+    local orig_partition_table="$PARTITION_TABLE"
+    local orig_preallocation="$PREALLOCATION"
+    local orig_partitions=("${PARTITIONS[@]}")
+    
+    # Extract variables from reverse config
+    source "$reverse_config"
+    local rev_disk_name="$DISK_NAME"
+    local rev_disk_size="$DISK_SIZE"
+    local rev_disk_format="$DISK_FORMAT" 
+    local rev_partition_table="$PARTITION_TABLE"
+    local rev_preallocation="$PREALLOCATION"
+    local rev_partitions=("${PARTITIONS[@]}")
+    
+    rm -f "$orig_temp" "$rev_temp"
+    
+    local validation_errors=0
+    
+    # Validate basic properties (these should match exactly)
+    if [[ "$orig_disk_name" != "$rev_disk_name" ]]; then
+        log "WARNING" "Disk name mismatch: '$orig_disk_name' vs '$rev_disk_name'"
+        # This might be acceptable if paths are different
+    fi
+    
+    if [[ "$orig_disk_size" != "$rev_disk_size" ]]; then
+        log "ERROR" "Disk size mismatch: '$orig_disk_size' vs '$rev_disk_size'"
+        ((validation_errors++))
+    fi
+    
+    if [[ "$orig_disk_format" != "$rev_disk_format" ]]; then
+        log "ERROR" "Disk format mismatch: '$orig_disk_format' vs '$rev_disk_format'"
+        ((validation_errors++))
+    fi
+    
+    if [[ "$orig_partition_table" != "$rev_partition_table" ]]; then
+        log "ERROR" "Partition table mismatch: '$orig_partition_table' vs '$rev_partition_table'"
+        ((validation_errors++))
+    fi
+    
+    # Preallocation might not be detectable from existing image - be permissive
+    if [[ "$orig_preallocation" != "$rev_preallocation" ]]; then
+        log "WARNING" "Preallocation mismatch: '$orig_preallocation' vs '$rev_preallocation' (acceptable - cannot be determined from existing image)"
+    fi
+    
+    # Validate partitions - this is the complex part
+    log "INFO" "Validating partitions..."
+    log "DEBUG" "Original partitions: ${orig_partitions[*]}"
+    log "DEBUG" "Reverse partitions: ${rev_partitions[*]}"
+    
+    if ! validate_partitions_match "${orig_partitions[@]}" "---" "${rev_partitions[@]}"; then
+        log "ERROR" "Partition validation failed"
+        ((validation_errors++))
+    fi
+    
+    if [[ $validation_errors -eq 0 ]]; then
+        log "SUCCESS" "Reverse config validation PASSED"
+        return 0
+    else
+        log "ERROR" "Reverse config validation FAILED with $validation_errors errors"
+        return 1
+    fi
+}
+
+validate_partitions_match() {
+    local args=("$@")
+    local separator_found=false
+    local orig_partitions=()
+    local rev_partitions=()
+    
+    # Separa gli array usando il separatore "---"
+    for arg in "${args[@]}"; do
+        if [[ "$arg" == "---" ]]; then
+            separator_found=true
+            continue
+        fi
+        
+        if [[ "$separator_found" == false ]]; then
+            orig_partitions+=("$arg")
+        else
+            rev_partitions+=("$arg")
+        fi
+    done
+    
+    log "DEBUG" "Comparing ${#orig_partitions[@]} original partitions with ${#rev_partitions[@]} reverse partitions"
+    
+    # Parse partitions into structured data
+    local orig_parsed=()
+    local rev_parsed=()
+    
+    parse_partitions_array orig_parsed "${orig_partitions[@]}"
+    parse_partitions_array rev_parsed "${rev_partitions[@]}"
+    
+    # Call validation and return its exit code
+    validate_parsed_partitions orig_parsed rev_parsed
+    return $?
+}
+
+validate_parsed_partitions() {
+    local -n orig_ref=$1
+    local -n rev_ref=$2
+    
+    local total_errors=0
+    local matched_partitions=0
+    
+    # Create associative arrays for easier matching
+    declare -A orig_by_fs_size
+    declare -A rev_by_fs_size
+    
+    # Build lookup tables
+    for orig_part in "${orig_ref[@]}"; do
+        IFS='|' read -r idx size size_bytes fs_type part_type <<< "$orig_part"
+        local key="${fs_type}_${size_bytes}"
+        orig_by_fs_size["$key"]="$orig_part"
+    done
+    
+    for rev_part in "${rev_ref[@]}"; do
+        IFS='|' read -r idx size size_bytes fs_type part_type <<< "$rev_part"
+        local key="${fs_type}_${size_bytes}"
+        rev_by_fs_size["$key"]="$rev_part"
+    done
+    
+    # Try to match partitions
+    for orig_part in "${orig_ref[@]}"; do
+        IFS='|' read -r orig_idx orig_size orig_size_bytes orig_fs orig_part_type <<< "$orig_part"
+        
+        # Skip MSR partitions - they're hard to detect in reverse
+        if [[ "$orig_fs" == "msr" ]]; then
+            log "INFO" "Skipping MSR partition validation (not detectable in reverse)"
+            ((matched_partitions++))
+            continue
+        fi
+        
+        local found_match=false
+        
+        # Look for exact match first
+        local exact_key="${orig_fs}_${orig_size_bytes}"
+        if [[ -n "${rev_by_fs_size[$exact_key]:-}" ]]; then
+            log "DEBUG" "Found exact match for partition: $orig_size:$orig_fs"
+            found_match=true
+            ((matched_partitions++))
+            unset rev_by_fs_size["$exact_key"]
+            continue
+        fi
+        
+        # Look for filesystem match with size tolerance (±5%)
+        for rev_key in "${!rev_by_fs_size[@]}"; do
+            IFS='_' read -r rev_fs rev_size_bytes <<< "$rev_key"
+            
+            if [[ "$orig_fs" == "$rev_fs" ]] || is_compatible_filesystem "$orig_fs" "$rev_fs"; then
+                # Check size tolerance
+                if [[ "$orig_size_bytes" -eq 0 ]] || [[ "$rev_size_bytes" -eq 0 ]] || 
+                   size_within_tolerance "$orig_size_bytes" "$rev_size_bytes" 5; then
+                    log "DEBUG" "Found compatible match: $orig_size:$orig_fs ≈ $(echo "$rev_key" | sed 's/_/:/g')"
+                    found_match=true
+                    ((matched_partitions++))
+                    unset rev_by_fs_size["$rev_key"]
+                    break
+                fi
+            fi
+        done
+        
+        if [[ "$found_match" == false ]]; then
+            log "WARNING" "No match found for original partition: $orig_size:$orig_fs:$orig_part_type"
+            ((total_errors++))
+        fi
+    done
+    
+    # Check for extra partitions in reverse (might be extended partitions)
+    local extra_partitions=0
+    for rev_key in "${!rev_by_fs_size[@]}"; do
+        IFS='_' read -r rev_fs rev_size_bytes <<< "$rev_key"
+        
+        # Be permissive with certain types that are auto-created
+        if [[ "$rev_fs" == "dos" ]] || [[ "$rev_fs" == "none" ]] || [[ "$rev_fs" =~ extended ]]; then
+            log "INFO" "Ignoring auto-created partition: $rev_key (likely extended/container partition)"
+        else
+            log "WARNING" "Extra partition found in reverse: $(echo "$rev_key" | sed 's/_/:/g')"
+            ((extra_partitions++))
+        fi
+    done
+    
+    # Summary
+    log "INFO" "Partition matching summary:"
+    log "INFO" "  - Matched partitions: $matched_partitions"
+    log "INFO" "  - Unmatched original: $total_errors"
+    log "INFO" "  - Extra in reverse: $extra_partitions"
+    
+    # Be lenient - allow some mismatches for complex partition layouts
+    if [[ $total_errors -le 1 ]] && [[ $matched_partitions -ge $((${#orig_ref[@]} - 1)) ]]; then
+        log "SUCCESS" "Partition validation PASSED (with acceptable tolerances)"
+        return 0
+    else
+        log "ERROR" "Too many partition mismatches for validation to pass"
+        return 1
+    fi
+}
+
+size_within_tolerance() {
+    local size1="$1"
+    local size2="$2" 
+    local tolerance_percent="$3"
+    
+    if [[ $size1 -eq 0 ]] || [[ $size2 -eq 0 ]]; then
+        return 0  # Skip size check for unparseable sizes
+    fi
+    
+    local diff=$((size1 > size2 ? size1 - size2 : size2 - size1))
+    local avg=$(( (size1 + size2) / 2 ))
+    local tolerance=$(( avg * tolerance_percent / 100 ))
+    
+    [[ $diff -le $tolerance ]]
+}
+
+is_compatible_filesystem() {
+    local fs1="$1"
+    local fs2="$2"
+    
+    # Normalize filesystem names
+    local normalized_fs1=$(normalize_fs_name "$fs1")
+    local normalized_fs2=$(normalize_fs_name "$fs2")
+    
+    [[ "$normalized_fs1" == "$normalized_fs2" ]]
+}
+
+normalize_fs_name() {
+    local fs="$1"
+    
+    case "$fs" in
+        "fat32"|"vfat"|"fat16") echo "fat" ;;
+        "ntfs") echo "ntfs" ;;
+        "ext2"|"ext3"|"ext4") echo "ext" ;;
+        "swap") echo "swap" ;;
+        "xfs") echo "xfs" ;;
+        "btrfs") echo "btrfs" ;;
+        "msr") echo "msr" ;;
+        "dos"|"none") echo "none" ;;
+        *) echo "$fs" ;;
+    esac
+}
+
+parse_partitions_array() {
+    local -n result_array=$1
+    shift
+    local partitions=("$@")
+    
+    result_array=()
+    local index=0
+    
+    for partition in "${partitions[@]}"; do
+        local size fs_type part_type
+        
+        # Parse formato: SIZE:FILESYSTEM[:TYPE]
+        if [[ "$partition" =~ ^([^:]+):([^:]+)(:(.+))?$ ]]; then
+            size="${BASH_REMATCH[1]}"
+            fs_type="${BASH_REMATCH[2]}"
+            part_type="${BASH_REMATCH[4]:-primary}"
+        else
+            log "WARNING" "Cannot parse partition: $partition"
+            continue
+        fi
+        
+        # Normalize size to bytes for comparison
+        local size_bytes=$(normalize_size_to_bytes "$size")
+        
+        result_array+=("$index|$size|$size_bytes|$fs_type|$part_type")
+        ((index++))
+    done
+}
+
+normalize_size_to_bytes() {
+    local size="$1"
+    local multiplier=1
+    local number
+    
+    # Extract number and unit
+    if [[ "$size" =~ ^([0-9]+\.?[0-9]*)([KMGT]?)$ ]]; then
+        number="${BASH_REMATCH[1]}"
+        local unit="${BASH_REMATCH[2]}"
+        
+        case "$unit" in
+            "K") multiplier=1024 ;;
+            "M") multiplier=$((1024 * 1024)) ;;
+            "G") multiplier=$((1024 * 1024 * 1024)) ;;
+            "T") multiplier=$((1024 * 1024 * 1024 * 1024)) ;;
+            "") multiplier=1 ;;
+        esac
+        
+        # Convert to integer bytes (approximate for floating point)
+        echo $(( $(echo "$number * $multiplier" | bc 2>/dev/null || echo "${number%.*} * $multiplier" | bc) ))
+    else
+        # Return 0 for unparseable sizes (like "remaining")
+        echo 0
+    fi
+}
+
 normalize_fs_type() {
     local raw_fs="$1"
     local part_type="$2"   # opzionale: ID partizione (esadecimale)
@@ -428,14 +743,12 @@ main() {
         if run_command "$SCRIPT_PATH --reverse \"$disk_file\"" "Reverse config generation for $disk_file"; then
             if [[ -f "$reverse_config" ]]; then
                 log "SUCCESS" "Reverse config file generated: $reverse_config"
-                # Basic validation of the generated config
-                if grep -q "DISK_NAME=" "$reverse_config" && \
-                   grep -q "DISK_SIZE=" "$reverse_config" && \
-                   grep -q "DISK_FORMAT=" "$reverse_config" && \
-                   grep -q "PARTITION_TABLE=" "$reverse_config"; then
-                    log "SUCCESS" "Reverse config validation PASSED"
+                
+                # Advanced validation of the generated config
+                if validate_reverse_config "$config_file" "$reverse_config" "Test $total_tests"; then
+                    log "SUCCESS" "Reverse config validation PASSED for Test $total_tests"
                 else
-                    log "ERROR" "Reverse config validation FAILED: missing variables"
+                    log "ERROR" "Reverse config validation FAILED"
                     failed_tests=$((failed_tests + 1))
                     continue
                 fi
@@ -474,6 +787,24 @@ main() {
     else
         log "ERROR" "Some tests failed! ❌"
         return 1
+    fi
+}
+
+check_dependencies() {
+    local missing_deps=()
+    
+    # Required commands
+    local required_cmds=("bc" "qemu-img" "lsblk")
+    
+    for cmd in "${required_cmds[@]}"; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            missing_deps+=("$cmd")
+        fi
+    done
+    
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+        log "WARNING" "Missing optional dependencies: ${missing_deps[*]}"
+        log "WARNING" "Some features may be limited. Install with: apt-get install ${missing_deps[*]}"
     fi
 }
 
