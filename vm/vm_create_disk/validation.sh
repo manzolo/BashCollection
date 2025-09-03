@@ -56,6 +56,19 @@ validate_partition_specs() {
     
     disk_bytes=$(size_to_bytes "$DISK_SIZE")
     
+    local remaining_count=0
+    for part_spec in "${PARTITIONS[@]}"; do
+        if [[ "$part_spec" =~ :remaining: ]]; then
+            ((remaining_count++))
+        fi
+    done
+    
+    if [ $remaining_count -gt 1 ]; then
+        log_error "Only one partition can use 'remaining' size"
+        ((errors++))
+        return $errors
+    fi
+    
     for i in "${!PARTITIONS[@]}"; do
         local part_spec="${PARTITIONS[$i]}"
         IFS=':' read -r part_size part_fs part_type <<< "$part_spec"
@@ -93,9 +106,9 @@ validate_partition_specs() {
         fi
     done
     
-    # Check total size doesn't exceed disk (allow for some overhead)
-    if [ $total_bytes -gt $((disk_bytes - 100*1024*1024)) ]; then
-        log_error "Total partition sizes exceed disk capacity"
+    # Check total size doesn't exceed disk
+    if [ $remaining_count -eq 0 ] && [ $total_bytes -gt $disk_bytes ]; then
+        log_error "Total partition sizes ($total_bytes bytes) exceed disk capacity ($disk_bytes bytes)"
         ((errors++))
     fi
     

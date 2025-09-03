@@ -62,6 +62,37 @@ size_to_bytes() {
     esac
 }
 
+size_to_sectors() {
+    local size="$1"
+    local bytes
+    
+    if [ "$size" = "remaining" ]; then
+        echo "remaining"
+        return 0
+    fi
+    
+    bytes=$(size_to_bytes "$size")
+    if [ $? -ne 0 ]; then
+        return 1
+    fi
+    
+    # Converti in settori (512 byte) e allinea a 2048 settori (1MiB)
+    local sectors=$((bytes / 512))
+    local aligned_sectors=$(( ((sectors + 2047) / 2048) * 2048 ))
+    echo "$aligned_sectors"
+}
+
+sectors_to_bytes() {
+    local sectors="$1"
+    echo $((sectors * 512))
+}
+
+sectors_to_size() {
+    local sectors="$1"
+    local bytes=$((sectors * 512))
+    bytes_to_human "$bytes"
+}
+
 # Convert bytes to human-readable format
 bytes_to_readable() {
     local bytes=$1

@@ -1,29 +1,48 @@
-# Updated create_and_format_disk function
 create_and_format_disk() {
-    log "Starting disk creation process..."
+    log "Starting disk creation process..." >&2
     
     if [ -f "${DISK_NAME}" ]; then
-        error "File '${DISK_NAME}' already exists."
+        error "File '${DISK_NAME}' already exists." >&2
         if command -v whiptail >/dev/null 2>&1; then
             if ! whiptail --title "File Exists" --yesno "File '${DISK_NAME}' already exists. Overwrite?" 8 60; then
-                log "Operation cancelled."
+                log "Operation cancelled." >&2
                 exit 0
             fi
         else
             read -p "File '${DISK_NAME}' already exists. Overwrite? (y/N): " -n 1 -r
             echo
             if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                log "Operation cancelled."
+                log "Operation cancelled." >&2
                 exit 0
             fi
         fi
-        rm -f "${DISK_NAME}" 2>/dev/null || { error "Failed to remove existing file '${DISK_NAME}'"; exit 1; }
+        rm -f "${DISK_NAME}" 2>/dev/null || { error "Failed to remove existing file '${DISK_NAME}'" >&2; exit 1; }
     fi
 
+    log "DEBUG: PARTITIONS array: ${PARTITIONS[*]}" >&2
+    
+    # Validate total partition sizes
+    local total_disk_bytes=$(size_to_bytes "$DISK_SIZE")
+    local total_requested_bytes=0
+    local part_size
+    for part_info in "${PARTITIONS[@]}"; do
+        IFS=':' read -r part_size _ <<< "${part_info}"
+        if [ "$part_size" != "remaining" ]; then
+            local size_bytes=$(size_to_bytes "$part_size")
+            total_requested_bytes=$((total_requested_bytes + size_bytes))
+        fi
+    done
+    if [ $total_requested_bytes -gt $total_disk_bytes ]; then
+        error "Total requested partition sizes ($total_requested_bytes bytes) exceed disk size ($total_disk_bytes bytes)" >&2
+        exit 1
+    fi
+    
     validate_mbr_partitions
     
-    log "Creating disk ${DISK_NAME} with size ${DISK_SIZE} and format ${DISK_FORMAT}..."
+    log "Creating disk ${DISK_NAME} with size ${DISK_SIZE} and format ${DISK_FORMAT}..." >&2
     
+    local disk_bytes=$(size_to_bytes "$DISK_SIZE")
+    log "DEBUG: Disk size in bytes: $disk_bytes" >&2
     local create_cmd="qemu-img create -f ${DISK_FORMAT}"
     
     if [ "$PREALLOCATION" = "full" ]; then
@@ -37,74 +56,85 @@ create_and_format_disk() {
         esac
     fi
     
-    create_cmd+=" ${DISK_NAME} ${DISK_SIZE}"
+    create_cmd+=" ${DISK_NAME} ${disk_bytes}"
     
     if [ "$VERBOSE" -eq 1 ]; then
-        if ! eval $create_cmd; then
-            error "Failed to create virtual disk."
+        if ! eval $create_cmd 2>&1 | tee -a /dev/stderr; then
+            error "Failed to create virtual disk." >&2
             exit 1
         fi
     else
         if ! eval $create_cmd >/dev/null 2>&1; then
-            error "Failed to create virtual disk."
+            error "Failed to create virtual disk." >&2
             exit 1
         fi
     fi
     
-    success "Virtual disk created successfully."
+    success "Virtual disk created successfully." >&2
     
     if [ "${#PARTITIONS[@]}" -gt 0 ]; then
-        log "Setting up partitions..."
-        create_partitions
+        log "Setting up partitions..." >&2
+        create_partitions "$disk_bytes"
 
-        # Ensure DEVICE is set
         if [ -z "$DEVICE" ]; then
-            error "DEVICE not set after create_partitions"
+            error "DEVICE not set after create_partitions" >&2
             exit 1
         fi
 
-        # Passa il device alla funzione
         format_partitions "$DEVICE"
-        log "Final partition table for ${DISK_NAME}:"
+        log "Final partition table for ${DISK_NAME}:" >&2
         if [ "$VERBOSE" -eq 1 ]; then
-            log "Full parted output:"
-            sudo parted -s "${DEVICE}" print
-            log "Formatted table:"
+            log "Full parted output:" >&2
+            sudo parted -s "${DEVICE}" print >&2
+            log "Formatted table:" >&2
         fi
-        # Generate tabular output
         sudo parted -s "${DEVICE}" print | awk -v part_table="$PARTITION_TABLE" '
-            BEGIN {
-                if (part_table == "mbr") {
-                    printf "%-8s %-12s %-12s %-12s %-12s %-12s %s\n", "Number", "Start", "End", "Size", "File system", "Type", "Name"
-                    printf "%-8s %-12s %-12s %-12s %-12s %-12s %s\n", "------", "-------", "-------", "-------", "-----------", "-------", "----"
-                } else {
-                    printf "%-8s %-12s %-12s %-12s %-12s %s\n", "Number", "Start", "End", "Size", "File system", "Name"
-                    printf "%-8s %-12s %-12s %-12s %-12s %s\n", "------", "-------", "-------", "-------", "-----------", "----"
-                }
+        BEGIN {
+            if (part_table == "mbr") {
+                printf "%-8s %-12s %-12s %-12s %-12s %-12s %s\n", "Number", "Start", "End", "Size", "File system", "Type", "Name"
+                printf "%-8s %-12s %-12s %-12s %-12s %-12s %s\n", "------", "-------", "-------", "-------", "-----------", "-------", "----"
+            } else {
+                printf "%-8s %-12s %-12s %-12s %-12s %s\n", "Number", "Start", "End", "Size", "File system", "Name"
+                printf "%-8s %-12s %-12s %-12s %-12s %s\n", "------", "-------", "-------", "-------", "-----------", "----"
             }
-            /^[ ]*[0-9]+/ {
-                fs=$5
-                if (fs == "" || fs == "unknown") fs="none"
-                if (fs == "linux-swap(v1)" || fs == "linux-swap") fs="swap"
-                name=$6
-                if (fs == "fat16" || fs == "fat32" || fs == "vfat") name="Microsoft basic data"
-                else if (fs == "swap") name="Linux swap"
-                else if (fs == "ext4" || fs == "ext3" || fs == "xfs" || fs == "btrfs") name="Linux filesystem"
-                else if (name == "" || name == "unknown") name="Unformatted"
-                type=""
-                if (part_table == "mbr") {
-                    if ($7 ~ /logical/) type="logical"
-                    else if ($7 ~ /extended/) type="extended"
-                    else type="primary"
-                    printf "%-8s %-12s %-12s %-12s %-12s %-12s %s\n", $1, $2, $3, $4, fs, type, name
-                } else {
-                    printf "%-8s %-12s %-12s %-12s %-12s %s\n", $1, $2, $3, $4, fs, name
-                }
-            }' | while IFS= read -r line; do
-                log "  $line"
-            done
-        cleanup_device "${DEVICE}"
+        }
+        /^[ ]*[0-9]+/ {
+            # Remove units (B, kB, MB, etc.) and convert to bytes
+            start=$2; sub(/[a-zA-Z]+$/, "", start); start=start + 0
+            end=$3; sub(/[a-zA-Z]+$/, "", end); end=end + 0
+            size=$4; sub(/[a-zA-Z]+$/, "", size); size=size + 0
+            # Convert kB or MB to bytes if needed
+            if ($2 ~ /kB$/) start *= 1000
+            else if ($2 ~ /MB$/) start *= 1000000
+            if ($3 ~ /kB$/) end *= 1000
+            else if ($3 ~ /MB$/) end *= 1000000
+            if ($4 ~ /kB$/) size *= 1000
+            else if ($4 ~ /MB$/) size *= 1000000
+            number=$1
+            fs=$5
+            if (fs == "" || fs == "unknown") fs="none"
+            if (fs == "linux-swap(v1)" || fs == "linux-swap") fs="swap"
+            name=$6
+            if (fs == "fat16" || fs == "fat32" || fs == "vfat") name="Microsoft basic data"
+            else if (fs == "swap") name="Linux swap"
+            else if (fs == "ext4" || fs == "ext3" || fs == "xfs" || fs == "btrfs") name="Linux filesystem"
+            else if (name == "" || name == "unknown") name="Unformatted"
+            # Convert to MiB
+            start_mib=start / 1048576
+            end_mib=end / 1048576
+            size_mib=size / 1048576
+            type=""
+            if (part_table == "mbr") {
+                if ($7 ~ /logical/) type="logical"
+                else if ($7 ~ /extended/) type="extended"
+                else type="primary"
+                printf "%-8s %-12.2fMiB %-12.2fMiB %-12.2fMiB %-12s %-12s %s\n", number, start_mib, end_mib, size_mib, fs, type, name
+            } else {
+                printf "%-8s %-12.2fMiB %-12.2fMiB %-12.2fMiB %-12s %s\n", number, start_mib, end_mib, size_mib, fs, name
+            }
+        }'
+        cleanup_device "$DEVICE"
     else
-        success "Virtual disk created successfully (no partitions specified)."
+        success "Virtual disk created successfully (no partitions specified)." >&2
     fi
 }

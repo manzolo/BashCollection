@@ -276,7 +276,23 @@ calculate_precise_partition_size() {
         return 1
     fi
     
-    # Use smart rounding for the actual size
+    # Se è l'ultima partizione e usa circa tutto lo spazio rimanente,
+    # probabilmente era definita come "remaining"
+    if [ "$partition_num" -eq "$total_partitions" ]; then
+        local remaining_threshold=$((disk_bytes / 10))  # 10% del disco
+        if [ "$actual_bytes" -gt "$remaining_threshold" ]; then
+            # Controlla se è molto vicino allo spazio totale disponibile
+            local used_by_others=0
+            # Questo calcolo dovrebbe essere fatto dal chiamante, per ora uso euristica semplice
+            local expected_remaining=$((disk_bytes * 8 / 10))  # Stima 80% per ultima partizione
+            if [ "$actual_bytes" -gt "$expected_remaining" ]; then
+                echo "remaining"
+                return 0
+            fi
+        fi
+    fi
+    
+    # Usa l'algoritmo di rounding intelligente
     smart_size_rounding "$actual_bytes"
 }
 
@@ -287,67 +303,66 @@ smart_size_rounding() {
     # Ensure locale is C for consistent decimal handling
     export LC_NUMERIC=C
     
+    # Array di dimensioni comuni in bytes
+    local common_sizes_bytes=(
+        $((512 * 1024 * 1024))      # 512M
+        $((1024 * 1024 * 1024))     # 1G
+        $((2048 * 1024 * 1024))     # 2G
+        $((4096 * 1024 * 1024))     # 4G
+        $((8192 * 1024 * 1024))     # 8G
+        $((1536 * 1024 * 1024))     # 1536M (1.5G)
+        $((256 * 1024 * 1024))      # 256M
+        $((128 * 1024 * 1024))      # 128M
+        $((100 * 1024 * 1024))      # 100M
+    )
+    
+    local common_sizes_labels=(
+        "512M" "1G" "2G" "4G" "8G" "1536M" "256M" "128M" "100M"
+    )
+    
+    # Cerca la dimensione comune più vicina con tolleranza del 2%
+    local min_diff=$bytes
+    local best_match=""
+    
+    for i in "${!common_sizes_bytes[@]}"; do
+        local common_size=${common_sizes_bytes[$i]}
+        local diff=$((bytes > common_size ? bytes - common_size : common_size - bytes))
+        local tolerance=$((common_size / 50))  # 2% tolerance
+        
+        if [ $diff -le $tolerance ] && [ $diff -lt $min_diff ]; then
+            min_diff=$diff
+            best_match=${common_sizes_labels[$i]}
+        fi
+    done
+    
+    if [ -n "$best_match" ]; then
+        echo "$best_match"
+        return 0
+    fi
+    
+    # Fallback al vecchio algoritmo
     if [ "$bytes" -ge $((1024*1024*1024)) ]; then
-        # For GB sizes, check if close to a round number
-        local gb_precise
-        gb_precise=$(echo "scale=3; $bytes / (1024*1024*1024)" | bc)
-        local gb_int
-        gb_int=$(echo "scale=0; ($gb_precise + 0.5) / 1" | bc)
-        
-        # If within 5% of a round GB number, use the round number
-        local diff_percent
-        diff_percent=$(echo "scale=2; if ($gb_precise > $gb_int) ($gb_precise - $gb_int) else ($gb_int - $gb_precise) * 100 / $gb_int" | bc)
-        
-        if [ "$(echo "$diff_percent <= 5" | bc)" -eq 1 ] && [ "$gb_int" -gt 0 ]; then
-            echo "${gb_int}G"
-        else
-            # Round to nearest 100MB
-            local gb_rounded
-            gb_rounded=$(echo "scale=1; ($gb_precise * 10 + 0.5) / 10" | bc)
-            local gb_display
-            gb_display=$(echo "scale=0; ($gb_rounded + 0.05) / 1" | bc)
-            echo "${gb_display}G"
-        fi
+        # Per GB, arrotonda al GB più vicino
+        local gb_precise=$(echo "scale=3; $bytes / (1024*1024*1024)" | bc)
+        local gb_rounded=$(echo "scale=0; ($gb_precise + 0.5) / 1" | bc)
+        echo "${gb_rounded}G"
     elif [ "$bytes" -ge $((1024*1024)) ]; then
-        # For MB sizes, check if close to a round number first
-        local mb_precise
-        mb_precise=$(echo "scale=2; $bytes / (1024*1024)" | bc)
-        
-        # Check for common round numbers (100, 250, 500, 512, 1000, etc.)
-        local common_mb_sizes=(100 128 250 256 500 512 750 1000 1024)
-        local best_match=""
-        local min_diff_percent=10
-        
-        for target in "${common_mb_sizes[@]}"; do
-            if [ "$(echo "$target <= ($mb_precise + 50)" | bc)" -eq 1 ] && [ "$(echo "$target >= ($mb_precise - 50)" | bc)" -eq 1 ]; then
-                local diff_percent
-                diff_percent=$(echo "scale=2; if ($mb_precise > $target) ($mb_precise - $target) else ($target - $mb_precise) * 100 / $target" | bc)
-                if [ "$(echo "$diff_percent < $min_diff_percent" | bc)" -eq 1 ]; then
-                    min_diff_percent=$diff_percent
-                    best_match="$target"
-                fi
-            fi
-        done
-        
-        if [ -n "$best_match" ]; then
-            echo "${best_match}M"
+        # Per MB, arrotonda ai 10MB più vicini se >100MB, altrimenti al MB
+        local mb_precise=$(echo "scale=2; $bytes / (1024*1024)" | bc)
+        local mb_rounded
+        if [ "$(echo "$mb_precise >= 100" | bc)" -eq 1 ]; then
+            mb_rounded=$(echo "scale=0; ($mb_precise + 5) / 10 * 10" | bc)
         else
-            # Standard rounding
-            local mb_rounded
-            if [ "$(echo "$mb_precise >= 100" | bc)" -eq 1 ]; then
-                mb_rounded=$(echo "scale=0; ($mb_precise + 5) / 10 * 10" | bc)
-            else
-                mb_rounded=$(echo "scale=0; ($mb_precise + 0.5) / 1" | bc)
-            fi
-            echo "${mb_rounded}M"
+            mb_rounded=$(echo "scale=0; ($mb_precise + 0.5) / 1" | bc)
         fi
+        echo "${mb_rounded}M"
     else
-        # For smaller sizes, round to nearest KB
-        local kb_rounded
-        kb_rounded=$(echo "scale=0; ($bytes / 1024 + 0.5) / 1" | bc)
+        # Per dimensioni più piccole, arrotonda al KB più vicino
+        local kb_rounded=$(echo "scale=0; ($bytes / 1024 + 0.5) / 1" | bc)
         echo "${kb_rounded}K"
     fi
 }
+
 
 # Enhanced filesystem type detection
 detect_filesystem_type() {
