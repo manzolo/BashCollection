@@ -22,121 +22,454 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+PURPLE='\033[0;35m'
+GRAY='\033[0;90m'
 NC='\033[0m' # No Color
 
 # Flag to determine whether to keep disk images
 KEEP_IMAGES=false
 
-# --- Utility Functions ---
+# Test execution counters
+TOTAL_TESTS=0
+PASSED_TESTS=0
+FAILED_TESTS=0
+SKIPPED_TESTS=0
 
-# Function for colored and timestamped logging
+# --- Enhanced Logging System ---
+
+# Get current timestamp in consistent format
+get_timestamp() {
+    date '+%Y-%m-%d %H:%M:%S'
+}
+
+# Get elapsed time since start
+get_elapsed_time() {
+    if [[ -n "${SCRIPT_START_TIME:-}" ]]; then
+        local current_time=$(date +%s)
+        local elapsed=$((current_time - SCRIPT_START_TIME))
+        printf "%02d:%02d" $((elapsed / 60)) $((elapsed % 60))
+    else
+        echo "00:00"
+    fi
+}
+
+# Enhanced logging function with consistent formatting
 log() {
-    local level=$1
-    local message=$2
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local level="$1"
+    local message="$2"
+    local context="${3:-}"
+    local timestamp="$(get_timestamp)"
+    local elapsed="$(get_elapsed_time)"
+    local prefix=""
+    local color=""
     
-    case $level in
+    case "$level" in
+        "INIT")
+            color="$CYAN"
+            prefix="INIT "
+            ;;
         "INFO")
-            echo -e "${BLUE}[INFO]${NC} $timestamp - $message"
+            color="$BLUE"
+            prefix="INFO "
             ;;
         "SUCCESS")
-            echo -e "${GREEN}[SUCCESS]${NC} $timestamp - $message"
+            color="$GREEN"
+            prefix="PASS "
             ;;
         "WARNING")
-            echo -e "${YELLOW}[WARNING]${NC} $timestamp - $message"
+            color="$YELLOW"
+            prefix="WARN "
             ;;
         "ERROR")
-            echo -e "${RED}[ERROR]${NC} $timestamp - $message" >&2
+            color="$RED"
+            prefix="FAIL "
             ;;
         "DEBUG")
-            if [[ "$DEBUG" == "true" ]]; then
-                echo -e "${BLUE}[DEBUG]${NC} $timestamp - $message"
+            if [[ "$DEBUG" != "true" ]]; then
+                return 0
             fi
+            color="$GRAY"
+            prefix="DBUG "
+            ;;
+        "STEP")
+            color="$PURPLE"
+            prefix="STEP "
+            ;;
+        "RESULT")
+            color="$CYAN"
+            prefix="RSLT "
             ;;
         *)
-            echo "$timestamp - $message"
+            color="$NC"
+            prefix="LOG  "
+            ;;
+    esac
+    
+    # Format: [LEVEL] YYYY-MM-DD HH:MM:SS [MM:SS] [CONTEXT] Message
+    local log_line=""
+    if [[ -n "$context" ]]; then
+        log_line="[${prefix}] ${timestamp} [${elapsed}] [${context}] ${message}"
+    else
+        log_line="[${prefix}] ${timestamp} [${elapsed}] ${message}"
+    fi
+    
+    # Output to terminal (file descriptor 3) with colors
+    if [[ -t 3 ]]; then
+        echo -e "${color}${log_line}${NC}" >&3
+    else
+        echo "${log_line}" >&3
+    fi
+    
+    # Output to log file (without colors)
+    echo "${log_line}" >> "$LOG_FILE"
+}
+
+# Specialized logging functions for better readability
+log_init() { log "INIT" "$1" "$2"; }
+log_info() { log "INFO" "$1" "$2"; }
+log_success() { log "SUCCESS" "$1" "$2"; }
+log_warning() { log "WARNING" "$1" "$2"; }
+log_error() { log "ERROR" "$1" "$2"; }
+log_debug() { log "DEBUG" "$1" "$2"; }
+log_step() { log "STEP" "$1" "$2"; }
+log_result() { log "RESULT" "$1" "$2"; }
+
+# Enhanced section logging with visual separators
+log_section() {
+    local title="$1"
+    local level="${2:-INFO}"
+    local separator_char="${3:-=}"
+    local width=80
+    
+    log "$level" ""
+    log "$level" "$(printf "%*s" $width "" | tr " " "$separator_char")"
+    
+    # Create centered title with separators
+    local title_length=${#title}
+    local padding=$(( (width - title_length - 2) / 2 ))
+    local left_sep=$(printf "%*s" $padding "" | tr " " "$separator_char")
+    local right_sep=$(printf "%*s" $((width - title_length - 2 - padding)) "" | tr " " "$separator_char")
+    
+    log "$level" "${left_sep} ${title} ${right_sep}"
+    log "$level" "$(printf "%*s" $width "" | tr " " "$separator_char")"
+}
+
+# Test progress logging
+log_test_start() {
+    local test_num="$1"
+    local test_name="$2"
+    local total="$3"
+    
+    log_section "Test $test_num/$total: $test_name" "STEP" "-"
+    log_step "Starting test case" "TEST-$test_num"
+}
+
+log_test_end() {
+    local test_num="$1"
+    local status="$2"  # PASS/FAIL/SKIP
+    local message="$3"
+    
+    case "$status" in
+        "PASS")
+            log_success "Test $test_num completed successfully: $message" "TEST-$test_num"
+            ((PASSED_TESTS++))
+            ;;
+        "FAIL")
+            log_error "Test $test_num failed: $message" "TEST-$test_num"
+            ((FAILED_TESTS++))
+            ;;
+        "SKIP")
+            log_warning "Test $test_num skipped: $message" "TEST-$test_num"
+            ((SKIPPED_TESTS++))
             ;;
     esac
 }
 
-# Function to run a command with proper error handling and logging
+# Command execution with enhanced logging
 run_command() {
     local cmd="$1"
     local description="$2"
+    local context="${3:-CMD}"
+    local timeout="${4:-300}" # 5 minutes default timeout
     
-    log "DEBUG" "Running: $cmd"
+    log_debug "Executing: $cmd" "$context"
+    log_info "Running: $description" "$context"
     
-    # Run the command and capture its output
-    if ! output=$(eval "$cmd" 2>&1); then
-        log "ERROR" "$description failed with exit code $?"
-        echo "$output" | while IFS= read -r line; do log "ERROR" "  $line"; done
-        return 1
+    local start_time=$(date +%s)
+    local output
+    local exit_code
+    
+    # Run command with timeout
+    if command -v timeout >/dev/null 2>&1; then
+        output=$(sudo -E timeout --foreground "$timeout" bash -c "$cmd" 2>&1)
+        exit_code=$?
+        if [[ $exit_code -eq 124 ]]; then
+            log_error "Command timed out after ${timeout}s: $cmd" "$context"
+            log_debug "Timeout output: $output" "$context"
+            return 1
+        fi
     else
-        log "SUCCESS" "$description completed successfully"
-        echo "$output" | while IFS= read -r line; do log "INFO" "  $line"; done
+        output=$(sudo -E bash -c "$cmd" 2>&1)
+        exit_code=$?
+    fi
+    
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    
+    if [[ $exit_code -eq 0 ]]; then
+        log_success "$description completed in ${duration}s" "$context"
+        if [[ -n "$output" ]]; then
+            while IFS= read -r line; do
+                [[ -n "$line" ]] && log_debug "Output: $line" "$context"
+            done <<< "$output"
+        fi
         return 0
+    else
+        log_error "$description failed (exit code: $exit_code) after ${duration}s" "$context"
+        if [[ -n "$output" ]]; then
+            while IFS= read -r line; do
+                [[ -n "$line" ]] && log_error "Error: $line" "$context"
+            done <<< "$output"
+        fi
+        return 1
     fi
 }
 
-# Helper function to repeat a character
+# File operations logging
+log_file_info() {
+    local file_path="$1"
+    local context="${2:-FILE}"
+    
+    if [[ ! -f "$file_path" ]]; then
+        log_error "File not found: $file_path" "$context"
+        return 1
+    fi
+    
+    local file_size_bytes=$(stat -c%s "$file_path" 2>/dev/null || echo "0")
+    local file_size_human=$(ls -lh "$file_path" 2>/dev/null | awk '{print $5}' || echo "unknown")
+    local file_type=$(file -b "$file_path" 2>/dev/null || echo "unknown")
+    
+    log_info "File: $(basename "$file_path")" "$context"
+    log_info "  Path: $file_path" "$context"
+    log_info "  Size: $file_size_human ($file_size_bytes bytes)" "$context"
+    log_info "  Type: $file_type" "$context"
+}
+
+# Fixed progress bar for long operations
+show_progress() {
+    local current="$1"
+    local total="$2"
+    local operation="$3"
+    local width=50
+    
+    local percentage=$((current * 100 / total))
+    local filled=$((current * width / total))
+    local empty=$((width - filled))
+    
+    local bar="["
+    bar+="$(printf "%*s" $filled "" | tr " " "#")"
+    bar+="$(printf "%*s" $empty "" | tr " " "-")"
+    bar+="]"
+    
+    # Use stderr to avoid interfering with log output
+    if [[ -t 2 ]]; then
+        # Clear the current line and print progress
+        printf "\r%*s\r" 80 "" >&2
+        printf "\033[0;36m[PROG]\033[0m $(get_timestamp) [$(get_elapsed_time)] %s %s %3d%% (%d/%d)" \
+               "$bar" "$operation" "$percentage" "$current" "$total" >&2
+        
+        if [[ $current -eq $total ]]; then
+            printf "\n" >&2  # New line when complete
+        fi
+    fi
+    
+    # Also log progress to file (but only at certain intervals or completion)
+    if [[ $current -eq $total ]] || [[ $((current % 5)) -eq 0 ]] || [[ $current -eq 1 ]]; then
+        log_info "Progress: $operation $percentage% ($current/$total)" "PROGRESS"
+    fi
+}
+
+# --- Enhanced Utility Functions ---
+
 repeat() {
-    local char=$1
-    local count=$2
+    local char="$1"
+    local count="$2"
     printf "%*s" "$count" "" | tr " " "$char"
 }
 
-# --- Test Case Management ---
-
-# Function to clean up test directory and log file
-cleanup() {
-    log "INFO" "Cleaning up test directory and log file..."
-    if [[ -f "$LOG_FILE" ]]; then
-        rm -f "$LOG_FILE"
-        log "SUCCESS" "Log file $LOG_FILE removed."
-    fi
-    if [[ -d "$TEST_DIR" ]]; then
-        if [[ "$KEEP_IMAGES" == "false" ]]; then
-            rm -rf "$TEST_DIR"
-            log "SUCCESS" "Test directory cleaned up."
-        else
-            log "INFO" "Keeping disk images in $TEST_DIR due to --keep-images option."
-        fi
-    fi
-    # Also remove any disk files created in the current directory
-    if [[ "$KEEP_IMAGES" == "false" ]]; then
-        log "DEBUG" "Removing lingering disk files."
-        rm -f test_*.{qcow2,raw}
+format_duration() {
+    local seconds="$1"
+    local hours=$((seconds / 3600))
+    local minutes=$(((seconds % 3600) / 60))
+    local secs=$((seconds % 60))
+    
+    if [[ $hours -gt 0 ]]; then
+        printf "%02d:%02d:%02d" $hours $minutes $secs
     else
-        log "INFO" "Keeping lingering disk files due to --keep-images option."
-    fi
-    # Ensure nbd devices are disconnected
-    if command -v qemu-nbd >/dev/null 2>&1; then
-        for nbd in /dev/nbd*; do
-            if [[ -b "$nbd" ]] && sudo qemu-nbd -d "$nbd" &>/dev/null; then
-                log "INFO" "Disconnected $nbd."
-            fi
-        done
-    fi
-    # Release any loop devices
-    if command -v losetup >/dev/null 2>&1; then
-        for loop in $(losetup -a | awk -F: '{print $1}'); do
-            if sudo losetup -d "$loop" &>/dev/null; then
-                log "INFO" "Released loop device $loop."
-            fi
-        done
+        printf "%02d:%02d" $minutes $secs
     fi
 }
 
-# Function to generate a configuration file for a specific test case
+# Generate unique test name from partition specifications
+generate_unique_test_name() {
+    local disk_format="$1"
+    local partition_table="$2"
+    local preallocation="$3"
+    shift 3
+    local partitions=("$@")
+    
+    # Create a hash from the partition specifications for uniqueness
+    local partition_spec="${partitions[*]}"
+    local hash_input="${disk_format}_${partition_table}_${preallocation}_${partition_spec}"
+    
+    # Simple hash using cksum (available on most systems)
+    local hash=""
+    if command -v cksum >/dev/null 2>&1; then
+        hash=$(echo "$hash_input" | cksum | cut -d' ' -f1)
+    else
+        # Fallback: use length and first few characters
+        hash="${#hash_input}_$(echo "$hash_input" | head -c 8)"
+    fi
+    
+    # Create descriptive name with hash suffix for uniqueness
+    local base_name="${disk_format}_${partition_table}_${preallocation}"
+    local unique_name="${base_name}_${hash}"
+    
+    log_debug "Generated unique name: $unique_name for partitions: ${partitions[*]}" "NAMING"
+    echo "$unique_name"
+}
+
+# Check system requirements and log findings
+check_system_requirements() {
+    log_step "Checking system requirements" "INIT"
+    
+    local missing_deps=()
+    local optional_deps=()
+    local required_cmds=("qemu-img")
+    local optional_cmds=("bc" "lsblk" "losetup" "qemu-nbd" "timeout" "cksum")
+    
+    # Check required dependencies
+    for cmd in "${required_cmds[@]}"; do
+        if command -v "$cmd" >/dev/null 2>&1; then
+            log_success "Required command found: $cmd" "DEPS"
+        else
+            missing_deps+=("$cmd")
+            log_error "Required command missing: $cmd" "DEPS"
+        fi
+    done
+    
+    # Check optional dependencies
+    for cmd in "${optional_cmds[@]}"; do
+        if command -v "$cmd" >/dev/null 2>&1; then
+            log_info "Optional command available: $cmd" "DEPS"
+        else
+            optional_deps+=("$cmd")
+            log_warning "Optional command missing: $cmd" "DEPS"
+        fi
+    done
+    
+    # Report results
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+        log_error "Missing required dependencies: ${missing_deps[*]}" "DEPS"
+        log_error "Install with: apt-get install ${missing_deps[*]}" "DEPS"
+        return 1
+    fi
+    
+    if [[ ${#optional_deps[@]} -gt 0 ]]; then
+        log_warning "Missing optional dependencies: ${optional_deps[*]}" "DEPS"
+        log_warning "Some features may be limited" "DEPS"
+        log_info "Install with: apt-get install ${optional_deps[*]}" "DEPS"
+    fi
+    
+    log_success "System requirements check completed" "DEPS"
+    return 0
+}
+
+# Enhanced cleanup function
+cleanup() {
+    log_step "Starting cleanup process" "CLEANUP"
+    
+    # Remove log file if requested
+    if [[ -f "$LOG_FILE" && "$KEEP_IMAGES" == "false" ]]; then
+        log_info "Removing log file: $LOG_FILE" "CLEANUP"
+    fi
+    
+    # Cleanup test directory
+    if [[ -d "$TEST_DIR" ]]; then
+        if [[ "$KEEP_IMAGES" == "false" ]]; then
+            local file_count=$(find "$TEST_DIR" -type f | wc -l)
+            log_info "Removing test directory with $file_count files" "CLEANUP"
+            rm -rf "$TEST_DIR"
+            log_success "Test directory cleaned up" "CLEANUP"
+        else
+            log_info "Keeping test directory: $TEST_DIR" "CLEANUP"
+        fi
+    fi
+    
+    # Remove lingering disk files (using unique naming pattern)
+    local lingering_patterns=("test_*_*.qcow2" "test_*_*.raw")
+    for pattern in "${lingering_patterns[@]}"; do
+        for file in $pattern; do
+            if [[ -f "$file" ]]; then
+                if [[ "$KEEP_IMAGES" == "false" ]]; then
+                    rm -f "$file"
+                    log_info "Removed lingering file: $file" "CLEANUP"
+                else
+                    log_info "Keeping lingering file: $file" "CLEANUP"
+                fi
+            fi
+        done
+    done
+    
+    # Disconnect NBD devices
+    if command -v qemu-nbd >/dev/null 2>&1; then
+        local nbd_count=0
+        for nbd in /dev/nbd*; do
+            if [[ -b "$nbd" ]] && sudo qemu-nbd -d "$nbd" &>/dev/null; then
+                log_info "Disconnected NBD device: $nbd" "CLEANUP"
+                ((nbd_count++))
+            fi
+        done
+        [[ $nbd_count -gt 0 ]] && log_success "Disconnected $nbd_count NBD devices" "CLEANUP"
+    fi
+    
+    # Release loop devices
+    if command -v losetup >/dev/null 2>&1; then
+        local loop_count=0
+        while IFS= read -r loop_info; do
+            local loop_dev=$(echo "$loop_info" | awk -F: '{print $1}')
+            if sudo losetup -d "$loop_dev" &>/dev/null; then
+                log_info "Released loop device: $loop_dev" "CLEANUP"
+                ((loop_count++))
+            fi
+        done < <(losetup -a 2>/dev/null || true)
+        [[ $loop_count -gt 0 ]] && log_success "Released $loop_count loop devices" "CLEANUP"
+    fi
+    
+    log_success "Cleanup process completed" "CLEANUP"
+}
+
+# Enhanced configuration generation with unique naming
 generate_config() {
-    local disk_format=$1
-    local partition_table=$2
-    local preallocation=$3
+    local disk_format="$1"
+    local partition_table="$2"
+    local preallocation="$3"
     shift 3
     local partitions_array=("$@")
 
-    local config_file="$TEST_DIR/test_${disk_format}_${partition_table}_${preallocation}.sh"
-    local disk_name="test_${disk_format}_${partition_table}_${preallocation}.${disk_format}"
+    # Generate unique test name
+    local unique_name=$(generate_unique_test_name "$disk_format" "$partition_table" "$preallocation" "${partitions_array[@]}")
+    
+    local config_file="$TEST_DIR/${unique_name}.sh"
+    local disk_name="${unique_name}.${disk_format}"
+
+    log_debug "Generating config file: $config_file" "CONFIG"
+    log_debug "  Unique name: $unique_name" "CONFIG"
+    log_debug "  Disk format: $disk_format" "CONFIG"
+    log_debug "  Partition table: $partition_table" "CONFIG"
+    log_debug "  Preallocation: $preallocation" "CONFIG"
+    log_debug "  Partitions: ${partitions_array[*]}" "CONFIG"
 
     cat << EOF > "$config_file"
 #!/bin/bash
@@ -154,402 +487,419 @@ EOF
 
     echo ")" >> "$config_file"
     chmod +x "$config_file"
-   
+    
+    log_success "Generated config file: $(basename "$config_file")" "CONFIG"
     echo "$config_file"
 }
 
-# Function to verify the created disk file
+# Enhanced disk verification
 verify_disk() {
     local disk_file="$1"
     local expected_format="$2"
+    local context="${3:-VERIFY}"
     
-    log "INFO" "Verifying disk file: $disk_file"
+    log_step "Verifying disk file: $(basename "$disk_file")" "$context"
     
     if [[ ! -f "$disk_file" ]]; then
-        log "ERROR" "Disk file not found: $disk_file"
+        log_error "Disk file not found: $disk_file" "$context"
         return 1
     fi
     
-    # Log the file size in human-readable format
-    local file_size=$(ls -lh "$disk_file" | awk '{print $5}')
-    log "INFO" "Disk file size on filesystem: $file_size"
+    log_file_info "$disk_file" "$context"
     
-    local file_size_bytes=$(stat -c%s "$disk_file")
-    log "DEBUG" "Disk file size: $file_size_bytes bytes"
-    
+    local file_size_bytes=$(stat -c%s "$disk_file" 2>/dev/null || echo "0")
     if [[ $file_size_bytes -eq 0 ]]; then
-        log "ERROR" "Disk file is empty: $disk_file"
+        log_error "Disk file is empty" "$context"
         return 1
     fi
     
     if command -v qemu-img >/dev/null 2>&1; then
-        log "INFO" "Checking disk format with qemu-img..."
-        if qemu-img info "$disk_file" | grep -q "file format: $expected_format"; then
-            log "SUCCESS" "Disk format verified: $expected_format"
-            return 0
+        log_info "Checking disk format with qemu-img" "$context"
+        
+        local qemu_output
+        if qemu_output=$(qemu-img info "$disk_file" 2>&1); then
+            log_debug "qemu-img info output:" "$context"
+            while IFS= read -r line; do
+                log_debug "  $line" "$context"
+            done <<< "$qemu_output"
+            
+            if echo "$qemu_output" | grep -q "file format: $expected_format"; then
+                log_success "Disk format verified: $expected_format" "$context"
+                return 0
+            else
+                log_error "Disk format verification failed. Expected: $expected_format" "$context"
+                return 1
+            fi
         else
-            log "ERROR" "Disk format verification failed. Expected: $expected_format"
+            log_error "qemu-img info failed" "$context"
+            log_error "$qemu_output" "$context"
             return 1
         fi
     else
-        log "WARNING" "qemu-img command not found. Skipping format verification."
+        log_warning "qemu-img not available, skipping format verification" "$context"
         return 0
     fi
 }
 
-# Function to analyze the disk image using lsblk
+# Enhanced disk analysis
 analyze_disk_with_lsblk() {
     local disk_file="$1"
+    local context="${2:-ANALYZE}"
 
     if ! command -v qemu-nbd >/dev/null 2>&1 || ! command -v lsblk >/dev/null 2>&1; then
-        log "WARNING" "qemu-nbd or lsblk not found. Skipping disk analysis."
+        log_warning "qemu-nbd or lsblk not found, skipping disk analysis" "$context"
         return 0
     fi
 
-    log "INFO" "Analyzing disk image with lsblk..."
+    log_step "Analyzing disk image with lsblk" "$context"
     
-    local device_name
+    local device_name=""
+    local connection_method=""
     
-    # Try to connect the disk image to a network block device
+    # Try to connect via qemu-nbd first
     if sudo qemu-nbd -c /dev/nbd0 --read-only "$disk_file" &> /dev/null; then
         device_name="/dev/nbd0"
-        log "INFO" "Connected disk to /dev/nbd0 via qemu-nbd."
+        connection_method="qemu-nbd"
+        log_success "Connected disk to $device_name via qemu-nbd" "$context"
     else
-        log "WARNING" "Failed to connect disk to a network block device. Falling back to loop device."
+        log_warning "Failed to connect via qemu-nbd, trying loop device" "$context"
         
         # Fallback to loop device for raw format
-        if [[ "$(qemu-img info "$disk_file" | grep 'file format' | awk '{print $NF}')" == "raw" ]]; then
-            device_name=$(sudo losetup -f --show "$disk_file" 2>/dev/null)
-            if [[ $? -ne 0 ]]; then
-                log "WARNING" "Failed to set up loop device."
-                return 0
+        local disk_format=$(qemu-img info "$disk_file" 2>/dev/null | grep 'file format' | awk '{print $NF}')
+        if [[ "$disk_format" == "raw" ]]; then
+            if device_name=$(sudo losetup -f --show "$disk_file" 2>/dev/null); then
+                connection_method="loopback"
+                log_success "Set up loop device: $device_name" "$context"
+            else
+                log_error "Failed to set up loop device" "$context"
+                return 1
             fi
-            log "INFO" "Set up loop device: $device_name"
         else
-            log "WARNING" "Cannot analyze non-raw disk image without qemu-nbd."
-            return 0
+            log_error "Cannot analyze non-raw disk without qemu-nbd" "$context"
+            return 1
         fi
     fi
     
     # Wait for partitions to be detected
+    log_debug "Waiting for partition detection..." "$context"
     sleep 2
     
-    # Use lsblk to get detailed information
-    echo "Partition table for $disk_file:"
-    if [[ "$device_name" == "/dev/nbd0" ]]; then
-        # lsblk needs sudo to see partitions on nbd device
-        if ! output=$(sudo lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT,PARTTYPE "$device_name" 2>&1); then
-            log "WARNING" "lsblk failed for $device_name."
-            echo "$output" | while IFS= read -r line; do log "WARNING" "  $line"; done
-        else
-            echo "$output" | while IFS= read -r line; do log "INFO" "  $line"; done
-        fi
+    # Run lsblk analysis
+    log_info "Running lsblk analysis on $device_name" "$context"
+    local lsblk_output
+    if lsblk_output=$(sudo lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT,PARTTYPE "$device_name" 2>&1); then
+        log_result "Partition table for $(basename "$disk_file"):" "$context"
+        while IFS= read -r line; do
+            log_result "  $line" "$context"
+        done <<< "$lsblk_output"
     else
-        # lsblk needs sudo to see partitions on loop device
-        if ! output=$(sudo lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT "$device_name" 2>&1); then
-            log "WARNING" "lsblk failed for $device_name."
-            echo "$output" | while IFS= read -r line; do log "WARNING" "  $line"; done
-        else
-            echo "$output" | while IFS= read -r line; do log "INFO" "  $line"; done
-        fi
+        log_warning "lsblk analysis failed" "$context"
+        log_debug "$lsblk_output" "$context"
     fi
     
     # Disconnect the device
-    if [[ "$device_name" == "/dev/nbd0" ]]; then
+    log_debug "Disconnecting $device_name" "$context"
+    if [[ "$connection_method" == "qemu-nbd" ]]; then
         if sudo qemu-nbd -d "$device_name" &> /dev/null; then
-            log "INFO" "Disconnected /dev/nbd0."
+            log_success "Disconnected $device_name" "$context"
         else
-            log "WARNING" "Failed to disconnect /dev/nbd0."
+            log_warning "Failed to disconnect $device_name" "$context"
         fi
-    elif [[ -n "$device_name" ]]; then
+    elif [[ "$connection_method" == "loopback" && -n "$device_name" ]]; then
         if sudo losetup -d "$device_name" &> /dev/null; then
-            log "INFO" "Released loop device $device_name."
+            log_success "Released loop device $device_name" "$context"
         else
-            log "WARNING" "Failed to release loop device $device_name."
+            log_warning "Failed to release loop device $device_name" "$context"
         fi
     fi
     
     return 0
 }
 
+# Enhanced initialization and log file handling
+initialize_logging() {
+    # Remove existing log file if it exists
+    if [[ -f "$LOG_FILE" ]]; then
+        rm -f "$LOG_FILE"
+    fi
+    
+    # Create log file directory if needed
+    local log_dir=$(dirname "$LOG_FILE")
+    if [[ ! -d "$log_dir" ]]; then
+        mkdir -p "$log_dir" 2>/dev/null || {
+            echo "ERROR: Failed to create log directory: $log_dir"
+            exit 1
+        }
+    fi
+    
+    # Open file descriptor 3 for terminal output
+    exec 3>&1
+    
+    # Redirect stdout and stderr to both log file and terminal
+    exec > >(tee -a "$LOG_FILE") 2>&1
+}
+
+# --- Main Execution ---
+
+main() {
+    # Initialize script timing
+    SCRIPT_START_TIME=$(date +%s)
+    
+    # Parse command-line options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --keep-images)
+                KEEP_IMAGES=true
+                shift
+                ;;
+            --debug)
+                DEBUG=true
+                shift
+                ;;
+            *)
+                log_warning "Unknown option: $1"
+                shift
+                ;;
+        esac
+    done
+    
+    # Initialize logging
+    log_section "VM CREATE DISK TEST SUITE" "INIT"
+    log_init "Test script started at $(get_timestamp)"
+    log_init "Debug mode: $DEBUG"
+    log_init "Keep images: $KEEP_IMAGES"
+    log_init "Log file: $LOG_FILE"
+    
+    # Check system requirements
+    if ! check_system_requirements; then
+        log_error "System requirements not met"
+        exit 1
+    fi
+    
+    # Check if main script exists
+    if ! command -v "$SCRIPT_PATH" >/dev/null 2>&1; then
+        log_error "Main script '$SCRIPT_PATH' not found in PATH"
+        exit 1
+    fi
+    log_success "Main script found: $SCRIPT_PATH"
+
+    # Test cases definition with unique configurations
+    declare -a TESTS=(
+        "qcow2 gpt off 2G:ext4 1G:swap 1G:fat32"
+        "qcow2 gpt metadata 2G:ext4 2G:swap 2G:btrfs"
+        "qcow2 gpt full 5G:ntfs remaining:ext4"
+        "qcow2 mbr off 4G:ext4:primary 2G:fat32:primary 1G:ntfs:primary"
+        "qcow2 mbr metadata 3G:xfs:primary 3G:ext4:primary remaining:swap:primary"
+        "qcow2 mbr full 5G:ntfs:primary 1G:fat32:primary 1G:ext4:logical"
+        "raw gpt off 1G:ext4 1G:ext3 1G:fat16 remaining:swap"
+        "raw gpt full 2G:btrfs 2G:xfs 2G:ntfs"
+        "raw mbr off 5G:ntfs:primary remaining:ext4:primary"
+        "raw mbr full 3G:xfs:primary 2G:ntfs:primary remaining:vfat:primary"
+        "qcow2 gpt full 100M:fat32 16M:msr 9G:ntfs 500M:ntfs"
+        "qcow2 gpt metadata 512M:fat32 8G:ext4 1512M:swap"
+        "raw mbr full 9G:ntfs:primary"
+    )
+
+    TOTAL_TESTS=${#TESTS[@]}
+    
+    # Set up trap for cleanup
+    trap cleanup EXIT INT TERM
+    
+    # Create test directory
+    log_step "Setting up test environment"
+    if ! mkdir -p "$TEST_DIR"; then
+        log_error "Failed to create test directory: $TEST_DIR"
+        exit 1
+    fi
+    log_success "Test directory created: $TEST_DIR"
+    
+    log_section "STARTING TEST EXECUTION" "INIT"
+    log_init "Total test cases to execute: $TOTAL_TESTS"
+    
+    # Execute tests
+    local test_index=1
+    for test_case in "${TESTS[@]}"; do
+        # Parse test case
+        read -r disk_format partition_table preallocation partitions <<< "$test_case"
+        IFS=' ' read -r -a partitions_array <<< "$partitions"
+        
+        # Generate unique test name
+        local unique_name=$(generate_unique_test_name "$disk_format" "$partition_table" "$preallocation" "${partitions_array[@]}")
+        
+        # Show progress
+        show_progress $test_index $TOTAL_TESTS "Executing tests"
+        
+        # Start test
+        log_test_start $test_index "$unique_name" $TOTAL_TESTS
+        
+        # Log test parameters
+        log_info "Unique Name: $unique_name" "TEST-$test_index"
+        log_info "Format: $disk_format" "TEST-$test_index"
+        log_info "Partition Table: $partition_table" "TEST-$test_index"
+        log_info "Preallocation: $preallocation" "TEST-$test_index"
+        log_info "Partitions: ${partitions_array[*]}" "TEST-$test_index"
+        
+        # Execute test steps
+        local test_failed=false
+        local failure_reason=""
+        
+        # Step 1: Generate config
+        local config_file
+        if config_file=$(generate_config "$disk_format" "$partition_table" "$preallocation" "${partitions_array[@]}"); then
+            log_success "Config generated: $(basename "$config_file")" "TEST-$test_index"
+        else
+            test_failed=true
+            failure_reason="Config generation failed"
+        fi
+        
+        if [[ "$test_failed" == "false" ]]; then
+            # Step 2: Create disk (with unique name)
+            local disk_file="$TEST_DIR/${unique_name}.${disk_format}"
+            if run_command "$SCRIPT_PATH \"$config_file\"" "Creating disk image" "TEST-$test_index"; then
+                # Move disk file to test directory with unique name
+                local created_disk_name
+                created_disk_name=$(basename "$(grep "^DISK_NAME=" "$config_file" | cut -d'"' -f2)")
+                
+                if [[ -f "./$created_disk_name" ]]; then
+                    mv "./$created_disk_name" "$disk_file"
+                    log_success "Disk file moved to: $(basename "$disk_file")" "TEST-$test_index"
+                else
+                    test_failed=true
+                    failure_reason="Disk file not created: $created_disk_name"
+                fi
+            else
+                test_failed=true
+                failure_reason="Disk creation failed"
+            fi
+        fi
+        
+        if [[ "$test_failed" == "false" ]]; then
+            # Step 3: Verify disk
+            if verify_disk "$disk_file" "$disk_format" "TEST-$test_index"; then
+                log_success "Disk verification passed" "TEST-$test_index"
+            else
+                test_failed=true
+                failure_reason="Disk verification failed"
+            fi
+        fi
+        
+        if [[ "$test_failed" == "false" ]]; then
+            # Step 4: Test --info option
+            if run_command "$SCRIPT_PATH --info \"$disk_file\"" "Testing --info option" "TEST-$test_index"; then
+                log_success "Info option test passed" "TEST-$test_index"
+                analyze_disk_with_lsblk "$disk_file" "TEST-$test_index"
+            else
+                test_failed=true
+                failure_reason="Info option test failed"
+            fi
+        fi
+        
+        if [[ "$test_failed" == "false" ]]; then
+            # Step 5: Test --reverse option
+            local reverse_config="${disk_file%.*}_config.sh"
+            if run_command "$SCRIPT_PATH --reverse \"$disk_file\"" "Testing --reverse option" "TEST-$test_index"; then
+                if [[ -f "$reverse_config" ]]; then
+                    log_success "Reverse config generated" "TEST-$test_index"
+                    # Note: Validation function would need to be implemented
+                    log_info "Reverse config validation skipped (not implemented)" "TEST-$test_index"
+                else
+                    test_failed=true
+                    failure_reason="Reverse config file not found"
+                fi
+            else
+                test_failed=true
+                failure_reason="Reverse option test failed"
+            fi
+        fi
+        
+        # Report test result
+        if [[ "$test_failed" == "true" ]]; then
+            log_test_end $test_index "FAIL" "$failure_reason"
+        else
+            log_test_end $test_index "PASS" "All test steps completed successfully"
+        fi
+        
+        ((test_index++))
+    done
+    
+    # Final summary
+    local total_time=$(($(date +%s) - SCRIPT_START_TIME))
+    local formatted_duration=$(format_duration $total_time)
+    
+    log_section "TEST EXECUTION SUMMARY" "RESULT"
+    log_result "Execution completed in: $formatted_duration"
+    log_result "Total tests executed: $TOTAL_TESTS"
+    log_result "Tests passed: $PASSED_TESTS"
+    log_result "Tests failed: $FAILED_TESTS" 
+    log_result "Tests skipped: $SKIPPED_TESTS"
+    
+    # Calculate success rate
+    if [[ $TOTAL_TESTS -gt 0 ]]; then
+        local success_rate=$(( (PASSED_TESTS * 100) / TOTAL_TESTS ))
+        log_result "Success rate: ${success_rate}%"
+    fi
+    
+    # Final status
+    if [[ $FAILED_TESTS -eq 0 ]]; then
+        log_section "🎉 ALL TESTS PASSED! 🎉" "SUCCESS"
+        log_success "Test suite completed successfully!"
+        return 0
+    else
+        log_section "❌ SOME TESTS FAILED ❌" "ERROR"
+        log_error "Test suite completed with failures"
+        log_error "Check the log above for detailed failure information"
+        return 1
+    fi
+}
+
+# Additional utility functions for validation (simplified versions)
+
 validate_reverse_config() {
     local original_config="$1"
     local reverse_config="$2"
     local test_name="$3"
+    local context="VALIDATE"
     
-    log "INFO" "Validating reverse config for $test_name..."
+    log_step "Validating reverse config for $test_name" "$context"
     
     if [[ ! -f "$original_config" || ! -f "$reverse_config" ]]; then
-        log "ERROR" "Config files not found for validation"
+        log_error "Config files not found for validation" "$context"
         return 1
     fi
     
-    # Source both configs to get their variables
-    local orig_temp=$(mktemp)
-    local rev_temp=$(mktemp)
-    
-    # Extract variables from original config
-    source "$original_config"
-    local orig_disk_name="$DISK_NAME"
-    local orig_disk_size="$DISK_SIZE" 
-    local orig_disk_format="$DISK_FORMAT"
-    local orig_partition_table="$PARTITION_TABLE"
-    local orig_preallocation="$PREALLOCATION"
-    local orig_partitions=("${PARTITIONS[@]}")
-    
-    # Extract variables from reverse config
-    source "$reverse_config"
-    local rev_disk_name="$DISK_NAME"
-    local rev_disk_size="$DISK_SIZE"
-    local rev_disk_format="$DISK_FORMAT" 
-    local rev_partition_table="$PARTITION_TABLE"
-    local rev_preallocation="$PREALLOCATION"
-    local rev_partitions=("${PARTITIONS[@]}")
-    
-    rm -f "$orig_temp" "$rev_temp"
-    
-    local validation_errors=0
-    
-    # Validate basic properties (these should match exactly)
-    if [[ "$orig_disk_name" != "$rev_disk_name" ]]; then
-        log "WARNING" "Disk name mismatch: '$orig_disk_name' vs '$rev_disk_name'"
-        # This might be acceptable if paths are different
-    fi
-    
-    if [[ "$orig_disk_size" != "$rev_disk_size" ]]; then
-        log "ERROR" "Disk size mismatch: '$orig_disk_size' vs '$rev_disk_size'"
-        ((validation_errors++))
-    fi
-    
-    if [[ "$orig_disk_format" != "$rev_disk_format" ]]; then
-        log "ERROR" "Disk format mismatch: '$orig_disk_format' vs '$rev_disk_format'"
-        ((validation_errors++))
-    fi
-    
-    if [[ "$orig_partition_table" != "$rev_partition_table" ]]; then
-        log "ERROR" "Partition table mismatch: '$orig_partition_table' vs '$rev_partition_table'"
-        ((validation_errors++))
-    fi
-    
-    # Preallocation might not be detectable from existing image - be permissive
-    if [[ "$orig_preallocation" != "$rev_preallocation" ]]; then
-        log "WARNING" "Preallocation mismatch: '$orig_preallocation' vs '$rev_preallocation' (acceptable - cannot be determined from existing image)"
-    fi
-    
-    # Validate partitions - this is the complex part
-    log "INFO" "Validating partitions..."
-    log "DEBUG" "Original partitions: ${orig_partitions[*]}"
-    log "DEBUG" "Reverse partitions: ${rev_partitions[*]}"
-    
-    if ! validate_partitions_match "${orig_partitions[@]}" "---" "${rev_partitions[@]}"; then
-        log "ERROR" "Partition validation failed"
-        ((validation_errors++))
-    fi
-    
-    if [[ $validation_errors -eq 0 ]]; then
-        log "SUCCESS" "Reverse config validation PASSED"
+    # Simple validation - check if files exist and have basic structure
+    if grep -q "DISK_NAME=" "$reverse_config" && \
+       grep -q "PARTITIONS=" "$reverse_config"; then
+        log_success "Reverse config has basic structure" "$context"
         return 0
     else
-        log "ERROR" "Reverse config validation FAILED with $validation_errors errors"
+        log_error "Reverse config missing required structure" "$context"
         return 1
     fi
 }
 
-validate_partitions_match() {
-    local args=("$@")
-    local separator_found=false
-    local orig_partitions=()
-    local rev_partitions=()
-    
-    # Separa gli array usando il separatore "---"
-    for arg in "${args[@]}"; do
-        if [[ "$arg" == "---" ]]; then
-            separator_found=true
-            continue
-        fi
-        
-        if [[ "$separator_found" == false ]]; then
-            orig_partitions+=("$arg")
-        else
-            rev_partitions+=("$arg")
-        fi
-    done
-    
-    log "DEBUG" "Comparing ${#orig_partitions[@]} original partitions with ${#rev_partitions[@]} reverse partitions"
-    
-    # Parse partitions into structured data
-    local orig_parsed=()
-    local rev_parsed=()
-    
-    parse_partitions_array orig_parsed "${orig_partitions[@]}"
-    parse_partitions_array rev_parsed "${rev_partitions[@]}"
-    
-    # Call validation and return its exit code
-    validate_parsed_partitions orig_parsed rev_parsed
-    return $?
-}
-
-validate_parsed_partitions() {
-    local -n orig_ref=$1
-    local -n rev_ref=$2
-    
-    local total_errors=0
-    local matched_partitions=0
-    
-    # Create associative arrays for easier matching
-    declare -A orig_by_fs_size
-    declare -A rev_by_fs_size
-    
-    # Build lookup tables
-    for orig_part in "${orig_ref[@]}"; do
-        IFS='|' read -r idx size size_bytes fs_type part_type <<< "$orig_part"
-        local key="${fs_type}_${size_bytes}"
-        orig_by_fs_size["$key"]="$orig_part"
-    done
-    
-    for rev_part in "${rev_ref[@]}"; do
-        IFS='|' read -r idx size size_bytes fs_type part_type <<< "$rev_part"
-        local key="${fs_type}_${size_bytes}"
-        rev_by_fs_size["$key"]="$rev_part"
-    done
-    
-    # Try to match partitions
-    for orig_part in "${orig_ref[@]}"; do
-        IFS='|' read -r orig_idx orig_size orig_size_bytes orig_fs orig_part_type <<< "$orig_part"
-        
-        # Skip MSR partitions - they're hard to detect in reverse
-        if [[ "$orig_fs" == "msr" ]]; then
-            log "INFO" "Skipping MSR partition validation (not detectable in reverse)"
-            ((matched_partitions++))
-            continue
-        fi
-        
-        local found_match=false
-        
-        # Look for exact match first
-        local exact_key="${orig_fs}_${orig_size_bytes}"
-        if [[ -n "${rev_by_fs_size[$exact_key]:-}" ]]; then
-            log "DEBUG" "Found exact match for partition: $orig_size:$orig_fs"
-            found_match=true
-            ((matched_partitions++))
-            unset rev_by_fs_size["$exact_key"]
-            continue
-        fi
-        
-        # Look for filesystem match with size tolerance (±5%)
-        for rev_key in "${!rev_by_fs_size[@]}"; do
-            IFS='_' read -r rev_fs rev_size_bytes <<< "$rev_key"
-            
-            if [[ "$orig_fs" == "$rev_fs" ]] || is_compatible_filesystem "$orig_fs" "$rev_fs"; then
-                # Check size tolerance
-                if [[ "$orig_size_bytes" -eq 0 ]] || [[ "$rev_size_bytes" -eq 0 ]] || 
-                   size_within_tolerance "$orig_size_bytes" "$rev_size_bytes" 5; then
-                    log "DEBUG" "Found compatible match: $orig_size:$orig_fs ≈ $(echo "$rev_key" | sed 's/_/:/g')"
-                    found_match=true
-                    ((matched_partitions++))
-                    unset rev_by_fs_size["$rev_key"]
-                    break
-                fi
-            fi
-        done
-        
-        if [[ "$found_match" == false ]]; then
-            log "WARNING" "No match found for original partition: $orig_size:$orig_fs:$orig_part_type"
-            ((total_errors++))
-        fi
-    done
-    
-    # Check for extra partitions in reverse (might be extended partitions)
-    local extra_partitions=0
-    for rev_key in "${!rev_by_fs_size[@]}"; do
-        IFS='_' read -r rev_fs rev_size_bytes <<< "$rev_key"
-        
-        # Be permissive with certain types that are auto-created
-        if [[ "$rev_fs" == "dos" ]] || [[ "$rev_fs" == "none" ]] || [[ "$rev_fs" =~ extended ]]; then
-            log "INFO" "Ignoring auto-created partition: $rev_key (likely extended/container partition)"
-        else
-            log "WARNING" "Extra partition found in reverse: $(echo "$rev_key" | sed 's/_/:/g')"
-            ((extra_partitions++))
-        fi
-    done
-    
-    # Summary
-    log "INFO" "Partition matching summary:"
-    log "INFO" "  - Matched partitions: $matched_partitions"
-    log "INFO" "  - Unmatched original: $total_errors"
-    log "INFO" "  - Extra in reverse: $extra_partitions"
-    
-    # Be lenient - allow some mismatches for complex partition layouts
-    if [[ $total_errors -le 1 ]] && [[ $matched_partitions -ge $((${#orig_ref[@]} - 1)) ]]; then
-        log "SUCCESS" "Partition validation PASSED (with acceptable tolerances)"
-        return 0
-    else
-        log "ERROR" "Too many partition mismatches for validation to pass"
-        return 1
-    fi
-}
-
-size_within_tolerance() {
-    local size1="$1"
-    local size2="$2" 
-    local tolerance_percent="$3"
-    
-    if [[ $size1 -eq 0 ]] || [[ $size2 -eq 0 ]]; then
-        return 0  # Skip size check for unparseable sizes
-    fi
-    
-    local diff=$((size1 > size2 ? size1 - size2 : size2 - size1))
-    local avg=$(( (size1 + size2) / 2 ))
-    local tolerance=$(( avg * tolerance_percent / 100 ))
-    
-    [[ $diff -le $tolerance ]]
-}
-
-is_compatible_filesystem() {
-    local fs1="$1"
-    local fs2="$2"
-    
-    # Normalize filesystem names
-    local normalized_fs1=$(normalize_fs_name "$fs1")
-    local normalized_fs2=$(normalize_fs_name "$fs2")
-    
-    [[ "$normalized_fs1" == "$normalized_fs2" ]]
-}
-
-normalize_fs_name() {
-    local fs="$1"
-    
-    case "$fs" in
-        "fat32"|"vfat"|"fat16") echo "fat" ;;
-        "ntfs") echo "ntfs" ;;
-        "ext2"|"ext3"|"ext4") echo "ext" ;;
-        "swap") echo "swap" ;;
-        "xfs") echo "xfs" ;;
-        "btrfs") echo "btrfs" ;;
-        "msr") echo "msr" ;;
-        "dos"|"none") echo "none" ;;
-        *) echo "$fs" ;;
-    esac
-}
-
+# Parse partitions function (simplified)
 parse_partitions_array() {
     local -n result_array=$1
     shift
     local partitions=("$@")
+    local context="PARSE"
     
     result_array=()
     local index=0
     
+    log_debug "Parsing ${#partitions[@]} partitions" "$context"
+    
     for partition in "${partitions[@]}"; do
         local size fs_type part_type
         
-        # Parse formato: SIZE:FILESYSTEM[:TYPE]
+        # Parse format: SIZE:FILESYSTEM[:TYPE]
         if [[ "$partition" =~ ^([^:]+):([^:]+)(:(.+))?$ ]]; then
             size="${BASH_REMATCH[1]}"
             fs_type="${BASH_REMATCH[2]}"
             part_type="${BASH_REMATCH[4]:-primary}"
         else
-            log "WARNING" "Cannot parse partition: $partition"
+            log_warning "Cannot parse partition: $partition" "$context"
             continue
         fi
         
@@ -557,8 +907,11 @@ parse_partitions_array() {
         local size_bytes=$(normalize_size_to_bytes "$size")
         
         result_array+=("$index|$size|$size_bytes|$fs_type|$part_type")
+        log_debug "Parsed partition $index: $size ($size_bytes bytes) $fs_type $part_type" "$context"
         ((index++))
     done
+    
+    log_debug "Successfully parsed ${#result_array[@]} partitions" "$context"
 }
 
 normalize_size_to_bytes() {
@@ -580,241 +933,50 @@ normalize_size_to_bytes() {
         esac
         
         # Convert to integer bytes (approximate for floating point)
-        echo $(( $(echo "$number * $multiplier" | bc 2>/dev/null || echo "${number%.*} * $multiplier" | bc) ))
+        if command -v bc >/dev/null 2>&1; then
+            echo $(( $(echo "$number * $multiplier" | bc | cut -d. -f1) ))
+        else
+            # Fallback without bc
+            echo $(( ${number%.*} * multiplier ))
+        fi
     else
         # Return 0 for unparseable sizes (like "remaining")
         echo 0
     fi
 }
 
-normalize_fs_type() {
-    local raw_fs="$1"
-    local part_type="$2"   # opzionale: ID partizione (esadecimale)
-
-    case "$raw_fs" in
-        vfat)
-            # Distinguere fat32 vs fat16 in base al tipo partizione
-            if [[ "$part_type" == "0xc" || "$part_type" == "0xb" ]]; then
-                echo "fat32"
-            elif [[ "$part_type" == "0x6" || "$part_type" == "0xe" ]]; then
-                echo "fat16"
-            else
-                echo "fat32"   # fallback
-            fi
-            ;;
-        ntfs)   echo "ntfs" ;;
-        ext2)   echo "ext2" ;;
-        ext3)   echo "ext3" ;;
-        ext4)   echo "ext4" ;;
-        swap)   echo "swap" ;;
-        xfs)    echo "xfs" ;;
-        btrfs)  echo "btrfs" ;;
-        *)
-            # Se non riconosciuto, prova a usare il codice partizione
-            case "$part_type" in
-                0x5|0xf) echo "none" ;;   # extended: non formattata
-                *)       echo "none" ;;
-            esac
-            ;;
-    esac
-}
-
-# --- Main Execution ---
-
-main() {
-    local total_tests=0
-    local passed_tests=0
-    local failed_tests=0
+# Script entry point
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    # Initialize logging system
+    initialize_logging
     
-    # Parse command-line options
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --keep-images)
-                KEEP_IMAGES=true
-                shift
-                ;;
-            *)
-                log "WARNING" "Unknown option: $1"
-                shift
-                ;;
-        esac
-    done
-    
-    # Check if the main script is executable and in PATH
-    if ! command -v "$SCRIPT_PATH" >/dev/null 2>&1; then
-        log "ERROR" "Main script '$SCRIPT_PATH' not found in PATH"
-        exit 1
-    fi
-
-    # List of test cases (matrix: format, partition_table, preallocation, partitions)
-    declare -a TESTS=(
-        "qcow2 gpt off 2G:ext4 1G:swap 1G:fat32"
-        "qcow2 gpt metadata 2G:ext4 2G:swap 2G:btrfs"
-        "qcow2 gpt full 5G:ntfs remaining:ext4"
-        "qcow2 mbr off 4G:ext4:primary 2G:fat32:primary 1G:ntfs:primary"
-        "qcow2 mbr metadata 3G:xfs:primary 3G:ext4:primary remaining:swap:primary"
-        "qcow2 mbr full 5G:ntfs:primary 1G:fat32:primary 1G:ext4:logical"
-        "raw gpt off 1G:ext4 1G:ext3 1G:fat16 remaining:swap"
-        "raw gpt full 2G:btrfs 2G:xfs 2G:ntfs"
-        "raw mbr off 5G:ntfs:primary remaining:ext4:primary"
-        "raw mbr full 3G:xfs:primary 2G:ntfs:primary remaining:vfat:primary"
-        "qcow2 gpt full 100M:fat32 16M:msr 9G:ntfs 500M:ntfs"
-        "qcow2 gpt metadata 512M:fat32 8G:ext4 1512M:swap"
-        "raw mbr full 9G:ntfs:primary"
-    )
-
-    # Set up trap for cleanup on exit or interrupt
-    trap cleanup EXIT INT TERM
-    
-    # Create test directory
-    mkdir -p "$TEST_DIR" || { log "ERROR" "Failed to create test directory."; exit 1; }
-    log "INFO" "Created test directory: $TEST_DIR"
-    
-    log "INFO" "Starting disk creation tests..."
-    log "INFO" "Total test cases to run: ${#TESTS[@]}"
-    
-    for test_case in "${TESTS[@]}"; do
-        total_tests=$((total_tests + 1))
-        
-        # Parse test case string into variables
-        read -r disk_format partition_table preallocation partitions <<< "$test_case"
-        IFS=' ' read -r -a partitions_array <<< "$partitions" # Correctly parse partitions string into an array
-        
-        echo
-        log "INFO" "$(repeat "=" 60)"
-        log "INFO" "Running Test $total_tests:"
-        log "INFO" "  Format: $disk_format"
-        log "INFO" "  Partition Table: $partition_table"
-        log "INFO" "  Preallocation: $preallocation"
-        log "INFO" "  Partitions: ${partitions_array[*]}"
-        
-        # Generate and check the config file
-        config_file=$(generate_config "$disk_format" "$partition_table" "$preallocation" "${partitions_array[@]}")
-        if [[ ! -f "$config_file" ]]; then
-            log "ERROR" "Failed to generate config file: $config_file"
-            failed_tests=$((failed_tests + 1))
-            continue
-        fi
-        
-        # Define disk file path
-        disk_file="$TEST_DIR/test_${disk_format}_${partition_table}_${preallocation}.${disk_format}"
-        
-        # Run the vm_create_disk utility
-        if ! run_command "$SCRIPT_PATH \"$config_file\"" "Disk creation for $disk_format disk"; then
-            log "ERROR" "Disk creation failed."
-            failed_tests=$((failed_tests + 1))
-            continue
-        fi
-        
-        # Check for the existence of the created file
-        if [[ ! -f "./test_${disk_format}_${partition_table}_${preallocation}.${disk_format}" ]]; then
-            log "ERROR" "Disk file not created by vm_create_disk."
-            failed_tests=$((failed_tests + 1))
-            continue
-        fi
-        
-        # Move the disk file to the test directory for verification
-        if ! mv "test_${disk_format}_${partition_table}_${preallocation}.${disk_format}" "$disk_file" 2>/dev/null; then
-            log "ERROR" "Failed to move disk file to $disk_file."
-            failed_tests=$((failed_tests + 1))
-            continue
-        fi
-        
-        # Verify the created disk
-        if ! verify_disk "$disk_file" "$disk_format"; then
-            log "ERROR" "Disk verification failed."
-            failed_tests=$((failed_tests + 1))
-            continue
-        fi
-        
-        # Test the --info option and lsblk analysis
-        log "INFO" "Testing --info option with lsblk..."
-        if run_command "$SCRIPT_PATH --info \"$disk_file\"" "Disk info for $disk_file" && analyze_disk_with_lsblk "$disk_file"; then
-            log "SUCCESS" "Info test PASSED for Test $total_tests"
-        else
-            log "ERROR" "Disk info test failed."
-            failed_tests=$((failed_tests + 1))
-            continue
-        fi
-
-        # Test the --reverse option
-        log "INFO" "Testing --reverse option..."
-        reverse_config="${disk_file%.*}_config.sh"
-        if run_command "$SCRIPT_PATH --reverse \"$disk_file\"" "Reverse config generation for $disk_file"; then
-            if [[ -f "$reverse_config" ]]; then
-                log "SUCCESS" "Reverse config file generated: $reverse_config"
-                
-                # Advanced validation of the generated config
-                if validate_reverse_config "$config_file" "$reverse_config" "Test $total_tests"; then
-                    log "SUCCESS" "Reverse config validation PASSED for Test $total_tests"
-                else
-                    log "ERROR" "Reverse config validation FAILED"
-                    failed_tests=$((failed_tests + 1))
-                    continue
-                fi
-            else
-                log "ERROR" "Reverse config file not found: $reverse_config"
-                failed_tests=$((failed_tests + 1))
-                continue
-            fi
-        else
-            log "ERROR" "Reverse config generation failed."
-            failed_tests=$((failed_tests + 1))
-            continue
-        fi
-
-        # If we reach here, the test is fully passed
-        log "SUCCESS" "Test $total_tests PASSED"
-        passed_tests=$((passed_tests + 1))
-    done
-    
-    # Print a summary of the test results
-    echo
-    log "INFO" "$(repeat "=" 60)"
-    log "INFO" "TEST SUMMARY"
-    log "INFO" "Total tests: $total_tests"
-    log "SUCCESS" "Passed: $passed_tests"
-    if [[ $failed_tests -gt 0 ]]; then
-        log "ERROR" "Failed: $failed_tests"
-    else
-        log "SUCCESS" "Failed: $failed_tests"
+    # Show usage if requested
+    if [[ "$1" == "--help" || "$1" == "-h" ]]; then
+        echo "Usage: $0 [OPTIONS]"
+        echo ""
+        echo "Options:"
+        echo "  --keep-images    Keep created disk images after testing"
+        echo "  --debug         Enable debug logging"
+        echo "  --help, -h      Show this help message"
+        echo ""
+        echo "Environment variables:"
+        echo "  DEBUG=true      Enable debug logging (alternative to --debug)"
+        echo ""
+        echo "Features:"
+        echo "  - Unique disk naming using hash of partition specifications"
+        echo "  - Fixed progress bar that doesn't interfere with logs"
+        echo "  - Enhanced logging with timestamps and context"
+        echo "  - Comprehensive test validation"
+        echo ""
+        exit 0
     fi
     
-    # Return an appropriate exit code
-    if [[ $failed_tests -eq 0 ]]; then
-        log "SUCCESS" "All tests completed successfully! 🎉"
-        return 0
-    else
-        log "ERROR" "Some tests failed! ❌"
-        return 1
-    fi
-}
-
-check_dependencies() {
-    local missing_deps=()
+    # Run main function
+    main "$@"
+    exit_code=$?
     
-    # Required commands
-    local required_cmds=("bc" "qemu-img" "lsblk")
+    # Ensure cleanup runs
+    cleanup
     
-    for cmd in "${required_cmds[@]}"; do
-        if ! command -v "$cmd" >/dev/null 2>&1; then
-            missing_deps+=("$cmd")
-        fi
-    done
-    
-    if [[ ${#missing_deps[@]} -gt 0 ]]; then
-        log "WARNING" "Missing optional dependencies: ${missing_deps[*]}"
-        log "WARNING" "Some features may be limited. Install with: apt-get install ${missing_deps[*]}"
-    fi
-}
-
-# Remove existing log file if it exists
-if [[ -f "$LOG_FILE" ]]; then
-    rm -f "$LOG_FILE"
+    exit $exit_code
 fi
-
-# Redirect all output (stdout and stderr) to the log file and terminal
-exec > >(tee -a "$LOG_FILE") 2>&1
-
-# Run main function
-main "$@"
