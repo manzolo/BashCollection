@@ -272,19 +272,19 @@ show_progress() {
     bar+="$(printf "%*s" $empty "" | tr " " "-")"
     bar+="]"
     
-    # Use stderr to avoid interfering with log output
-    if [[ -t 2 ]]; then
+    # Write to /dev/tty with unbuffered output
+    if [[ -t 1 ]]; then
         # Clear the current line and print progress
-        printf "\r%*s\r" 80 "" >&2
-        printf "\033[0;36m[PROG]\033[0m $(get_timestamp) [$(get_elapsed_time)] %s %s %3d%% (%d/%d)" \
-               "$bar" "$operation" "$percentage" "$current" "$total" >&2
+        stdbuf -oL printf "\r%*s\r" 80 "" > /dev/tty
+        stdbuf -oL printf "\033[0;36m[PROG]\033[0m $(get_timestamp) [$(get_elapsed_time)] %s %s %3d%% (%d/%d)" \
+               "$bar" "$operation" "$percentage" "$current" "$total" > /dev/tty
         
         if [[ $current -eq $total ]]; then
-            printf "\n" >&2  # New line when complete
+            stdbuf -oL printf "\n" > /dev/tty  # New line when complete
         fi
     fi
     
-    # Also log progress to file (but only at certain intervals or completion)
+    # Log progress to file (unchanged)
     if [[ $current -eq $total ]] || [[ $((current % 5)) -eq 0 ]] || [[ $current -eq 1 ]]; then
         log_info "Progress: $operation $percentage% ($current/$total)" "PROGRESS"
     fi
