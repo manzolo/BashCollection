@@ -1,63 +1,65 @@
 #!/bin/bash
 
-# Script per avviare una macchina virtuale QEMU per clonare dischi virtuali.
-# Rileva automaticamente i formati dei dischi virtuali e supporta modalità MBR e UEFI.
-# Ottimizzato per operazioni di clonazione con ISO bootable.
+# Script to launch a QEMU virtual machine for cloning virtual disks.
+# It automatically detects virtual disk formats and supports both MBR and UEFI modes.
+# Optimized for cloning operations with bootable ISOs.
 
-# --- Configurazione Script ---
-VM_RAM="4G"                    # RAM predefinita per la VM
-VM_CPUS=$(nproc)               # Usa tutti i core CPU disponibili
-QEMU_ACCEL_OPTS="-enable-kvm"  # Abilita accelerazione hardware KVM
+# --- Script Configuration ---
+VM_RAM="4G"                    # Default RAM for the VM
+VM_CPUS=$(nproc)               # Use all available CPU cores
+QEMU_ACCEL_OPTS="-enable-kvm"  # Enable KVM hardware acceleration
 
-# --- Inizializzazione Variabili ---
-DISK1=""          # Disco sorgente
-DISK2=""          # Disco destinazione  
-ISO_PATH=""       # ISO bootable per clonazione
-BOOT_MODE="mbr"   # Modalità boot predefinita MBR
-EXTRA_DISK=""     # Disco aggiuntivo opzionale
+# --- Variable Initialization ---
+DISK1=""          # Source disk
+DISK2=""          # Destination disk  
+ISO_PATH=""       # Bootable ISO for cloning
+BOOT_MODE="mbr"   # Default boot mode is MBR
+EXTRA_DISK=""     # Optional additional disk
+VERBOSE=false     # Debug output
 
-# --- Funzioni ---
+# --- Functions ---
 
-# Mostra le istruzioni d'uso dello script ed esce.
+# Displays the script's usage instructions and exits.
 show_help() {
-    echo "Uso: $0 --src <disco_sorgente> --dst <disco_destinazione> --iso <iso_bootable> [opzioni]"
+    echo "Usage: $0 --src <source_disk> --dst <destination_disk> --iso <bootable_iso> [options]"
     echo ""
-    echo "Argomenti richiesti:"
-    echo "  --src <percorso>    Disco virtuale sorgente da clonare"
-    echo "  --dst <percorso>    Disco virtuale destinazione per la copia"
-    echo "  --iso <percorso>    ISO bootable per clonazione (es. Clonezilla, SystemRescue)"
+    echo "Required arguments:"
+    echo "  --src <path>    Source virtual disk to clone"
+    echo "  --dst <path>    Destination virtual disk for the copy"
+    echo "  --iso <path>    Bootable ISO for cloning (e.g., Clonezilla, SystemRescue)"
     echo ""
-    echo "Opzioni:"
-    echo "  --extra <percorso>  Disco aggiuntivo opzionale (terzo disco)"
-    echo "  --mbr              Configura per avvio MBR/BIOS (predefinito)"
-    echo "  --uefi             Configura per avvio UEFI"
-    echo "  --ram <dimensione> Specifica RAM VM (default: 4G, es: 8G, 2048M)"
-    echo "  --cpus <numero>    Numero di CPU virtuali (default: tutti i core)"
-    echo "  --help             Mostra questo messaggio di aiuto"
+    echo "Options:"
+    echo "  --extra <path>  Optional additional disk (third disk)"
+    echo "  --mbr           Configure for MBR/BIOS boot (default)"
+    echo "  --uefi          Configure for UEFI boot"
+    echo "  --ram <size>    Specify VM RAM (default: 4G, e.g., 8G, 2048M)"
+    echo "  --cpus <number> Number of virtual CPUs (default: all cores)"
+    echo "  --verbose       Show detailed information about disk formats"
+    echo "  --help          Show this help message"
     echo ""
-    echo "Formati disco supportati:"
+    echo "Supported disk formats:"
     echo "  - qcow2 (QEMU Copy-On-Write)"
-    echo "  - raw (Immagine disco raw)"
+    echo "  - raw (Raw disk image)"
     echo "  - vmdk (VMware Virtual Disk)"
     echo "  - vdi (VirtualBox Disk Image)"
     echo "  - vhd/vhdx (Hyper-V Virtual Hard Disk)"
     echo ""
-    echo "Esempi:"
+    echo "Examples:"
     echo "  $0 --src source.qcow2 --dst target.qcow2 --iso clonezilla.iso"
     echo "  $0 --src disk1.raw --dst disk2.raw --iso systemrescue.iso --uefi --ram 8G"
     echo "  $0 --src old.vmdk --dst new.vmdk --extra backup.qcow2 --iso clonezilla.iso"
     echo ""
-    echo "Note per la clonazione:"
-    echo "  - Il disco sorgente può essere montato read-only per sicurezza"
-    echo "  - Il disco destinazione dovrebbe avere spazio sufficiente"
-    echo "  - Usa ISO come Clonezilla o SystemRescue per operazioni di clonazione"
+    echo "Notes for cloning:"
+    echo "  - The source disk can be mounted read-only for safety"
+    echo "  - The destination disk should have sufficient space"
+    echo "  - Use ISOs like Clonezilla or SystemRescue for cloning operations"
     exit 0
 }
 
-# Verifica se un comando è installato ed esce con errore se non lo è.
+# Checks if a command is installed and exits with an error if it's not.
 check_dependency() {
     if ! command -v "$1" &> /dev/null; then
-        echo "Errore: Il comando '$1' non è installato. Installalo con:" >&2
+        echo "Error: The command '$1' is not installed. Install it with:" >&2
         case "$1" in
             qemu-system-x86_64)
                 echo "  Ubuntu/Debian: sudo apt install qemu-system-x86" >&2
@@ -74,70 +76,233 @@ check_dependency() {
     fi
 }
 
-# Verifica se un file esiste ed esce con errore se non esiste.
+# Checks if a file exists and exits with an error if it does not.
 check_file_exists() {
     local file=$1
     local description=$2
     if [ ! -f "$file" ]; then
-        echo "Errore: $description non trovato in '$file'." >&2
+        echo "Error: $description not found at '$file'." >&2
         exit 1
     fi
 }
 
-# Rileva automaticamente il formato di un'immagine disco.
-get_disk_format() {
-    local disk_path=$1
+# Automatically detects the format of a disk image with improved detection
+detect_disk_format() {
+    local disk_file=$1
+    local format=""
     
-    # Prova con qemu-img info (più affidabile)
-    local format=$(qemu-img info "$disk_path" 2>/dev/null | grep 'file format:' | awk '{print $3}')
+    # List of formats to test in priority order
+    local formats_to_test=("qcow2" "vmdk" "vdi" "vpc" "vhdx" "qed" "parallels")
     
-    if [ -n "$format" ]; then
-        echo "$format"
-        return 0
+    # First, try qemu-img's automatic detection
+    if command -v qemu-img &> /dev/null; then
+        format=$(qemu-img info "$disk_file" 2>/dev/null | grep "file format:" | awk '{print $3}')
+        # Only if the automatic detection finds a specific format (not raw/unknown)
+        if [ -n "$format" ] && [ "$format" != "unknown" ]; then
+            if [ "$format" = "raw" ]; then
+                # Extra attempt: could be a VHD (vpc disguised as raw)
+                local vpc_check=$(qemu-img info -f vpc "$disk_file" 2>/dev/null | grep "file format:")
+                if echo "$vpc_check" | grep -q "vpc"; then
+                    echo "vpc"
+                    return 0
+                fi
+            else
+                echo "$format"
+                return 0
+            fi
+        fi
+        
+        # If qemu-img says "raw" or doesn't detect anything, try specific formats
+        for test_format in "${formats_to_test[@]}"; do
+            # Try to read the file with the specific format
+            local test_output=$(qemu-img info -f "$test_format" "$disk_file" 2>/dev/null)
+            if [ $? -eq 0 ] && [ -n "$test_output" ]; then
+                # Check if the detected format matches
+                detected=$(echo "$test_output" | grep "file format:" | awk '{print $3}')
+                if [ "$detected" = "$test_format" ]; then
+                    echo "$test_format"
+                    return 0
+                fi
+            fi
+        done
     fi
     
-    # Fallback su estensione file
-    local extension="${disk_path##*.}"
-    case "${extension,,}" in
-        qcow2) echo "qcow2" ;;
-        raw|img) echo "raw" ;;
-        vmdk) echo "vmdk" ;;
-        vdi) echo "vdi" ;;
-        vhd|vhdx) echo "vpc" ;;
-        *) 
-            echo "raw"  # Default a raw se sconosciuto
-            echo "Warning: Formato disco sconosciuto per '$disk_path', usando 'raw'." >&2
+    # Fallback: detection via magic numbers/header
+    if command -v file &> /dev/null; then
+        local file_output=$(file "$disk_file" 2>/dev/null)
+        case "$file_output" in
+            *"QEMU QCOW"*|*"qcow"*)
+                echo "qcow2"
+                return 0
+                ;;
+            *"VMware"*|*"VMDK"*)
+                echo "vmdk"
+                return 0
+                ;;
+            *"VirtualBox"*|*"VDI"*)
+                echo "vdi"
+                return 0
+                ;;
+            *"Microsoft Disk Image"*|*"VHD"*)
+                echo "vpc"
+                return 0
+                ;;
+        esac
+    fi
+    
+    # Fallback: manual header check
+    if [ -r "$disk_file" ]; then
+        # QCOW2 magic: "QFI\xfb"
+        if head -c 4 "$disk_file" 2>/dev/null | xxd -l 4 -p | grep -q "^514649fb"; then
+            echo "qcow2"
+            return 0
+        fi
+        
+        # VMDK magic: "KDMV"  
+        if head -c 4 "$disk_file" 2>/dev/null | grep -q "KDMV"; then
+            echo "vmdk"
+            return 0
+        fi
+        
+        # VDI magic: "<<< Oracle VM VirtualBox Disk Image >>>"
+        if head -c 64 "$disk_file" 2>/dev/null | grep -q "Oracle VM VirtualBox Disk Image"; then
+            echo "vdi"
+            return 0
+        fi
+        
+        # VHD magic: "conectix" at offset 0 or "cxsparse" for dynamic VHD
+        local vhd_magic=$(tail -c 512 "$disk_file" 2>/dev/null | head -c 8)
+        if [ "$vhd_magic" = "conectix" ]; then
+            echo "vpc"
+            return 0
+        fi
+    fi
+    
+    # Final fallback: file extension
+    local extension="${disk_file##*.}"
+    case "${extension,,}" in # Convert to lowercase
+        qcow2)
+            echo "qcow2"
+            ;;
+        vmdk)
+            echo "vmdk"
+            ;;
+        vdi)
+            echo "vdi"
+            ;;
+        vhd|vhdx)
+            echo "vpc"
+            ;;
+        raw|img|iso)
+            echo "raw"
+            ;;
+        *)
+            echo "raw" # Default to raw if unknown
             ;;
     esac
 }
 
-# Valida le dimensioni della RAM
+# Debug function to trace the detection process
+debug_disk_format() {
+    local disk_file=$1
+    echo "=== Debug Detection for: $disk_file ===" >&2
+    
+    # Test qemu-img without format
+    if command -v qemu-img &> /dev/null; then
+        echo "Test qemu-img info (auto-detect):" >&2
+        local auto_format=$(qemu-img info "$disk_file" 2>/dev/null | grep "file format:")
+        echo "  Result: $auto_format" >&2
+        
+        # Test specific formats
+        local formats_to_test=("qcow2" "vmdk" "vdi" "vpc" "vhdx" "qed" "parallels")
+        echo "Test specific formats:" >&2
+        for test_format in "${formats_to_test[@]}"; do
+            echo -n "  Test $test_format: " >&2
+            local test_output=$(qemu-img info -f "$test_format" "$disk_file" 2>/dev/null)
+            if [ $? -eq 0 ] && [ -n "$test_output" ]; then
+                local detected=$(echo "$test_output" | grep "file format:" | awk '{print $3}')
+                echo "SUCCESS - detected as $detected" >&2
+                if [ "$detected" = "$test_format" ]; then
+                    echo "  ✓ Matching format!" >&2
+                else
+                    echo "  ✗ Non-matching format!" >&2
+                fi
+            else
+                echo "FAILED" >&2
+            fi
+        done
+    fi
+    
+    # Test 'file' command
+    if command -v file &> /dev/null; then
+        echo "Test 'file' command:" >&2
+        file "$disk_file" >&2
+    fi
+    
+    echo "=================================" >&2
+}
+
+# Automatically detects the format of a disk image with optional verbose output
+get_disk_format() {
+    local disk_path=$1
+    
+    if [ "$VERBOSE" = true ]; then
+        debug_disk_format "$disk_path"
+    fi
+    
+    local format=$(detect_disk_format "$disk_path")
+    
+    if [ "$VERBOSE" = true ]; then
+        echo "Final detected format for '$disk_path': $format" >&2
+    fi
+    
+    echo "$format"
+}
+
+# Validates RAM size
 validate_ram() {
     local ram=$1
     if [[ ! "$ram" =~ ^[0-9]+[GMK]?$ ]]; then
-        echo "Errore: Formato RAM non valido '$ram'. Usa formati come: 4G, 2048M, 512K" >&2
+        echo "Error: Invalid RAM format '$ram'. Use formats like: 4G, 2048M, 512K" >&2
         exit 1
     fi
 }
 
-# Mostra informazioni sui dischi
+# Shows detailed information about disks
 show_disk_info() {
     local disk=$1
     local label=$2
-    
+
     if [ -f "$disk" ]; then
-        local size=$(qemu-img info "$disk" 2>/dev/null | grep 'virtual size:' | awk '{print $3, $4}')
-        echo "  $label: $disk ($size)"
+        echo "  $label: $disk"
+
+        # Use the improved detection
+        local format=$(get_disk_format "$disk")
+
+        # Get info by forcing the correct format
+        if command -v qemu-img &> /dev/null; then
+            local info=$(qemu-img info -f "$format" "$disk" 2>/dev/null)
+            local virtual_size=$(echo "$info" | grep 'virtual size:' | awk '{print $3, $4}')
+            local disk_size=$(echo "$info" | grep 'disk size:' | awk '{print $3, $4}')
+
+            echo "    Format: $format"
+            if [ -n "$virtual_size" ]; then
+                echo "    Virtual size: $virtual_size"
+            fi
+            if [ -n "$disk_size" ]; then
+                echo "    Disk size: $disk_size"
+            fi
+        fi
     fi
 }
 
-# --- Logica Principale Script ---
+# --- Main Script Logic ---
 
-# Verifica dipendenze richieste
+# Check required dependencies
 check_dependency qemu-system-x86_64
 check_dependency qemu-img
 
-# Parse argomenti riga di comando
+# Parse command line arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --src)
@@ -164,7 +329,7 @@ while [[ $# -gt 0 ]]; do
         --cpus)
             VM_CPUS="$2"
             if ! [[ "$VM_CPUS" =~ ^[0-9]+$ ]] || [ "$VM_CPUS" -le 0 ]; then
-                echo "Errore: Numero CPU non valido '$VM_CPUS'." >&2
+                echo "Error: Invalid CPU number '$VM_CPUS'." >&2
                 exit 1
             fi
             shift 2
@@ -177,41 +342,46 @@ while [[ $# -gt 0 ]]; do
             BOOT_MODE="uefi"
             shift
             ;;
+        --verbose)
+            VERBOSE=true
+            shift
+            ;;
         --help)
             show_help
             ;;
         *)
-            echo "Errore: Opzione non valida '$1'." >&2
-            echo "Usa '$0 --help' per vedere le opzioni disponibili." >&2
+            echo "Error: Invalid option '$1'." >&2
+            echo "Use '$0 --help' to see available options." >&2
             exit 1
             ;;
     esac
 done
 
-# Valida che tutti i parametri richiesti siano forniti
+# Validate that all required parameters are provided
 if [ -z "$DISK1" ] || [ -z "$DISK2" ] || [ -z "$ISO_PATH" ]; then
-    echo "Errore: Mancano argomenti richiesti." >&2
-    echo "Richiesti: --src, --dst, --iso" >&2
-    echo "Usa '$0 --help' per maggiori informazioni." >&2
+    echo "Error: Missing required arguments." >&2
+    echo "Required: --src, --dst, --iso" >&2
+    echo "Use '$0 --help' for more information." >&2
     exit 1
 fi
 
-# Valida che i file forniti esistano
-check_file_exists "$ISO_PATH" "File ISO"
-check_file_exists "$DISK1" "Disco sorgente"
-check_file_exists "$DISK2" "Disco destinazione"
+# Validate that provided files exist
+check_file_exists "$ISO_PATH" "ISO file"
+check_file_exists "$DISK1" "Source disk"
+check_file_exists "$DISK2" "Destination disk"
 if [ -n "$EXTRA_DISK" ]; then
-    check_file_exists "$EXTRA_DISK" "Disco aggiuntivo"
+    check_file_exists "$EXTRA_DISK" "Additional disk"
 fi
 
-# Rileva formati disco
+# Detect disk formats with improved detection
+echo "Detecting disk formats..."
 DISK1_FORMAT=$(get_disk_format "$DISK1")
 DISK2_FORMAT=$(get_disk_format "$DISK2")
 if [ -n "$EXTRA_DISK" ]; then
     EXTRA_FORMAT=$(get_disk_format "$EXTRA_DISK")
 fi
 
-# Assembla opzioni QEMU
+# Assemble QEMU options
 QEMU_OPTS=(
     "-m" "$VM_RAM"
     "-smp" "$VM_CPUS"
@@ -221,41 +391,41 @@ QEMU_OPTS=(
     "-vga" "virtio"
     "-display" "sdl"
     "-usb"
-    "-device" "usb-tablet"  # Migliore controllo mouse
+    "-device" "usb-tablet"  # Better mouse control
 )
 
-# Aggiungi i dischi in ordine specifico per il boot
+# Add disks in a specific order for booting
 if [ "$BOOT_MODE" = "uefi" ]; then
-    # Per UEFI: ISO deve essere il PRIMO drive per avere priorità
+    # For UEFI: ISO must be the FIRST drive to have priority
     QEMU_OPTS+=("-drive" "file=$ISO_PATH,format=raw,media=cdrom,readonly=on,if=none,id=cd0")
-    QEMU_OPTS+=("-device" "ide-cd,drive=cd0,bootindex=0")  # CD-ROM su IDE primary master
+    QEMU_OPTS+=("-device" "ide-cd,drive=cd0,bootindex=0")  # CD-ROM on IDE primary master
     
-    # Dischi con controller SATA per evitare conflitti IDE
+    # Disks with SATA controller to avoid IDE conflicts
     QEMU_OPTS+=("-drive" "file=$DISK1,format=$DISK1_FORMAT,media=disk,if=none,id=hd0")
-    QEMU_OPTS+=("-device" "ahci,id=ahci")  # Controller AHCI/SATA
-    QEMU_OPTS+=("-device" "ide-hd,drive=hd0,bus=ahci.0,bootindex=1")  # Primo disco su SATA
+    QEMU_OPTS+=("-device" "ahci,id=ahci")  # AHCI/SATA controller
+    QEMU_OPTS+=("-device" "ide-hd,drive=hd0,bus=ahci.0,bootindex=1")  # First disk on SATA
     QEMU_OPTS+=("-drive" "file=$DISK2,format=$DISK2_FORMAT,media=disk,if=none,id=hd1")
-    QEMU_OPTS+=("-device" "ide-hd,drive=hd1,bus=ahci.1,bootindex=2")  # Secondo disco su SATA
+    QEMU_OPTS+=("-device" "ide-hd,drive=hd1,bus=ahci.1,bootindex=2")  # Second disk on SATA
 else
-    # Per MBR: ordine tradizionale
+    # For MBR: traditional order
     QEMU_OPTS+=("-drive" "file=$ISO_PATH,format=raw,media=cdrom,readonly=on")
     QEMU_OPTS+=("-drive" "file=$DISK1,format=$DISK1_FORMAT,media=disk")
     QEMU_OPTS+=("-drive" "file=$DISK2,format=$DISK2_FORMAT,media=disk")
 fi
 
-# Aggiungi disco aggiuntivo se specificato
+# Add additional disk if specified
 if [ -n "$EXTRA_DISK" ]; then
     if [ "$BOOT_MODE" = "uefi" ]; then
         QEMU_OPTS+=("-drive" "file=$EXTRA_DISK,format=$EXTRA_FORMAT,media=disk,if=none,id=hd2")
-        QEMU_OPTS+=("-device" "ide-hd,drive=hd2,bus=ahci.2,bootindex=3")  # Terzo disco su SATA
+        QEMU_OPTS+=("-device" "ide-hd,drive=hd2,bus=ahci.2,bootindex=3")  # Third disk on SATA
     else
         QEMU_OPTS+=("-drive" "file=$EXTRA_DISK,format=$EXTRA_FORMAT,media=disk")
     fi
 fi
 
-# Configura modalità boot
+# Configure boot mode
 if [ "$BOOT_MODE" = "uefi" ]; then
-    # Cerca firmware UEFI in percorsi comuni
+    # Search for UEFI firmware in common paths
     OVMF_PATHS=(
         "/usr/share/ovmf/OVMF.fd"
         "/usr/share/OVMF/OVMF.fd"
@@ -272,50 +442,51 @@ if [ "$BOOT_MODE" = "uefi" ]; then
     done
     
     if [ -z "$OVMF_PATH" ]; then
-        echo "Errore: Firmware OVMF non trovato. Installa il pacchetto ovmf:" >&2
+        echo "Error: OVMF firmware not found. Install the ovmf package:" >&2
         echo "  Ubuntu/Debian: sudo apt install ovmf" >&2
         echo "  Fedora/RHEL: sudo dnf install edk2-ovmf" >&2
-        echo "Percorsi cercati: ${OVMF_PATHS[*]}" >&2
+        echo "Paths searched: ${OVMF_PATHS[*]}" >&2
         exit 1
     fi
     
     QEMU_OPTS+=("-bios" "$OVMF_PATH")
-    # Per UEFI, l'ordine di boot è già gestito dai bootindex
+    # For UEFI, boot order is already handled by bootindex
 else # MBR
-    QEMU_OPTS+=("-boot" "order=d,menu=on,strict=on")  # Boot SOLO da CD con menu
+    QEMU_OPTS+=("-boot" "order=d,menu=on,strict=on")  # Boot ONLY from CD with menu
 fi
 
-# Mostra informazioni di avvio
-echo "=== Avvio VM QEMU per Clonazione Dischi ==="
-echo "Configurazione:"
-echo "  RAM: $VM_RAM"
-echo "  CPU: $VM_CPUS core"
-echo "  Modalità boot: $BOOT_MODE"
-echo "  ISO bootable: $ISO_PATH"
+# Display startup information
 echo ""
-echo "Dischi configurati:"
-show_disk_info "$DISK1" "Sorgente"
-show_disk_info "$DISK2" "Destinazione"
+echo "=== Starting QEMU VM for Disk Cloning ==="
+echo "Configuration:"
+echo "  RAM: $VM_RAM"
+echo "  CPU: $VM_CPUS cores"
+echo "  Boot mode: $BOOT_MODE"
+echo "  Bootable ISO: $ISO_PATH"
+echo ""
+echo "Configured disks:"
+show_disk_info "$DISK1" "Source"
+show_disk_info "$DISK2" "Destination"
 if [ -n "$EXTRA_DISK" ]; then
-    show_disk_info "$EXTRA_DISK" "Disco aggiuntivo"
+    show_disk_info "$EXTRA_DISK" "Additional disk"
 fi
 if [ "$BOOT_MODE" = "uefi" ]; then
-    echo "  Firmware UEFI: $OVMF_PATH"
+    echo "  UEFI Firmware: $OVMF_PATH"
 fi
 echo ""
-echo "AVVERTENZA: Assicurati di avere backup dei tuoi dati prima di procedere."
-echo "Premere ESC durante il boot per accedere al menu di avvio."
+echo "WARNING: Make sure you have backups of your data before proceeding."
+echo "Press ESC during boot to access the boot menu."
 echo ""
 
-# Avvia QEMU
-echo "Avvio QEMU..."
+# Start QEMU
+echo "Starting QEMU..."
 qemu-system-x86_64 "${QEMU_OPTS[@]}"
 
-# Verifica errori di avvio QEMU
+# Check for QEMU startup errors
 if [ $? -ne 0 ]; then
-    echo "Errore: Impossibile avviare QEMU." >&2
+    echo "Error: Failed to start QEMU." >&2
     exit 1
 fi
 
-echo "Sessione QEMU terminata."
+echo "QEMU session ended."
 exit 0

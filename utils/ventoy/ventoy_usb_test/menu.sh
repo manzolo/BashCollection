@@ -27,6 +27,8 @@ select_disk_menu() {
                 case "${DISK##*.}" in
                     qcow2) FORMAT="qcow2" ;;
                     vdi) FORMAT="vdi" ;;
+                    vtoy) FORMAT="vpc" ;;
+                    vhd) FORMAT="vpc" ;;
                     vmdk) FORMAT="vmdk" ;;
                     *) FORMAT="raw" ;;
                 esac

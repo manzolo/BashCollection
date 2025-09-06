@@ -33,7 +33,7 @@ browse_image_files() {
             if [[ -n "$file" ]]; then
                 items+=("$(basename "$file")" "Image file")
             fi
-        done < <(find "$current_dir" -maxdepth 1 -type f \( -iname "*.iso" -o -iname "*.img" -o -iname "*.qcow2" -o -iname "*.vdi" -o -iname "*.vmdk" -o -iname "*.raw" \) -print 2>/dev/null | sort)
+        done < <(find "$current_dir" -maxdepth 1 -type f \( -iname "*.iso" -o -iname "*.img" -o -iname "*.qcow2" -o -iname "*.vdi" -o -iname "*.vmdk" -o -iname "*.vtoy" -o -iname "*.vhd" -o -iname "*.raw" \) -print 2>/dev/null | sort)
         
         # Show menu with options
         selected_file=$(dialog --title "Browse Image Files ($current_dir)" \
