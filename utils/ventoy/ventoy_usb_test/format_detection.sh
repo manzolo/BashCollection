@@ -1,10 +1,10 @@
 # Enhanced image format detection and management for VHD/VPC and other virtual disk formats
 
 # Advanced format detection using file signatures and qemu-img
+# Simple and direct format detection with VHD priority
 detect_image_format() {
     local file_path="$1"
     local detected_format=""
-    local confidence="low"
     
     # Return raw for block devices
     if [[ -b "$file_path" ]]; then
@@ -18,7 +18,20 @@ detect_image_format() {
         return 1
     fi
     
-    # Method 1: Use qemu-img info (most reliable)
+    # Special handling for VHD files - test with -f vpc first
+    if [[ "${file_path##*.}" =~ ^(vhd|VHD|vpc|VPC)$ ]]; then
+        if command -v qemu-img >/dev/null; then
+            local vpc_test
+            vpc_test=$(qemu-img info -f vpc "$file_path" 2>&1 || true)
+            # If no error, it's a valid VPC/VHD file
+            if [[ -n "$vpc_test" ]] && ! echo "$vpc_test" | grep -qi "could not open\|invalid\|error\|failed\|unknown"; then
+                echo "vpc"
+                return 0
+            fi
+        fi
+    fi
+    
+    # Standard qemu-img detection for other formats
     if command -v qemu-img >/dev/null; then
         local qemu_output
         qemu_output=$(qemu-img info "$file_path" 2>/dev/null || true)
@@ -26,57 +39,23 @@ detect_image_format() {
         if [[ -n "$qemu_output" ]]; then
             detected_format=$(echo "$qemu_output" | grep "file format:" | awk '{print $3}' | tr -d '[:space:]')
             if [[ -n "$detected_format" ]]; then
-                confidence="high"
                 echo "$detected_format"
                 return 0
             fi
         fi
     fi
     
-    # Method 2: File signature analysis
-    local file_signature
-    file_signature=$(hexdump -C "$file_path" -n 512 2>/dev/null | head -20 || true)
-    
-    if [[ -n "$file_signature" ]]; then
-        # VHD/VPC detection (signature at end of file or specific headers)
-        if [[ "$file_signature" == *"636f6e6563746978"* ]] || # "conectix" signature
-           [[ "$file_signature" == *"78697463656e6f63"* ]] || # reversed
-           head -c 8 "$file_path" 2>/dev/null | grep -q "conectix" ||
-           tail -c 512 "$file_path" 2>/dev/null | grep -q "conectix"; then
-            detected_format="vpc"
-            confidence="medium"
-        # VMDK detection
-        elif [[ "$file_signature" == *"4b444d56"* ]] || # "VMDK" signature
-             head -c 4 "$file_path" 2>/dev/null | grep -q "KDMV"; then
-            detected_format="vmdk"
-            confidence="medium"
-        # QCOW2 detection
-        elif [[ "$file_signature" == *"514649fb"* ]] || # QCOW2 magic
-             head -c 4 "$file_path" 2>/dev/null | od -t x1 | grep -q "51 46 49 fb"; then
-            detected_format="qcow2"
-            confidence="medium"
-        # VDI detection (VirtualBox)
-        elif [[ "$file_signature" == *"3c3c3c20"* ]] && [[ "$file_signature" == *"4f72616c"* ]]; then
-            detected_format="vdi"
-            confidence="medium"
-        fi
-    fi
-    
-    # Method 3: File extension fallback
-    if [[ -z "$detected_format" ]]; then
-        case "${file_path##*.}" in
-            vhd|VHD) detected_format="vpc" ;;
-            vpc|VPC) detected_format="vpc" ;;
-            vmdk|VMDK) detected_format="vmdk" ;;
-            qcow2|QCOW2) detected_format="qcow2" ;;
-            qcow|QCOW) detected_format="qcow" ;;
-            vdi|VDI) detected_format="vdi" ;;
-            img|IMG) detected_format="raw" ;;
-            iso|ISO) detected_format="raw" ;;
-            *) detected_format="raw" ;;
-        esac
-        confidence="low"
-    fi
+    # Fallback to file extension
+    case "${file_path##*.}" in
+        vhd|VHD|vpc|VPC) detected_format="vpc" ;;
+        vmdk|VMDK) detected_format="vmdk" ;;
+        qcow2|QCOW2) detected_format="qcow2" ;;
+        qcow|QCOW) detected_format="qcow" ;;
+        vdi|VDI) detected_format="vdi" ;;
+        img|IMG) detected_format="raw" ;;
+        iso|ISO) detected_format="raw" ;;
+        *) detected_format="raw" ;;
+    esac
     
     echo "$detected_format"
     return 0

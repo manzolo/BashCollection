@@ -23,8 +23,26 @@ select_disk_menu() {
             browsed_file=$(browse_image_files_enhanced)
             if [[ -n "$browsed_file" ]]; then
                 DISK="$browsed_file"
-                # Enhanced format detection
-                FORMAT=$(detect_image_format "$DISK")
+                if [[ "${DISK##*.}" =~ ^(vhd|VHD|vpc|VPC)$ ]]; then
+                    if command -v qemu-img >/dev/null; then
+                        local vpc_test
+                        vpc_test=$(qemu-img info -f vpc "$DISK" 2>&1 || true)
+                        if [[ -n "$vpc_test" ]] && ! echo "$vpc_test" | grep -qi "could not open\|invalid\|error\|failed"; then
+                            FORMAT="vpc"
+                        else
+                            FORMAT="raw"
+                        fi
+                    else
+                        FORMAT="vpc"
+                    fi
+                else
+                    case "${DISK##*.}" in
+                        qcow2) FORMAT="qcow2" ;;
+                        vdi) FORMAT="vdi" ;;
+                        vmdk) FORMAT="vmdk" ;;
+                        *) FORMAT="raw" ;;
+                    esac
+                fi
                 
                 # Show detailed information and validation
                 show_image_details_dialog "$DISK"
@@ -40,11 +58,28 @@ select_disk_menu() {
             
             if [[ -n "$custom_path" ]]; then
                 DISK="$custom_path"
-                if [[ -f "$DISK" ]]; then
-                    FORMAT=$(detect_image_format "$DISK")
-                    show_image_details_dialog "$DISK"
-                elif [[ -b "$DISK" ]]; then
-                    FORMAT="raw"
+                # Enhanced format detection with VHD test
+                if [[ "${DISK##*.}" =~ ^(vhd|VHD|vpc|VPC)$ ]]; then
+                    # Test VHD with -f vpc first
+                    if command -v qemu-img >/dev/null; then
+                        local vpc_test
+                        vpc_test=$(qemu-img info -f vpc "$DISK" 2>&1 || true)
+                        if [[ -n "$vpc_test" ]] && ! echo "$vpc_test" | grep -qi "could not open\|invalid\|error\|failed"; then
+                            FORMAT="vpc"
+                        else
+                            FORMAT="raw"  # fallback se test vpc fallisce
+                        fi
+                    else
+                        FORMAT="vpc"  # fallback se qemu-img non disponibile
+                    fi
+                else
+                    # Standard detection for other formats
+                    case "${DISK##*.}" in
+                        qcow2) FORMAT="qcow2" ;;
+                        vdi) FORMAT="vdi" ;;
+                        vmdk) FORMAT="vmdk" ;;
+                        *) FORMAT="raw" ;;
+                    esac
                 fi
             else
                 return 1
