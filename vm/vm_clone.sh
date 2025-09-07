@@ -1,5 +1,4 @@
 #!/bin/bash
-
 # Script to launch a QEMU virtual machine for cloning virtual disks.
 # It automatically detects virtual disk formats and supports both MBR and UEFI modes.
 # Optimized for cloning operations with bootable ISOs.
@@ -86,186 +85,58 @@ check_file_exists() {
     fi
 }
 
-# Automatically detects the format of a disk image with improved detection
+# Tests if a specific format is compatible with a disk file.
+test_format_compatibility() {
+    local disk_file=$1
+    local format=$2
+    if command -v qemu-img &> /dev/null; then
+        qemu-img info -f "$format" "$disk_file" &>/dev/null
+        return $?
+    fi
+    return 0 # Assume compatibility if qemu-img is not available
+}
+
+# Automatically detects the format of a disk image
 detect_disk_format() {
     local disk_file=$1
-    local format=""
-    
-    # List of formats to test in priority order
-    local formats_to_test=("qcow2" "vmdk" "vdi" "vpc" "vhdx" "qed" "parallels")
-    
-    # First, try qemu-img's automatic detection
-    if command -v qemu-img &> /dev/null; then
-        format=$(qemu-img info "$disk_file" 2>/dev/null | grep "file format:" | awk '{print $3}')
-        # Only if the automatic detection finds a specific format (not raw/unknown)
-        if [ -n "$format" ] && [ "$format" != "unknown" ]; then
-            if [ "$format" = "raw" ]; then
-                # Extra attempt: could be a VHD (vpc disguised as raw)
-                local vpc_check=$(qemu-img info -f vpc "$disk_file" 2>/dev/null | grep "file format:")
-                if echo "$vpc_check" | grep -q "vpc"; then
-                    echo "vpc"
-                    return 0
-                fi
-            else
-                echo "$format"
-                return 0
-            fi
-        fi
-        
-        # If qemu-img says "raw" or doesn't detect anything, try specific formats
-        for test_format in "${formats_to_test[@]}"; do
-            # Try to read the file with the specific format
-            local test_output=$(qemu-img info -f "$test_format" "$disk_file" 2>/dev/null)
-            if [ $? -eq 0 ] && [ -n "$test_output" ]; then
-                # Check if the detected format matches
-                detected=$(echo "$test_output" | grep "file format:" | awk '{print $3}')
-                if [ "$detected" = "$test_format" ]; then
-                    echo "$test_format"
-                    return 0
-                fi
-            fi
-        done
-    fi
-    
-    # Fallback: detection via magic numbers/header
-    if command -v file &> /dev/null; then
-        local file_output=$(file "$disk_file" 2>/dev/null)
-        case "$file_output" in
-            *"QEMU QCOW"*|*"qcow"*)
-                echo "qcow2"
-                return 0
-                ;;
-            *"VMware"*|*"VMDK"*)
-                echo "vmdk"
-                return 0
-                ;;
-            *"VirtualBox"*|*"VDI"*)
-                echo "vdi"
-                return 0
-                ;;
-            *"Microsoft Disk Image"*|*"VHD"*)
-                echo "vpc"
-                return 0
-                ;;
-        esac
-    fi
-    
-    # Fallback: manual header check
-    if [ -r "$disk_file" ]; then
-        # QCOW2 magic: "QFI\xfb"
-        if head -c 4 "$disk_file" 2>/dev/null | xxd -l 4 -p | grep -q "^514649fb"; then
-            echo "qcow2"
-            return 0
-        fi
-        
-        # VMDK magic: "KDMV"  
-        if head -c 4 "$disk_file" 2>/dev/null | grep -q "KDMV"; then
-            echo "vmdk"
-            return 0
-        fi
-        
-        # VDI magic: "<<< Oracle VM VirtualBox Disk Image >>>"
-        if head -c 64 "$disk_file" 2>/dev/null | grep -q "Oracle VM VirtualBox Disk Image"; then
-            echo "vdi"
-            return 0
-        fi
-        
-        # VHD magic: "conectix" at offset 0 or "cxsparse" for dynamic VHD
-        local vhd_magic=$(tail -c 512 "$disk_file" 2>/dev/null | head -c 8)
-        if [ "$vhd_magic" = "conectix" ]; then
-            echo "vpc"
-            return 0
-        fi
-    fi
-    
-    # Final fallback: file extension
     local extension="${disk_file##*.}"
-    case "${extension,,}" in # Convert to lowercase
-        qcow2)
-            echo "qcow2"
-            ;;
-        vmdk)
-            echo "vmdk"
-            ;;
-        vdi)
-            echo "vdi"
-            ;;
-        vhd|vhdx)
-            echo "vpc"
-            ;;
-        raw|img|iso)
-            echo "raw"
-            ;;
-        *)
-            echo "raw" # Default to raw if unknown
-            ;;
-    esac
-}
+    local format=""
 
-# Debug function to trace the detection process
-debug_disk_format() {
-    local disk_file=$1
-    echo "=== Debug Detection for: $disk_file ===" >&2
-    
-    # Test qemu-img without format
+    # 1. Primary check: Use qemu-img's automatic detection
     if command -v qemu-img &> /dev/null; then
-        echo "Test qemu-img info (auto-detect):" >&2
-        local auto_format=$(qemu-img info "$disk_file" 2>/dev/null | grep "file format:")
-        echo "  Result: $auto_format" >&2
-        
-        # Test specific formats
-        local formats_to_test=("qcow2" "vmdk" "vdi" "vpc" "vhdx" "qed" "parallels")
-        echo "Test specific formats:" >&2
-        for test_format in "${formats_to_test[@]}"; do
-            echo -n "  Test $test_format: " >&2
-            local test_output=$(qemu-img info -f "$test_format" "$disk_file" 2>/dev/null)
-            if [ $? -eq 0 ] && [ -n "$test_output" ]; then
-                local detected=$(echo "$test_output" | grep "file format:" | awk '{print $3}')
-                echo "SUCCESS - detected as $detected" >&2
-                if [ "$detected" = "$test_format" ]; then
-                    echo "  ✓ Matching format!" >&2
-                else
-                    echo "  ✗ Non-matching format!" >&2
-                fi
-            else
-                echo "FAILED" >&2
-            fi
-        done
+        format=$(qemu-img info "$disk_file" 2>/dev/null | awk '/^file format:/ {print $3}')
+        # Only if the automatic detection finds a specific format (not raw)
+        if [ -n "$format" ] && [ "$format" != "unknown" ] && [ "$format" != "raw" ] && test_format_compatibility "$disk_file" "$format"; then
+            echo "$format"
+            return 0
+        fi
     fi
     
-    # Test 'file' command
-    if command -v file &> /dev/null; then
-        echo "Test 'file' command:" >&2
-        file "$disk_file" >&2
-    fi
-    
-    echo "=================================" >&2
-}
+    # 2. Fallback: Check file extension for common formats
+    case "${extension,,}" in
+        qcow2) format="qcow2" ;;
+        vmdk)  format="vmdk"  ;;
+        vdi)   format="vdi"   ;;
+        vhd)   format="vpc"   ;;
+        vhdx)  format="vhdx"  ;;
+        raw|img|iso|vtoy) format="raw" ;; # Ventoy files are often raw
+        *) format="" ;; # Continue to final fallback
+    esac
 
-# Automatically detects the format of a disk image with optional verbose output
-get_disk_format() {
-    local disk_path=$1
-    
-    if [ "$VERBOSE" = true ]; then
-        debug_disk_format "$disk_path"
+    # 3. Final verification and fallback
+    if [ -n "$format" ]; then
+        if [ "$format" != "raw" ] && ! test_format_compatibility "$disk_file" "$format"; then
+            echo "Warning: Extension-based detection of '$format' failed verification. Falling back to 'raw'." >&2
+            echo "raw"
+            return 0
+        fi
+        echo "$format"
+        return 0
     fi
     
-    local format=$(detect_disk_format "$disk_path")
-    
-    if [ "$VERBOSE" = true ]; then
-        echo "Final detected format for '$disk_path': $format" >&2
-    fi
-    
-    echo "$format"
-}
-
-# Validates RAM size
-validate_ram() {
-    local ram=$1
-    if [[ ! "$ram" =~ ^[0-9]+[GMK]?$ ]]; then
-        echo "Error: Invalid RAM format '$ram'. Use formats like: 4G, 2048M, 512K" >&2
-        exit 1
-    fi
+    # 4. Ultimate fallback to 'raw'
+    echo "raw"
+    return 0
 }
 
 # Shows detailed information about disks
@@ -277,7 +148,7 @@ show_disk_info() {
         echo "  $label: $disk"
 
         # Use the improved detection
-        local format=$(get_disk_format "$disk")
+        local format=$(detect_disk_format "$disk")
 
         # Get info by forcing the correct format
         if command -v qemu-img &> /dev/null; then
@@ -293,6 +164,15 @@ show_disk_info() {
                 echo "    Disk size: $disk_size"
             fi
         fi
+    fi
+}
+
+# Validates RAM size
+validate_ram() {
+    local ram=$1
+    if [[ ! "$ram" =~ ^[0-9]+[GMK]?$ ]]; then
+        echo "Error: Invalid RAM format '$ram'. Use formats like: 4G, 2048M, 512K" >&2
+        exit 1
     fi
 }
 
@@ -375,10 +255,10 @@ fi
 
 # Detect disk formats with improved detection
 echo "Detecting disk formats..."
-DISK1_FORMAT=$(get_disk_format "$DISK1")
-DISK2_FORMAT=$(get_disk_format "$DISK2")
+DISK1_FORMAT=$(detect_disk_format "$DISK1")
+DISK2_FORMAT=$(detect_disk_format "$DISK2")
 if [ -n "$EXTRA_DISK" ]; then
-    EXTRA_FORMAT=$(get_disk_format "$EXTRA_DISK")
+    EXTRA_FORMAT=$(detect_disk_format "$EXTRA_DISK")
 fi
 
 # Assemble QEMU options
