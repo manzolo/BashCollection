@@ -91,8 +91,7 @@ confirm_and_run() {
         clear
         log_info "=== VENTOY BOOT TEST STARTED ==="
         log_info "Monitor: telnet localhost 4444"
-        sync
-        echo 3 > /proc/sys/vm/drop_caches
+        prepare_system_for_qemu "$DISK" "$MEMORY"
         log_info "Full QEMU command:\n$qemu_cmd_string"
         log_info "Press Ctrl+C to terminate"
         echo
