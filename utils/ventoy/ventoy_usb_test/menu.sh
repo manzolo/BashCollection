@@ -8,7 +8,7 @@ select_disk_menu() {
         whiptail --title "Error" --msgbox \
             "Unable to detect devices.\n\nUse manual selection options." \
             10 60
-        devices_array=("BROWSE" "Browse image file (ISO/IMG)..." "CUSTOM" "Custom path..." "" "No selection")
+        devices_array=("BROWSE" "Browse image file..." "CUSTOM" "Custom path..." "" "No selection")
     fi
     
     local selected
@@ -20,45 +20,38 @@ select_disk_menu() {
     case "$selected" in
         "BROWSE")
             local browsed_file
-            browsed_file=$(browse_image_files)
+            browsed_file=$(browse_image_files_enhanced)
             if [[ -n "$browsed_file" ]]; then
                 DISK="$browsed_file"
-                # Automatically set format based on extension
-                case "${DISK##*.}" in
-                    qcow2) FORMAT="qcow2" ;;
-                    vdi) FORMAT="vdi" ;;
-                    vtoy) FORMAT="vpc" ;;
-                    vhd) FORMAT="vpc" ;;
-                    vmdk) FORMAT="vmdk" ;;
-                    *) FORMAT="raw" ;;
-                esac
+                # Enhanced format detection
+                FORMAT=$(detect_image_format "$DISK")
+                
+                # Show detailed information and validation
+                show_image_details_dialog "$DISK"
             else
-                return 1  # Browser canceled
+                return 1
             fi
             ;;
         "CUSTOM")
             local custom_path
             custom_path=$(whiptail --title "Custom Path" \
-                --inputbox "Enter the full path:\n\nUSB Devices:\n• /dev/sdc, /dev/sdd, etc.\n\nImage Files:\n• /path/to/image.iso\n• /path/to/ventoy.img\n• /path/to/disk.qcow2" \
-                18 75 "$DISK" 3>&1 1>&2 2>&3)
+                --inputbox "Enter the full path:" \
+                15 75 "$DISK" 3>&1 1>&2 2>&3)
             
             if [[ -n "$custom_path" ]]; then
                 DISK="$custom_path"
-                # Auto-detect format for files
                 if [[ -f "$DISK" ]]; then
-                    case "${DISK##*.}" in
-                        qcow2) FORMAT="qcow2" ;;
-                        vdi) FORMAT="vdi" ;;
-                        vmdk) FORMAT="vmdk" ;;
-                        *) FORMAT="raw" ;;
-                    esac
+                    FORMAT=$(detect_image_format "$DISK")
+                    show_image_details_dialog "$DISK"
+                elif [[ -b "$DISK" ]]; then
+                    FORMAT="raw"
                 fi
             else
-                return 1  # Canceled
+                return 1
             fi
             ;;
         "")
-            return 1  # No selection or canceled
+            return 1
             ;;
         *)
             if [[ -n "$selected" ]]; then
@@ -70,62 +63,10 @@ select_disk_menu() {
             ;;
     esac
     
-    # Validate selection
+    # Final validation
     if [[ -n "$DISK" ]]; then
-        if [[ -b "$DISK" ]]; then
-            # Block device - show detailed info
-            local info
-            info=$(lsblk "$DISK" -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINT 2>/dev/null || echo "Information not available")
-            
-            # Final safety check
-            local mounted_critical=false
-            while read -r mount; do
-                [[ -z "$mount" ]] && continue
-                if [[ "$mount" =~ ^(/|/boot|/home|/usr|/var|/opt|/root)$ ]]; then
-                    mounted_critical=true
-                    break
-                fi
-            done < <(lsblk -no MOUNTPOINT "$DISK" 2>/dev/null | grep -v "^$")
-            
-            if [[ "$mounted_critical" == true ]]; then
-                whiptail --title "SAFETY WARNING" --msgbox \
-                    "CRITICAL DEVICE DETECTED!\n\nThe device $DISK contains mounted system filesystems.\n\nFor safety, its use is blocked.\n\nSelect an external USB device." \
-                    15 70
-                DISK=""
-                return 1
-            fi
-            
-            whiptail --title "Selected Device" --msgbox \
-                "Device: $DISK\n\nInformation:\n$info\n\nSafety checks: OK" \
-                18 80
-                
-        elif [[ -f "$DISK" ]]; then
-            # Image file - show info
-            local size file_type
-            size=$(du -h "$DISK" 2>/dev/null | cut -f1 || echo "Unknown")
-            file_type=$(file "$DISK" 2>/dev/null | cut -d: -f2 || echo "Unknown type")
-            
-            whiptail --title "Selected File" --msgbox \
-                "File: $DISK\nSize: $size\nType: $file_type" \
-                12 70
-                
-        elif [[ -e "$DISK" ]]; then
-            # Exists but is neither a device nor a regular file
-            whiptail --title "Invalid File Type" --msgbox \
-                "The specified path exists but is not usable:\n$DISK\n\nIt must be a block device (/dev/sdX) or an image file." \
-                12 70
-            DISK=""
-            return 1
-        else
-            # Does not exist
-            whiptail --title "Path Error" --msgbox \
-                "The specified path does not exist or is not accessible:\n\n$DISK\n\nVerify:\n• Correct path\n• Access permissions\n• Device connected" \
-                12 70
-            DISK=""
-            return 1
-        fi
-        
-        return 0
+        validate_selected_disk_enhanced "$DISK"
+        return $?
     else
         return 1
     fi
