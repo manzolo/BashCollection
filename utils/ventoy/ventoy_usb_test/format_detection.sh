@@ -19,7 +19,7 @@ detect_image_format() {
     fi
     
     # Special handling for VHD files - test with -f vpc first
-    if [[ "${file_path##*.}" =~ ^(vhd|VHD|vpc|VPC)$ ]]; then
+    if [[ "${file_path##*.}" =~ ^(vhd|VHD|vpc|VPC|vtoy)$ ]]; then
         if command -v qemu-img >/dev/null; then
             local vpc_test
             vpc_test=$(qemu-img info -f vpc "$file_path" 2>&1 || true)
@@ -47,7 +47,7 @@ detect_image_format() {
     
     # Fallback to file extension
     case "${file_path##*.}" in
-        vhd|VHD|vpc|VPC) detected_format="vpc" ;;
+        vhd|VHD|vpc|VPC|vtoy) detected_format="vpc" ;;
         vmdk|VMDK) detected_format="vmdk" ;;
         qcow2|QCOW2) detected_format="qcow2" ;;
         qcow|QCOW) detected_format="qcow" ;;
@@ -230,7 +230,7 @@ get_format_debug_info() {
     fi
     
     # VHD-specific debug for VPC format
-    if [[ "$detected_format" == "vpc" ]] || [[ "$file_ext" =~ ^(vhd|VHD)$ ]]; then
+    if [[ "$detected_format" == "vpc" ]] || [[ "$file_ext" =~ ^(vhd|VHD|vtoy)$ ]]; then
         debug_info+="\nVHD/VPC Analysis:\n"
         
         # Check for conectix signature
@@ -295,7 +295,7 @@ show_image_details_dialog() {
 }
 
 # Enhanced validation for selected disk
-validate_selected_disk_enhanced() {
+validate_selected_disk() {
     local disk_path="$1"
     
     if [[ -b "$disk_path" ]]; then
@@ -364,19 +364,16 @@ validate_selected_disk_enhanced() {
 }
 
 # Enhanced file browser with format preview
-browse_image_files_enhanced() {
+browse_image_files() {
     local start_dir="$PWD"
     local selected_file=""
     local current_dir="$start_dir"
     
-    if ! command -v dialog &>/dev/null; then
-        whiptail --title "Error" --msgbox "The 'dialog' command is not installed." 10 60
-        return 1
-    fi
-    
+    # Navigation loop
     while true; do
         local items=()
         
+        # Add '..' to go back
         if [[ "$current_dir" != "/" ]]; then
             items+=(".." "📁 Parent directory")
         fi
@@ -384,48 +381,30 @@ browse_image_files_enhanced() {
         # Find directories
         while IFS= read -r dir; do
             if [[ -n "$dir" ]]; then
-                items+=("$(basename "$dir")" "📁 Directory")
+                local dir_name="$(basename "$dir")"
+                items+=("$dir_name" "📁 Directory")
             fi
         done < <(find "$current_dir" -maxdepth 1 -type d ! -path "$current_dir" -print 2>/dev/null | sort)
         
-        # Find image files with format detection
+        # Find image files
         while IFS= read -r file; do
             if [[ -n "$file" ]]; then
-                local basename_file format_info
-                basename_file="$(basename "$file")"
-                
-                # Quick format detection for display
-                case "${file##*.}" in
-                    vhd|VHD|vpc|VPC) format_info="💾 VHD/VPC image" ;;
-                    vmdk|VMDK) format_info="💾 VMDK image" ;;
-                    qcow2|QCOW2) format_info="💾 QCOW2 image" ;;
-                    vdi|VDI) format_info="💾 VDI image" ;;
-                    iso|ISO) format_info="💿 ISO image" ;;
-                    img|IMG) format_info="💾 Disk image" ;;
-                    *) format_info="💾 Image file" ;;
-                esac
-                
-                # Add file size
-                local file_size
-                file_size=$(du -h "$file" 2>/dev/null | cut -f1 || echo "?")
-                format_info+=" (${file_size})"
-                
-                items+=("$basename_file" "$format_info")
+                items+=("$(basename "$file")" "💾 Image file")
             fi
-        done < <(find "$current_dir" -maxdepth 1 -type f \( \
-            -iname "*.iso" -o -iname "*.img" -o -iname "*.qcow2" -o \
-            -iname "*.vdi" -o -iname "*.vmdk" -o -iname "*.vhd" -o \
-            -iname "*.vpc" -o -iname "*.raw" \) -print 2>/dev/null | sort)
+        done < <(find "$current_dir" -maxdepth 1 -type f \( -iname "*.iso" -o -iname "*.img" -o -iname "*.qcow2" -o -iname "*.vdi" -o -iname "*.vmdk" -o -iname "*.vtoy" -o -iname "*.vhd" -o -iname "*.raw" \) -print 2>/dev/null | sort)
         
-        selected_file=$(dialog --title "Browse Images ($current_dir)" \
-            --menu "Select a file or navigate:" \
+        # Use whiptail instead of dialog
+        selected_file=$(whiptail --title "Browse Image Files ($current_dir)" \
+            --menu "Select a file or navigate to a folder:" \
             25 90 15 "${items[@]}" 3>&1 1>&2 2>&3)
         
+        # Check exit code
         if [ $? -ne 0 ]; then
             echo ""
             return 1
         fi
         
+        # Handle selection (rest of the logic remains the same)
         if [[ "$selected_file" == ".." ]]; then
             current_dir=$(dirname "$current_dir")
         elif [[ -d "$current_dir/$selected_file" ]]; then
@@ -433,13 +412,19 @@ browse_image_files_enhanced() {
         elif [[ -f "$current_dir/$selected_file" ]]; then
             selected_file="$current_dir/$selected_file"
             break
+        else
+            continue
         fi
     done
     
+    # Rest of validation logic...
     if [[ -f "$selected_file" && -r "$selected_file" ]]; then
         echo "$selected_file"
         return 0
     else
+        whiptail --title "File Not Found" --msgbox \
+            "The selected file does not exist or is not readable:\n$selected_file" \
+            10 70
         echo ""
         return 1
     fi

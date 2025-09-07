@@ -20,10 +20,10 @@ select_disk_menu() {
     case "$selected" in
         "BROWSE")
             local browsed_file
-            browsed_file=$(browse_image_files_enhanced)
+            browsed_file=$(browse_image_files)
             if [[ -n "$browsed_file" ]]; then
                 DISK="$browsed_file"
-                if [[ "${DISK##*.}" =~ ^(vhd|VHD|vpc|VPC)$ ]]; then
+                if [[ "${DISK##*.}" =~ ^(vhd|VHD|vpc|VPC|vtoy)$ ]]; then
                     if command -v qemu-img >/dev/null; then
                         local vpc_test
                         vpc_test=$(qemu-img info -f vpc "$DISK" 2>&1 || true)
@@ -59,7 +59,7 @@ select_disk_menu() {
             if [[ -n "$custom_path" ]]; then
                 DISK="$custom_path"
                 # Enhanced format detection with VHD test
-                if [[ "${DISK##*.}" =~ ^(vhd|VHD|vpc|VPC)$ ]]; then
+                if [[ "${DISK##*.}" =~ ^(vhd|VHD|vpc|VPC|vtoy)$ ]]; then
                     # Test VHD with -f vpc first
                     if command -v qemu-img >/dev/null; then
                         local vpc_test
@@ -100,7 +100,7 @@ select_disk_menu() {
     
     # Final validation
     if [[ -n "$DISK" ]]; then
-        validate_selected_disk_enhanced "$DISK"
+        validate_selected_disk "$DISK"
         return $?
     else
         return 1
