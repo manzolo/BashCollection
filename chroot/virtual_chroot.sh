@@ -47,7 +47,7 @@ cleanup() {
         local mount_point="${BIND_MOUNTS[i]}"
         if mountpoint -q "$mount_point" 2>/dev/null; then
             log "Unmounting bind mount: $mount_point"
-            sudo umount "$mount_point" || warning "Error unmounting $mount_point"
+            sudo umount -l "$mount_point" || warning "Error unmounting $mount_point"
         fi
     done
 
@@ -55,8 +55,13 @@ cleanup() {
     for ((i=${#MOUNT_POINTS[@]}-1; i>=0; i--)); do
         local mount_point="${MOUNT_POINTS[i]}"
         if mountpoint -q "$mount_point" 2>/dev/null; then
-            log "Unmounting: $mount_point"
-            sudo umount "$mount_point" || warning "Error unmounting $mount_point"
+            # Se è Btrfs, usa cleanup_btrfs_mount
+            if mount | grep -q "^$mount_point .* btrfs "; then
+                cleanup_btrfs_mount "$mount_point"
+            else
+                log "Unmounting: $mount_point"
+                sudo umount -Rl "$mount_point" || warning "Error unmounting $mount_point"
+            fi
         fi
     done
 
@@ -88,6 +93,102 @@ cleanup() {
 
     success "Cleanup complete"
 }
+
+
+cleanup_btrfs_mount() {
+    local mount_point="$1"
+
+    if mountpoint -q "$mount_point"; then
+        log "Unmounting Btrfs mount: $mount_point"
+
+        # tenta smontaggio ricorsivo e lazy
+        sudo umount -Rl "$mount_point" 2>/dev/null || {
+            warning "Lazy unmount failed, trying force"
+            sudo umount -Rl -f "$mount_point" 2>/dev/null || warning "Failed to unmount $mount_point"
+        }
+
+        # verifica se ancora montato
+        if mountpoint -q "$mount_point"; then
+            log "Btrfs mount still busy, listing processes..."
+            sudo fuser -vm "$mount_point"
+            log "You may need to kill blocking processes manually."
+        else
+            log "Btrfs mount unmounted successfully."
+        fi
+    else
+        log "Btrfs mount $mount_point not mounted, skipping."
+    fi
+}
+
+# Monta una partition Btrfs trovando automaticamente il subvolume root corretto
+mount_partition_btrfs() {
+    local partition="$1"
+    local mount_point="$2"
+
+    log "Probing Btrfs partition $partition for subvolumes..."
+    mkdir -p "$mount_point"
+
+    # Mount temporaneo in sola lettura per listare i subvolumes
+    local probe=$(mktemp -d)
+    sudo mount -o ro "$partition" "$probe" || {
+        warning "Cannot mount $partition for probing"
+        return 1
+    }
+
+    # Lista dei subvolumi
+    mapfile -t found_subs < <(
+        sudo btrfs subvolume list "$probe" 2>/dev/null | awk '{for(i=9;i<=NF;i++) printf "%s%s",$i,(i==NF?"":" "); print ""}' | sed 's/^ *//; s/ *$//'
+    )
+
+    sudo umount "$probe"
+    rmdir "$probe"
+
+    # Candidate root subvolumes tipici
+    local candidates_root=("@", "@root", "root")
+    local mounted_root=0
+
+    # Aggiunge i subvolumes trovati ai candidati
+    for s in "${found_subs[@]}"; do
+        [[ -z "$s" ]] && continue
+        candidates_root+=("$s")
+    done
+
+    # Tenta di montare root
+    for sub in "${candidates_root[@]}"; do
+        [[ -z "$sub" ]] && continue
+        log "Trying Btrfs subvolume candidate: $sub"
+        if sudo mount -t btrfs -o subvol="$sub" "$partition" "$mount_point" 2>/dev/null; then
+            # Controlla se contiene tipici file di root
+            if [[ -d "$mount_point/etc" ]] && { [[ -d "$mount_point/bin" ]] || [[ -d "$mount_point/usr/bin" ]]; }; then
+                log "Using Btrfs subvolume for root: $sub"
+                MOUNT_POINTS+=("$mount_point")
+                mounted_root=1
+                break
+            else
+                sudo umount "$mount_point" 2>/dev/null || true
+            fi
+        fi
+    done
+
+    # Fallback: mount raw se nessun root trovato
+    if [[ $mounted_root -eq 0 ]]; then
+        log "No valid root subvolume found; mounting raw partition"
+        sudo mount -t btrfs "$partition" "$mount_point" 2>/dev/null || warning "Impossible mount raw"
+        MOUNT_POINTS+=("$mount_point")
+    fi
+
+    # Monta home se esiste
+    for sub in "${found_subs[@]}"; do
+        if [[ "$sub" == "home" ]]; then
+            local home_mount="${mount_point}/home"
+            mkdir -p "$home_mount"
+            log "Mounting Btrfs subvolume home: $sub -> $home_mount"
+            sudo mount -t btrfs -o subvol="$sub" "$partition" "$home_mount" 2>/dev/null && MOUNT_POINTS+=("$home_mount")
+            break
+        fi
+    done
+}
+
 
 # Trap for automatic cleanup
 trap cleanup EXIT INT TERM
@@ -186,8 +287,8 @@ connect_nbd() {
 # Show available partitions
 show_partitions() {
     log "Partitions found:"
-    
-    sudo fdisk -l "$NBD_DEVICE" | grep "^$NBD_DEVICE" || true
+    # Solo le righe delle partizioni, evita i warning GPT
+    sudo fdisk -l "$NBD_DEVICE" 2>/dev/null | grep "^$NBD_DEVICE" || true
     
     echo ""
     log "Filesystem details:"
@@ -209,36 +310,247 @@ detect_partitions() {
     local efi_part=""
     local luks_parts=()
     local lvm_parts=()
-    
+
     for part in ${NBD_DEVICE}p*; do
-        if [[ -e "$part" ]]; then
-            local fs_type=$(sudo blkid -o value -s TYPE "$part" 2>/dev/null || echo "")
-            if [[ "$fs_type" == "ext4" || "$fs_type" == "ext3" || "$fs_type" == "ext2" || "$fs_type" == "btrfs" || "$fs_type" == "xfs" ]]; then
-                # consider as possible linux root (but might be small/boot)
-                # prefer ext over small partitions
-                # if size > 300M treat as potential root
+        [[ ! -e "$part" ]] && continue
+        local fs_type=$(sudo blkid -o value -s TYPE "$part" 2>/dev/null || "")
+        case "$fs_type" in
+            ext4|ext3|ext2|xfs|btrfs)
                 local size_mb=$(lsblk -bno SIZE "$part" 2>/dev/null | awk '{print int($1/1024/1024)}')
                 if [[ -z "$linux_part" ]] || (( size_mb > 500 )); then
                     linux_part="$part"
                 fi
-            elif [[ "$fs_type" == "vfat" ]]; then
-                # small vfat -> probably EFI
+                ;;
+            vfat)
                 local size_mb=$(lsblk -bno SIZE "$part" 2>/dev/null | awk '{print int($1/1024/1024)}')
-                if [[ $size_mb -lt 1000 ]]; then
+                if (( size_mb < 1000 )); then
                     efi_part="$part"
                 fi
-            elif [[ "$fs_type" == "crypto_LUKS" || "$fs_type" == "LUKS" || "$fs_type" == "crypto_LUKS" ]]; then
+                ;;
+            crypto_LUKS|LUKS|crypto_LUKS)
                 luks_parts+=("$part")
-            elif [[ "$fs_type" == "LVM2_member" ]]; then
+                ;;
+            LVM2_member)
                 lvm_parts+=("$part")
-            fi
-        fi
+                ;;
+        esac
     done
-    
+
     # Return pipe-separated lists: linux|efi|luks_csv|lvm_csv
     local luks_csv=$(IFS=,; echo "${luks_parts[*]}")
     local lvm_csv=$(IFS=,; echo "${lvm_parts[*]}")
     echo "$linux_part|$efi_part|$luks_csv|$lvm_csv"
+}
+
+# Detect Linux, EFI, LUKS, LVM partitions (enhanced)
+detect_partitions() {
+    local linux_part=""
+    local efi_part=""
+    local luks_parts=()
+    local lvm_parts=()
+
+    for part in ${NBD_DEVICE}p*; do
+        [[ ! -e "$part" ]] && continue
+        local fs_type=$(sudo blkid -o value -s TYPE "$part" 2>/dev/null || "")
+        case "$fs_type" in
+            ext4|ext3|ext2|xfs|btrfs)
+                local size_mb=$(lsblk -bno SIZE "$part" 2>/dev/null | awk '{print int($1/1024/1024)}')
+                if [[ -z "$linux_part" ]] || (( size_mb > 500 )); then
+                    linux_part="$part"
+                fi
+                ;;
+            vfat)
+                local size_mb=$(lsblk -bno SIZE "$part" 2>/dev/null | awk '{print int($1/1024/1024)}')
+                if (( size_mb < 1000 )); then
+                    efi_part="$part"
+                fi
+                ;;
+            crypto_LUKS|LUKS|crypto_LUKS)
+                luks_parts+=("$part")
+                ;;
+            LVM2_member)
+                lvm_parts+=("$part")
+                ;;
+        esac
+    done
+
+    # Return pipe-separated lists: linux|efi|luks_csv|lvm_csv
+    local luks_csv=$(IFS=,; echo "${luks_parts[*]}")
+    local lvm_csv=$(IFS=,; echo "${lvm_parts[*]}")
+    echo "$linux_part|$efi_part|$luks_csv|$lvm_csv"
+}
+
+# Mount a Linux partition, LVM LV, or EFI
+mount_partition() {
+    local part="$1"
+    local mount_point="$2"
+    local fstype="$3"
+
+    mkdir -p "$mount_point"
+
+    if [[ "$fstype" == "btrfs" ]]; then
+        mount_partition_btrfs "$linux_part" "$linux_mount"
+    else
+        sudo mount "$part" "$mount_point"
+        MOUNT_POINTS+=("$mount_point")
+    fi
+}
+
+mount_additional_partitions() {
+    local linux_mount="$1"
+
+    # Monta la partizione EFI se esiste
+    if [[ -n "$efi_part" ]]; then
+        local efi_target="$linux_mount/boot/efi"
+        if [[ ! -d "$efi_target" ]]; then
+            mkdir -p "$efi_target" || {
+                warning "Cannot create EFI mount directory $efi_target"
+            }
+        fi
+        if mountpoint -q "$efi_target"; then
+            log "EFI already mounted at $efi_target"
+        else
+            log "Mounting EFI partition $efi_part to $efi_target"
+            if sudo mount "$efi_part" "$efi_target"; then
+                MOUNT_POINTS+=("$efi_target")
+            else
+                warning "Failed to mount EFI partition $efi_part"
+            fi
+        fi
+    fi
+
+    # Cerca una eventuale partizione /boot separata
+    for part in ${NBD_DEVICE}p*; do
+        if [[ -e "$part" && "$part" != "$efi_part" ]]; then
+            local fstype=$(sudo blkid -o value -s TYPE "$part" 2>/dev/null || true)
+            if [[ "$fstype" == "ext4" || "$fstype" == "ext3" || "$fstype" == "ext2" || "$fstype" == "xfs" ]]; then
+                local size_mb=$(lsblk -bno SIZE "$part" 2>/dev/null | awk '{print int($1/1024/1024)}' || echo 0)
+                # Una partizione tra 200MB e 2GB potrebbe essere /boot
+                if (( size_mb >= 200 && size_mb <= 2048 )); then
+                    local boot_target="$linux_mount/boot"
+                    if [[ ! -d "$boot_target" ]]; then
+                        mkdir -p "$boot_target" || {
+                            warning "Cannot create /boot mount directory $boot_target"
+                        }
+                    fi
+                    if mountpoint -q "$boot_target"; then
+                        log "/boot already mounted at $boot_target"
+                    else
+                        log "Mounting potential /boot partition $part to $boot_target"
+                        if sudo mount "$part" "$boot_target"; then
+                            MOUNT_POINTS+=("$boot_target")
+                            break
+                        else
+                            warning "Failed to mount /boot partition $part"
+                        fi
+                    fi
+                fi
+            fi
+        fi
+    done
+}
+
+# ---- MOUNT LINUX SYSTEM (root + /boot + EFI) ----
+mount_linux_system() {
+    local linux_part="$1"
+    local efi_part="$2"
+
+    local mount_dir="/tmp/disk_mount_$(date +%s)"
+    sudo mkdir -p "$mount_dir"
+
+    local fs_type
+    fs_type=$(sudo blkid -o value -s TYPE "$linux_part" 2>/dev/null || "")
+
+    # ---- MOUNT ROOT ----
+    if [[ "$fs_type" == "btrfs" ]]; then
+        log "Detected Btrfs filesystem on $linux_part"
+        mount_partition_btrfs "$linux_part" "$mount_dir"
+    elif [[ "$fs_type" == "LVM2_member" ]]; then
+        log "Detected LVM PV: $linux_part"
+        handle_lvm_activate
+        linux_part=$(find_root_lv)
+        if [[ -z "$linux_part" ]]; then
+            error "Cannot find root LV in LVM"
+            exit 1
+        fi
+        fs_type=$(sudo blkid -o value -s TYPE "$linux_part" 2>/dev/null || "")
+        sudo mount "$linux_part" "$mount_dir"
+        MOUNT_POINTS+=("$mount_dir")
+        log "Root LV mounted: $linux_part -> $mount_dir"
+    else
+        log "Mounting $linux_part as $fs_type"
+        sudo mount "$linux_part" "$mount_dir"
+        MOUNT_POINTS+=("$mount_dir")
+    fi
+
+    # ---- MOUNT /boot (se esiste) ----
+    for part in ${NBD_DEVICE}p*; do
+        [[ ! -e "$part" || "$part" == "$efi_part" || "$part" == "$linux_part" ]] && continue
+        local part_fs
+        part_fs=$(sudo blkid -o value -s TYPE "$part" 2>/dev/null || "")
+        if [[ "$part_fs" == ext4 || "$part_fs" == xfs ]]; then
+            local size_mb
+            size_mb=$(lsblk -bno SIZE "$part" 2>/dev/null | awk '{print int($1/1024/1024)}')
+            if (( size_mb >= 200 && size_mb <= 2048 )); then
+                local boot_target="$mount_dir/boot"
+                sudo mkdir -p "$boot_target"
+                sudo mount "$part" "$boot_target"
+                MOUNT_POINTS+=("$boot_target")
+                log "/boot mounted: $part -> $boot_target"
+                break
+            fi
+        fi
+    done
+
+    # ---- MOUNT EFI (sempre con sudo) ----
+    if [[ -n "$efi_part" ]]; then
+        local efi_target="$mount_dir/boot/efi"
+        sudo mkdir -p "$efi_target"
+        if sudo mount "$efi_part" "$efi_target"; then
+            MOUNT_POINTS+=("$efi_target")
+            log "EFI mounted: $efi_part -> $efi_target"
+        else
+            warning "Failed to mount EFI partition $efi_part"
+        fi
+    fi
+
+    # ---- Sanity check ----
+    if [[ ! -d "$mount_dir/etc" ]] || { [[ ! -d "$mount_dir/bin" ]] && [[ ! -d "$mount_dir/usr/bin" ]]; }; then
+        warning "Mounted partition may not be a full Linux root"
+    fi
+
+    echo "$mount_dir"
+}
+
+enter_chroot() {
+    local chroot_dir="$1"
+    local efi_mount="$2"
+
+    CHROOT_DIR="$chroot_dir"
+
+    # EFI
+    if [[ -n "$efi_mount" ]]; then
+        local efi_target="$chroot_dir/boot/efi"
+        sudo mkdir -p "$efi_target"
+        sudo mount "$efi_mount" "$efi_target" && MOUNT_POINTS+=("$efi_target")
+        log "EFI mounted in chroot: $efi_mount -> $efi_target"
+    fi
+
+    # Bind mounts
+    setup_bind_mounts "$chroot_dir"
+
+    # Risoluzione DNS
+    if [[ -f /etc/resolv.conf ]]; then
+        sudo cp --remove-destination /etc/resolv.conf "$chroot_dir/etc/resolv.conf"
+    fi
+
+    success "Chroot environment prepared"
+    echo ""
+    echo "Entering chroot... Use 'exit' to leave."
+    echo "Chroot directory: $chroot_dir"
+    echo ""
+
+    sudo chroot "$chroot_dir" /bin/bash --login
 }
 
 # Open LUKS partitions (asks for passphrase)
@@ -311,31 +623,6 @@ find_root_lv() {
     echo "$candidate"
 }
 
-# Mount partition or LV
-mount_partition() {
-    local partition="$1"
-    local mount_point="$2"
-    local fs_type="$3"
-
-    log "Mounting $partition to $mount_point (type: $fs_type)"
-
-    mkdir -p "$mount_point"
-
-    case "$fs_type" in
-        "vfat")
-            sudo mount -t vfat "$partition" "$mount_point"
-            ;;
-        "xfs")
-            sudo mount -t xfs "$partition" "$mount_point"
-            ;;
-        *)
-            sudo mount "$partition" "$mount_point"
-            ;;
-    esac
-
-    MOUNT_POINTS+=("$mount_point")
-}
-
 # Setup bind mounts for chroot
 setup_bind_mounts() {
     local chroot_dir="$1"
@@ -365,50 +652,6 @@ setup_bind_mounts() {
 
         BIND_MOUNTS+=("$target")
     done
-}
-
-# Enter chroot
-enter_chroot() {
-    local chroot_dir="$1"
-    local efi_mount="$2"
-
-    CHROOT_DIR="$chroot_dir"
-
-    if [[ -n "$efi_mount" ]]; then
-        local efi_target="$chroot_dir/boot/efi"
-        if [[ -d "$efi_target" ]]; then
-            log "Mounting EFI partition to $efi_target"
-            sudo mount "$efi_mount" "$efi_target"
-            MOUNT_POINTS+=("$efi_target")
-        else
-            warning "/boot/efi directory not found in chroot, skipping EFI mount"
-        fi
-    fi
-
-    setup_bind_mounts "$chroot_dir"
-
-    if [[ -f /etc/resolv.conf ]]; then
-        # Fai un backup solo se è un file normale, non un symlink
-        if [[ -f "$chroot_dir/etc/resolv.conf" && ! -L "$chroot_dir/etc/resolv.conf" ]]; then
-            sudo cp "$chroot_dir/etc/resolv.conf" "$chroot_dir/etc/resolv.conf.backup" 2>/dev/null || true
-        fi
-
-        # Sovrascrivi sempre, eliminando symlink eventuali
-        sudo cp --remove-destination /etc/resolv.conf "$chroot_dir/etc/resolv.conf"
-    fi
-
-    success "Chroot environment prepared"
-    echo ""
-    echo "Entering chroot... Use 'exit' to leave."
-    echo "Chroot directory: $chroot_dir"
-    echo ""
-
-    sudo chroot "$chroot_dir" /bin/bash --login
-
-    # Ripristino eventuale backup
-    if [[ -f "$chroot_dir/etc/resolv.conf.backup" ]]; then
-        sudo mv "$chroot_dir/etc/resolv.conf.backup" "$chroot_dir/etc/resolv.conf"
-    fi
 }
 
 # Function to select image file with navigation (unchanged)
@@ -537,7 +780,6 @@ main() {
     fi
 
     log "Linux partition found: $linux_part"
-    [[ -n "$efi_part" ]] && log "EFI partition found: $efi_part"
 
     # Determine filesystem type for linux_part
     local linux_fs=$(sudo blkid -o value -s TYPE "$linux_part" 2>/dev/null || true)
