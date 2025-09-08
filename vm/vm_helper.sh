@@ -296,6 +296,25 @@ handle_custom() {
     fi
 }
 
+handle_vm_ventoy_usb_test(){
+    sudo ventoy_usb_test
+}
+
+handle_vm_vm_create_disk(){
+    vm_create_disk
+}
+
+handle_vm_vm_disk_manager(){
+    sudo vm_disk_manager
+}
+
+handle_chroot(){
+    mchroot
+}
+handle_virtual_chroot(){
+    vchroot
+}
+
 # ================= MENU =================
 main_menu() {
     while true; do
@@ -304,18 +323,28 @@ main_menu() {
             1 "vm_try with ISO" \
             2 "vm_try without ISO" \
             3 "vm_clone" \
-            4 "qemu-img convert" \
-            5 "Custom command" \
-            6 "Exit" \
+            4 "ventoy_usb_test" \
+            5 "vm_disk_manager" \
+            6 "vm_create_disk" \
+            7 "Chroot" \
+            8 "Virtual Chroot" \
+            9 "qemu-img convert" \
+            10 "Custom command" \
+            11 "Exit" \
             3>&1 1>&2 2>&3) || exit 0
 
         case $choice in
             1) handle_vm_try_with_iso ;;
             2) handle_vm_try_without_iso ;;
             3) handle_vm_clone ;;
-            4) handle_qemu_convert ;;
-            5) handle_custom ;;
-            6) exit 0 ;;
+            4) handle_vm_ventoy_usb_test ;;
+            5) handle_vm_vm_disk_manager ;;
+            6) handle_vm_vm_create_disk ;;
+            7) handle_chroot ;;
+            8) handle_virtual_chroot ;;
+            9) handle_qemu_convert ;;
+            10) handle_custom ;;
+            11) exit 0 ;;
         esac
     done
 }
