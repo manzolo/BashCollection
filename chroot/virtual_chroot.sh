@@ -388,8 +388,13 @@ enter_chroot() {
     setup_bind_mounts "$chroot_dir"
 
     if [[ -f /etc/resolv.conf ]]; then
-        sudo cp /etc/resolv.conf "$chroot_dir/etc/resolv.conf.backup" 2>/dev/null || true
-        sudo cp /etc/resolv.conf "$chroot_dir/etc/resolv.conf"
+        # Fai un backup solo se è un file normale, non un symlink
+        if [[ -f "$chroot_dir/etc/resolv.conf" && ! -L "$chroot_dir/etc/resolv.conf" ]]; then
+            sudo cp "$chroot_dir/etc/resolv.conf" "$chroot_dir/etc/resolv.conf.backup" 2>/dev/null || true
+        fi
+
+        # Sovrascrivi sempre, eliminando symlink eventuali
+        sudo cp --remove-destination /etc/resolv.conf "$chroot_dir/etc/resolv.conf"
     fi
 
     success "Chroot environment prepared"
@@ -400,6 +405,7 @@ enter_chroot() {
 
     sudo chroot "$chroot_dir" /bin/bash --login
 
+    # Ripristino eventuale backup
     if [[ -f "$chroot_dir/etc/resolv.conf.backup" ]]; then
         sudo mv "$chroot_dir/etc/resolv.conf.backup" "$chroot_dir/etc/resolv.conf"
     fi
