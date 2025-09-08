@@ -124,7 +124,10 @@ connect_nbd() {
     local file_type=$(file "$image_file")
     local format=""
     
-    if [[ "$image_file" == *.vhd ]]; then
+    # Determine initial format based on file extension or type
+    if [[ "$image_file" == *.vtoy ]]; then
+        format="vpc"
+    elif [[ "$image_file" == *.vhd ]]; then
         format="vpc"
     elif [[ "$file_type" == *"QEMU QCOW"* ]]; then
         format="qcow2"
@@ -138,9 +141,27 @@ connect_nbd() {
         format="raw"
     fi
     
-    log "Format detected: $format"
+    log "Attempting to connect with format: $format"
     
-    sudo qemu-nbd -c "$NBD_DEVICE" -f "$format" "$image_file"
+    # Try connecting with the detected format
+    if ! sudo qemu-nbd -c "$NBD_DEVICE" -f "$format" "$image_file" 2>/dev/null; then
+        warning "Failed to connect $image_file with format $format"
+        
+        # If the format was vpc, try falling back to raw
+        if [[ "$format" == "vpc" ]]; then
+            log "Falling back to raw format..."
+            format="raw"
+            if ! sudo qemu-nbd -c "$NBD_DEVICE" -f "$format" "$image_file"; then
+                error "Failed to connect $image_file with raw format"
+                exit 1
+            fi
+        else
+            error "Failed to connect $image_file with format $format"
+            exit 1
+        fi
+    fi
+    
+    log "Successfully connected with format: $format"
     
     sleep 2
     sudo partprobe "$NBD_DEVICE" 2>/dev/null || true
@@ -314,7 +335,7 @@ select_image_file() {
             if [[ -d "$item" ]]; then
                 # Add icon for directories
                 menu_items+=("📁 $name" "Directory")
-            elif [[ "$name" == *.vhd || "$name" == *.qcow2 || "$name" == *.img || "$name" == *.raw || "$name" == *.vmdk ]]; then
+            elif [[ "$name" == *.vhd || "$name" == *.vtoy || "$name" == *.qcow2 || "$name" == *.img || "$name" == *.raw || "$name" == *.vmdk ]]; then
                 # Add icon for image files (floppy disk)
                 menu_items+=("💾 $name" "Disk image")
             fi
@@ -344,7 +365,7 @@ select_image_file() {
         elif [[ -f "$current_dir/$raw_name" ]]; then
             # Check if it's a valid image file
             case "$raw_name" in
-                *.vhd|*.qcow2|*.img|*.raw|*.vmdk)
+                *.vhd|*.vtoy|*.qcow2|*.img|*.raw|*.vmdk)
                     echo "$current_dir/$raw_name"
                     return 0
                     ;;

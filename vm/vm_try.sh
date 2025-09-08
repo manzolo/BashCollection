@@ -1,56 +1,50 @@
 #!/bin/bash
-# A script to launch a QEMU virtual machine with virtual disks and an optional bootable ISO.
-# It supports both MBR and UEFI boot modes and automatically detects disk formats.
+
+# A script to launch a QEMU virtual machine with a virtual disk and an optional bootable ISO.
+# It supports MBR and UEFI boot modes, automatically detects disk formats, and prioritizes
+# booting from ISO if present, otherwise from the hard disk.
 
 # --- Script Configuration ---
-# Default VM settings
 VM_RAM="4G"                # Default RAM for the VM
-VM_CPUS=2                  # Use 2 CPU cores
+VM_CPUS=2                  # Number of CPU cores
 QEMU_ACCEL_OPTS="-enable-kvm"  # Enable KVM hardware acceleration
+OVMF_CODE="/usr/share/ovmf/OVMF.fd"  # UEFI firmware
+OVMF_VARS="/tmp/OVMF_VARS.fd"  # Persistent NVRAM for UEFI boot entries
 
 # --- Variable Initialization ---
 DISK=""
 ISO=""                     # Optional ISO file
-BOOT_MODE="mbr"           # The default boot mode is MBR
-BOOT_PRIORITY="auto"      # auto, hd, iso
+BOOT_MODE="mbr"            # Default boot mode is MBR
+BOOT_PRIORITY="auto"       # auto, hd, iso
 
 # --- Functions ---
 
 # Displays usage instructions.
 show_help() {
-    echo "Usage: $0 --hd <disk1_path> [--iso <iso_path>] [--mbr|--uefi] [--boot-priority auto|hd|iso]"
+    echo "Usage: $0 --hd <disk_path> [--iso <iso_path>] [--mbr|--uefi] [--boot-priority auto|hd|iso]"
     echo ""
-    echo "  --hd <path>             Path to the virtual disk (supports qcow2, raw, vmdk, vdi)"
-    echo "  --iso <path>            Path to the ISO file to boot from"
+    echo "  --hd <path>             Path to the virtual disk (e.g., /home/manzolo/Scrivania/Deb.vhd)"
+    echo "  --iso <path>            Path to the ISO file to boot from (optional)"
     echo "  --mbr                   Configure for MBR boot mode (default)"
     echo "  --uefi                  Configure for UEFI boot mode"
-    echo "  --boot-priority <mode>  Boot priority:"
-    echo "                            auto = ISO before HDD if present (default)"
-    echo "                            hd   = Hard disk priority"
-    echo "                            iso  = ISO priority (requires --iso)"
+    echo "  --boot-priority <mode>  Boot priority: auto (ISO first if present), hd, iso"
     echo "  --help                  Show this help message"
     echo ""
-    echo "Supported disk formats:"
-    echo "  - qcow2 (QEMU Copy-On-Write)"
-    echo "  - raw (Raw disk image)"
-    echo "  - vmdk (VMware Virtual Disk)"
-    echo "  - vdi (VirtualBox Disk Image)"
-    echo ""
     echo "Examples:"
-    echo "  $0 --hd /path/to/disk.qcow2 --iso /path/to/installer.iso"
-    echo "  $0 --hd /path/to/disk.vmdk --uefi --boot-priority hd"
+    echo "  $0 --hd /home/manzolo/Scrivania/Deb.vhd --uefi"
+    echo "  $0 --hd /home/manzolo/Scrivania/Deb.vhd --iso /path/to/debian.iso --uefi"
     exit 0
 }
 
-# Checks if a command is installed and exits with an error if it's not.
+# Checks if a command is installed.
 check_dependency() {
     if ! command -v "$1" &> /dev/null; then
-        echo "Error: Required command '$1' is not installed. Please install it." >&2
+        echo "Error: Required command '$1' is not installed." >&2
         exit 1
     fi
 }
 
-# Checks if a file exists and exits with an error if it doesn't.
+# Checks if a file exists.
 check_file_exists() {
     local file=$1
     if [ ! -f "$file" ]; then
@@ -59,7 +53,7 @@ check_file_exists() {
     fi
 }
 
-# Prompts the user for a file path with an explicit message.
+# Prompts the user for a file path.
 prompt_for_file() {
     local prompt_text="$1"
     local is_optional="$2"
@@ -179,7 +173,7 @@ determine_boot_priority() {
             echo "$priority"
             ;;
         *)
-            echo "hd"  # safe fallback
+            echo "hd"  # Safe fallback
             ;;
     esac
 }
@@ -203,40 +197,19 @@ configure_storage_and_boot() {
     local storage_opts=()
     local boot_opts=()
     
-    if [ "$boot_mode" = "uefi" ]; then
-        storage_opts+=("-device" "ahci,id=ahci")
-        storage_opts+=("-drive" "file=$disk,format=$disk_format,if=none,id=hd0")
-        
-        if [ "$effective_priority" = "hd" ]; then
-            storage_opts+=("-device" "ide-hd,drive=hd0,bus=ahci.0,bootindex=0")
-        else
-            storage_opts+=("-device" "ide-hd,drive=hd0,bus=ahci.0,bootindex=1")
-        fi
-        
-        if [ -n "$iso" ]; then
-            storage_opts+=("-drive" "file=$iso,format=raw,media=cdrom,readonly=on,if=none,id=cd0")
-            if [ "$effective_priority" = "iso" ]; then
-                storage_opts+=("-device" "ide-cd,drive=cd0,bootindex=0")
-            else
-                storage_opts+=("-device" "ide-cd,drive=cd0,bootindex=1")
-            fi
-        fi
-        
-        boot_opts+=("-boot" "menu=on")
-        
+    # Configure disk with virtio interface (aligned with working command)
+    storage_opts+=("-drive" "file=$disk,format=$disk_format,if=virtio,cache=writeback")
+    
+    # Configure ISO if provided
+    if [ -n "$iso" ]; then
+        storage_opts+=("-drive" "file=$iso,format=raw,media=cdrom,readonly=on")
+    fi
+    
+    # Configure boot priority
+    if [ "$effective_priority" = "iso" ] && [ -n "$iso" ]; then
+        boot_opts+=("-boot" "order=dc,menu=on")  # Prioritize ISO, then disk
     else
-        storage_opts+=("-drive" "file=$disk,format=$disk_format,media=disk")
-        if [ -n "$iso" ]; then
-            storage_opts+=("-drive" "file=$iso,format=raw,media=cdrom,readonly=on")
-        fi
-        
-        if [ "$effective_priority" = "iso" ] && [ -n "$iso" ]; then
-            boot_opts+=("-boot" "order=dc")
-        elif [ -n "$iso" ]; then
-            boot_opts+=("-boot" "order=cd")
-        else
-            boot_opts+=("-boot" "order=c")
-        fi
+        boot_opts+=("-boot" "order=c,menu=on")   # Boot from disk only
     fi
     
     printf '%s\n' "${storage_opts[@]}" "${boot_opts[@]}"
@@ -267,15 +240,13 @@ show_boot_summary() {
         echo "✓ PRIMARY DEVICE: ISO ($iso)"
         echo "✓ SECONDARY DEVICE: Hard disk ($disk)"
         echo ""
-        echo "The VM will boot from the ISO. If the ISO is not bootable or"
-        echo "not present, the system will try to boot from the hard disk."
-    elif [ "$effective_priority" = "hd" ]; then
+        echo "The VM will boot from the ISO. If the ISO is not bootable, it will try the hard disk."
+    else
         echo "✓ PRIMARY DEVICE: Hard disk ($disk)"
         if [ -n "$iso" ]; then
             echo "✓ SECONDARY DEVICE: ISO ($iso)"
             echo ""
-            echo "The VM will boot from the hard disk. The ISO will be available"
-            echo "as a secondary device for installation or recovery."
+            echo "The VM will boot from the hard disk. The ISO is available for installation or recovery."
         else
             echo ""
             echo "The VM will boot from the hard disk exclusively."
@@ -284,8 +255,7 @@ show_boot_summary() {
     
     if [ "$boot_mode" = "uefi" ]; then
         echo ""
-        echo "ℹ  In UEFI mode, you can press F12 during startup to"
-        echo "   access the boot device selection menu."
+        echo "ℹ  In UEFI mode, press F12 during startup to access the boot menu."
     fi
     echo "================================"
 }
@@ -337,22 +307,16 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# If no disk path was provided as an argument, start the interactive mode.
+# If no disk path was provided, start interactive mode
 if [ -z "$DISK" ]; then
     echo "=== VM Setup (Interactive Mode) ==="
     echo "Please provide the paths for your virtual disk and optional ISO."
     echo ""
-    DISK=$(prompt_for_file "Enter the path for the VIRTUAL DISK (e.g., /home/user/my_disk.qcow2):")
+    DISK=$(prompt_for_file "Enter the path for the VIRTUAL DISK (e.g., /home/manzolo/Scrivania/Deb.vhd):")
     
-    read -p "Do you want to add a bootable ISO for installation or repair? (y/N): " add_iso_choice
+    read -p "Do you want to add a bootable ISO? (y/N): " add_iso_choice
     if [[ "$add_iso_choice" =~ ^[Yy]$ ]]; then
-        ISO=$(prompt_for_file "Enter the path for the BOOTABLE ISO (e.g., /home/user/installer.iso):" "optional")
-        read -p "Do you want to boot from the ISO? (y/N): " boot_from_iso_choice
-        if [[ "$boot_from_iso_choice" =~ ^[Yy]$ ]]; then
-            BOOT_PRIORITY="iso"
-        else
-            BOOT_PRIORITY="hd"
-        fi
+        ISO=$(prompt_for_file "Enter the path for the BOOTABLE ISO (e.g., /home/user/debian.iso):" "optional")
     fi
 
     read -p "Choose boot mode (MBR/UEFI) - [M]BR or [U]EFI: " boot_mode_choice
@@ -376,52 +340,44 @@ fi
 DISK_FORMAT=$(detect_disk_format "$DISK")
 validate_disk_format "$DISK_FORMAT"
 
+# Configure UEFI with persistent NVRAM if needed
+if [ "$BOOT_MODE" = "uefi" ]; then
+    check_file_exists "$OVMF_CODE"
+    if [ ! -f "$OVMF_VARS" ]; then
+        cp "$OVMF_CODE" "$OVMF_VARS"
+    fi
+fi
+
 # Show boot configuration summary
 show_boot_summary "$DISK" "$ISO" "$BOOT_PRIORITY" "$BOOT_MODE"
 echo ""
 
-# Assemble the basic QEMU options
+# Assemble QEMU options
 QEMU_OPTS=(
     "-m" "$VM_RAM"
     "-smp" "$VM_CPUS"
     "$QEMU_ACCEL_OPTS"
-    "-netdev" "user,id=net0"
-    "-device" "virtio-net-pci,netdev=net0"
+    "-machine" "q35"
+    "-cpu" "host"
     "-vga" "virtio"
-    "-display" "sdl"
+    "-display" "gtk,show-cursor=on"
+    "-monitor" "vc"
+    "-serial" "file:/tmp/qemu-serial.log"
     "-usb"
     "-device" "usb-tablet"
 )
 
+# Add UEFI firmware configuration
+if [ "$BOOT_MODE" = "uefi" ]; then
+    QEMU_OPTS+=("-drive" "if=pflash,format=raw,unit=0,file=$OVMF_CODE,readonly=on")
+    QEMU_OPTS+=("-drive" "if=pflash,format=raw,unit=1,file=$OVMF_VARS")
+else
+    QEMU_OPTS+=("-bios" "$OVMF_CODE")
+fi
+
 # Configure storage and boot
 mapfile -t STORAGE_BOOT_OPTS < <(configure_storage_and_boot "$DISK" "$DISK_FORMAT" "$ISO" "$BOOT_MODE" "$BOOT_PRIORITY")
 QEMU_OPTS+=("${STORAGE_BOOT_OPTS[@]}")
-
-# Configure the boot mode based on user selection
-if [ "$BOOT_MODE" = "uefi" ]; then
-    OVMF_PATHS=(
-        "/usr/share/ovmf/OVMF.fd"
-        "/usr/share/OVMF/OVMF.fd"
-        "/usr/share/edk2-ovmf/OVMF.fd"
-        "/usr/share/qemu/OVMF.fd"
-    )
-    
-    OVMF_PATH=""
-    for path in "${OVMF_PATHS[@]}"; do
-        if [ -f "$path" ]; then
-            OVMF_PATH="$path"
-            break
-        fi
-    done
-    
-    if [ -z "$OVMF_PATH" ]; then
-        echo "Error: OVMF firmware not found. Please install the ovmf package." >&2
-        echo "Searched in: ${OVMF_PATHS[*]}" >&2
-        exit 1
-    fi
-    
-    QEMU_OPTS+=("-bios" "$OVMF_PATH")
-fi
 
 # Show launch information
 echo "Launching QEMU VM with the following configuration:"
@@ -433,7 +389,8 @@ if [ -n "$ISO" ]; then
     echo "  ISO: $ISO"
 fi
 if [ "$BOOT_MODE" = "uefi" ]; then
-    echo "  UEFI firmware: $OVMF_PATH"
+    echo "  UEFI firmware: $OVMF_CODE"
+    echo "  UEFI NVRAM: $OVMF_VARS"
 fi
 echo ""
 
