@@ -1,34 +1,8 @@
 # Detect file format automatically
 detect_file_format() {
     local file=$1
-    local file_format="raw"
-    
-    if command -v file &> /dev/null; then
-        local file_info=$(file "$file" 2>/dev/null)
-        if [[ "$file_info" == *"QEMU QCOW"* ]]; then
-            file_format="qcow2"
-        elif [[ "$file_info" == *"DOS/MBR boot sector"* ]]; then
-            file_format="raw"
-        fi
-    fi
-    
-    # Alternative detection by extension (more reliable)
-    case "${file,,}" in
-        *.qcow2|*.qcow)
-            file_format="qcow2"
-            ;;
-        *.img|*.raw)
-            file_format="raw"
-            ;;
-        *.vdi)
-            file_format="vdi"
-            ;;
-        *.vmdk)
-            file_format="vmdk"
-            ;;
-    esac
-    
-    echo "$file_format"
+    # Chiama la nuova funzione unificata
+    detect_format "$file"
 }
 
 # Check KVM availability

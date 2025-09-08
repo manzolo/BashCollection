@@ -168,3 +168,47 @@ check_free_space() {
     
     return 0
 }
+
+# Function to detect disk format with improved handling for VHD/VPC and others
+detect_format() {
+    local file=$1
+    local ext="${file##*.}"  # Get file extension (lowercase)
+    ext="${ext,,}"
+    
+    local format=""
+    
+    case "$ext" in
+        vtoy)
+            # Try VPC format first for .vhd files
+            if qemu-img info -f vpc "$file" &>/dev/null; then
+                format="vpc"
+                log "Detected VPC (VHD) format for $file using -f vpc"
+            fi
+            ;;
+        vhd)
+            # Try VPC format first for .vhd files
+            if qemu-img info -f vpc "$file" &>/dev/null; then
+                format="vpc"
+                log "Detected VPC (VHD) format for $file using -f vpc"
+            fi
+            ;;
+        vhdx)
+            # Try VHDX format for .vhdx files
+            if qemu-img info -f vhdx "$file" &>/dev/null; then
+                format="vhdx"
+                log "Detected VHDX format for $file using -f vhdx"
+            fi
+            ;;
+    esac
+    
+    # Fallback to automatic detection if specific probe failed
+    if [ -z "$format" ]; then
+        format=$(qemu-img info "$file" 2>/dev/null | grep "file format:" | awk '{print $3}')
+        if [ -z "$format" ]; then
+            format="raw"
+        fi
+        log "Fallback detection for $file: $format"
+    fi
+    
+    echo "$format"
+}

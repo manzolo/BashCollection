@@ -107,22 +107,41 @@ gparted_boot() {
         return 1
     fi
     
-    # Start QEMU and capture PID
-    #echo 0
-    log "# Starting QEMU with GParted Live..."
-    qemu-system-x86_64 -hda "$file" -cdrom "$gparted_iso_file" -boot d -m 2048 -enable-kvm </dev/null &>/dev/null &
-    QEMU_PID=$!
-    sleep 3
-    if kill -0 "$QEMU_PID" 2>/dev/null; then
-        echo 100
-        echo "# QEMU started!"
-        sleep 1
-    else
-        echo 100
-        echo "# QEMU failed to start"
-        sleep 2
-        exit 1
-    fi | whiptail --gauge "Starting QEMU with GParted Live..." 8 50 0
+    # Detect disk format
+    local format=$(detect_format "$file")
+    log "Detected disk format for $file: $format"
+    
+    # Validate format
+    case "$format" in
+        raw|qcow2|vpc|vhdx|vmdk)
+            log "Supported format: $format"
+            ;;
+        *)
+            log "Unsupported disk format: $format"
+            whiptail --msgbox "Unsupported disk format: $format\nSupported formats: raw, qcow2, vpc, vhdx, vmdk" 10 60
+            return 1
+            ;;
+    esac
+    
+    # Start QEMU with detected format and capture PID
+    log "Starting QEMU with GParted Live, disk format: $format"
+    (
+        echo 0
+        echo "# Starting QEMU with GParted Live..."
+        qemu-system-x86_64 -drive file="$file",format="$format" -cdrom "$gparted_iso_file" -boot d -m 2048 -enable-kvm </dev/null &>/dev/null &
+        QEMU_PID=$!
+        sleep 3
+        if kill -0 "$QEMU_PID" 2>/dev/null; then
+            echo 100
+            echo "# QEMU started!"
+            sleep 1
+        else
+            echo 100
+            echo "# QEMU failed to start"
+            sleep 2
+            exit 1
+        fi
+    ) | whiptail --gauge "Starting QEMU with GParted Live..." 8 50 0
     
     if [ $? -eq 0 ]; then
         log "GParted QEMU started: PID $QEMU_PID"

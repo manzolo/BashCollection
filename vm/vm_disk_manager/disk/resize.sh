@@ -177,7 +177,7 @@ resize_disk_image() {
     local file=$1
     local size=$2
     
-    local format=$(qemu-img info "$file" 2>/dev/null | grep "file format:" | awk '{print $3}')
+    local format=$(detect_format "$file")
     if [ -z "$format" ]; then
         format="raw"
     fi
@@ -210,7 +210,7 @@ resize_disk_image() {
 # Gestione connessione NBD e resize partizioni
 resize_partitions() {
     local file=$1
-    local format=$(qemu-img info "$file" 2>/dev/null | grep "file format:" | awk '{print $3}')
+    local format=$(detect_format "$file")
     if [ -z "$format" ]; then
         format="raw"
     fi

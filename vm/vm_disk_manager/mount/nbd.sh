@@ -306,7 +306,7 @@ cleanup_stale_nbd_devices() {
 # Function to mount with NBD
 mount_with_nbd() {
     local file=$1
-    local format=$(qemu-img info "$file" 2>/dev/null | grep "file format:" | awk '{print $3}')
+    local format=$(detect_format "$file")
     
     if [ -z "$format" ]; then
         format="raw"
