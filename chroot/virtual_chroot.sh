@@ -658,6 +658,7 @@ setup_bind_mounts() {
 select_image_file() {
     local current_dir="$PWD"
     local selected=""
+    local show_hidden=${SHOW_HIDDEN:-0}  # Default to 0 (hide hidden directories)
 
     while true; do
         local menu_items=()
@@ -666,6 +667,15 @@ select_image_file() {
             menu_items+=(".." "Go to parent directory")
         fi
 
+        # Adjust find command based on show_hidden
+        local find_cmd="find \"$current_dir\" -maxdepth 1 -type d,f"
+        if [[ $show_hidden -eq 0 ]]; then
+            find_cmd="$find_cmd -not -path \"$current_dir\" -not -name \".*\""
+        else
+            find_cmd="$find_cmd -not -path \"$current_dir\""
+        fi
+        find_cmd="$find_cmd -print0 | sort -z"
+
         while IFS= read -r -d '' item; do
             local name=$(basename "$item")
             if [[ -d "$item" ]]; then
@@ -673,7 +683,7 @@ select_image_file() {
             elif [[ "$name" == *.vhd || "$name" == *.vtoy || "$name" == *.qcow2 || "$name" == *.img || "$name" == *.raw || "$name" == *.vmdk ]]; then
                 menu_items+=("💾 $name" "Disk image")
             fi
-        done < <(find "$current_dir" -maxdepth 1 -type d,f -not -path "$current_dir" -print0 | sort -z)
+        done < <(eval "$find_cmd")
 
         if [[ ${#menu_items[@]} -eq 0 ]]; then
             error "No image files or directories found in $current_dir"
