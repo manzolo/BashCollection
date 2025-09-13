@@ -1,49 +1,26 @@
 #!/bin/bash
 
-# UFW Manager - Advanced Interactive Firewall Management
+# UFW Manager - Advanced Interactive Firewall Management (Whiptail Version)
 # Author: Manzolo
-# Version: 1.0
+# Version: 1.2 - Fixed
 # License: MIT
 # Compatible: Ubuntu 18.04+, Debian 10+
 
 set -euo pipefail
 LANG=C
 LC_ALL=C
+
 # =================== CONFIGURATION ===================
-readonly SCRIPT_VERSION="1.0"
+readonly SCRIPT_VERSION="1.2"
 readonly SCRIPT_NAME="Manzolo UFW Manager"
 readonly LOG_FILE="/var/log/ufw-manager.log"
 readonly CONFIG_FILE="/etc/ufw-manager/config.conf"
 readonly BACKUP_DIR="/etc/ufw-manager/backups"
 
-# Color definitions with better organization
-declare -A COLORS=(
-    [RED]='\033[0;31m'
-    [GREEN]='\033[0;32m'
-    [YELLOW]='\033[1;33m'
-    [BLUE]='\033[0;34m'
-    [PURPLE]='\033[0;35m'
-    [CYAN]='\033[0;36m'
-    [WHITE]='\033[1;37m'
-    [BOLD]='\033[1m'
-    [DIM]='\033[2m'
-    [NC]='\033[0m'
-)
-
-# Icon definitions for better UX
-declare -A ICONS=(
-    [SUCCESS]="✓"    # Simple check mark
-    [ERROR]="✗"      # Simple cross mark
-    [WARNING]="⚠"    # Warning sign (without emoji variation)
-    [INFO]="ℹ"       # Information source (without emoji variation)
-    [ARROW]="→"      # Simple right arrow
-    [BULLET]="•"     # Simple bullet point
-    [SHIELD]="🛡"     # Shield (without emoji variation)
-    [QUESTION]="?"    # Simple question mark
-    [CHECK]="✔"      # Heavy check mark (without emoji variation)
-    [FIRE]="🔥"    # Subdued fire representation (text-based)
-    [LOCK]="🔓"      # Open lock (less intense than closed lock)
-)
+# Whiptail configuration
+readonly WT_HEIGHT=20
+readonly WT_WIDTH=78
+readonly WT_MENU_HEIGHT=12
 
 # =================== UTILITY FUNCTIONS ===================
 
@@ -57,124 +34,75 @@ log_action() {
     echo "[$timestamp] [$level] [$user] $message" >> "$LOG_FILE" 2>/dev/null || true
 }
 
-# Print with color and icon support
-print_message() {
-    local type="$1"
+# Whiptail message boxes
+show_message() {
+    local title="$1"
     local message="$2"
-    local color=""
-    local icon=""
+    local type="${3:-info}"
     
     case $type in
-        "success") color="${COLORS[GREEN]}" icon="${ICONS[SUCCESS]}" ;;
-        "error") color="${COLORS[RED]}" icon="${ICONS[ERROR]}" ;;
-        "warning") color="${COLORS[YELLOW]}" icon="${ICONS[WARNING]}" ;;
-        "info") color="${COLORS[CYAN]}" icon="${ICONS[INFO]}" ;;
-        "header") color="${COLORS[BLUE]}" ;;
-        *) color="${COLORS[NC]}" ;;
+        "error")
+            whiptail --title "ERROR - $title" --msgbox "$message" $WT_HEIGHT $WT_WIDTH
+            ;;
+        "success")
+            whiptail --title "SUCCESS - $title" --msgbox "$message" $WT_HEIGHT $WT_WIDTH
+            ;;
+        "warning")
+            whiptail --title "WARNING - $title" --msgbox "$message" $WT_HEIGHT $WT_WIDTH
+            ;;
+        *)
+            whiptail --title "INFO - $title" --msgbox "$message" $WT_HEIGHT $WT_WIDTH
+            ;;
     esac
     
-    echo -e "${color}${icon} $message${COLORS[NC]}"
     log_action "INFO" "$message"
 }
 
-# Enhanced header with system info
-print_header() {
-    clear
-    local ufw_status=""
-    local system_info=""
-    
-    # Get UFW status safely
-    if command -v ufw &> /dev/null; then
-        ufw_status=$(sudo ufw status | head -1 | awk '{print $2}' 2>/dev/null || echo "unknown")
-    else
-        ufw_status="not installed"
-    fi
-    
-    system_info=$(lsb_release -d 2>/dev/null | cut -f2 || echo "$(uname -s) $(uname -r)")
-    
-    echo -e "${COLORS[BLUE]}${COLORS[BOLD]}"
-    echo " ══════════════════════════════════════════════════════════"
-    echo "                  ${ICONS[SHIELD]} MANZOLO UFW MANAGER ${ICONS[SHIELD]}                "
-    echo "                         Version $SCRIPT_VERSION                        "
-    echo " ══════════════════════════════════════════════════════════"
-    echo -e "  System: ${COLORS[WHITE]}$(printf "%-44s" "$system_info")${COLORS[BLUE]} "
-    echo -e "  UFW Status: ${COLORS[WHITE]}$(printf "%-40s" "$ufw_status")${COLORS[BLUE]} "
-    echo -e "  Date: ${COLORS[WHITE]}$(printf "%-46s" "$(date '+%Y-%m-%d %H:%M:%S')")${COLORS[BLUE]} "
-    echo " ══════════════════════════════════════════════════════════"
-    echo -e "${COLORS[NC]}"
-}
-
-# Progress bar function
-show_progress() {
-    local duration="$1"
-    local description="$2"
-    local progress=0
-    
-    echo -ne "${COLORS[CYAN]}$description "
-    while [ $progress -le 100 ]; do
-        echo -ne "▓"
-        sleep $(echo "scale=2; $duration/100" | bc -l 2>/dev/null || echo "0.01")
-        ((progress += 10))
-    done
-    echo -e " ${ICONS[SUCCESS]}${COLORS[NC]}"
-}
-
-# Enhanced confirmation with timeout
+# Whiptail confirmation
 confirm_action() {
     local message="$1"
-    local timeout="${2:-30}"
-    local default="${3:-n}"
     
-    print_message "warning" "$message"
-    echo -e "${COLORS[YELLOW]}Timeout in ${timeout}s (default: $default)${COLORS[NC]}"
-    
-    if read -t "$timeout" -p "Proceed? (y/n): " -n 1 -r; then
-        echo
-        [[ $REPLY =~ ^[Yy]$ ]]
+    if whiptail --title "Confirmation Required" --yesno "$message\n\nProceed with this action?" $WT_HEIGHT $WT_WIDTH --defaultno; then
+        return 0
     else
-        echo -e "\n${COLORS[YELLOW]}Timeout reached, using default: $default${COLORS[NC]}"
-        [[ $default =~ ^[Yy]$ ]]
+        return 1
     fi
 }
 
-# System requirements check
+# Progress gauge
+show_progress() {
+    local message="$1"
+    local steps="${2:-10}"
+    
+    for ((i=0; i<=$steps; i++)); do
+        echo $((i * 100 / steps))
+        sleep 0.1
+    done | whiptail --title "Processing" --gauge "$message" 6 $WT_WIDTH 0
+}
+
+# System requirements check (silent)
 check_system_requirements() {
     local requirements_met=true
-    
-    echo -e "${COLORS[CYAN]}${ICONS[INFO]} Checking system requirements...${COLORS[NC]}"
-    
-    # Check OS
-    if ! grep -qi "ubuntu\|debian" /etc/os-release; then
-        print_message "warning" "This script is optimized for Ubuntu/Debian systems"
-    fi
+    local error_msg=""
     
     # Check UFW installation
     if ! command -v ufw &> /dev/null; then
-        print_message "error" "UFW is not installed!"
-        echo -e "${COLORS[YELLOW]}Install with: sudo apt update && sudo apt install ufw${COLORS[NC]}"
+        error_msg+="UFW is not installed!\n"
+        error_msg+="Install with: sudo apt update && sudo apt install ufw\n\n"
         requirements_met=false
     fi
     
-    # Check sudo privileges
-    if ! sudo -n true 2>/dev/null; then
-        print_message "warning" "Sudo privileges required for most operations"
+    # Check whiptail installation
+    if ! command -v whiptail &> /dev/null; then
+        error_msg+="Whiptail is not installed!\n"
+        error_msg+="Install with: sudo apt install whiptail\n\n"
+        requirements_met=false
     fi
-    
-    # Check required tools
-    local tools=("awk" "grep" "sed" "bc")
-    for tool in "${tools[@]}"; do
-        if ! command -v "$tool" &> /dev/null; then
-            print_message "error" "Required tool missing: $tool"
-            requirements_met=false
-        fi
-    done
     
     if [ "$requirements_met" = false ]; then
+        whiptail --title "System Requirements" --msgbox "$error_msg" $WT_HEIGHT $WT_WIDTH
         exit 1
     fi
-    
-    print_message "success" "System requirements check passed"
-    sleep 1
 }
 
 # Create necessary directories
@@ -188,54 +116,48 @@ setup_directories() {
     done
     
     # Create log file with proper permissions
-    sudo touch "$LOG_FILE" 2>/dev/null || true
-    sudo chmod 644 "$LOG_FILE" 2>/dev/null || true
+    if [ ! -f "$LOG_FILE" ]; then
+        sudo touch "$LOG_FILE" 2>/dev/null || true
+        sudo chmod 644 "$LOG_FILE" 2>/dev/null || true
+        sudo chown "$USER":"$USER" "$LOG_FILE" 2>/dev/null || true
+    else
+        # Ensure existing log file has proper permissions
+        sudo chmod 644 "$LOG_FILE" 2>/dev/null || true
+        sudo chown "$USER":"$USER" "$LOG_FILE" 2>/dev/null || true
+    fi
 }
 
-# Enhanced command execution with rollback capability
+# Enhanced command execution
 execute_command() {
     local cmd="$1"
     local description="$2"
     local backup_before="${3:-false}"
-    local rollback_cmd="${4:-}"
     
-    echo
-    echo -e "${COLORS[BOLD]}${ICONS[INFO]} Command Execution${COLORS[NC]}"
-    echo -e "${COLORS[CYAN]}Command:${COLORS[NC]} $cmd"
-    echo -e "${COLORS[PURPLE]}Description:${COLORS[NC]} $description"
+    local info_text="Command: $cmd\n\nDescription: $description"
     
     if [ "$backup_before" = "true" ]; then
-        echo -e "${COLORS[YELLOW]}${ICONS[WARNING]} This operation will create a backup first${COLORS[NC]}"
+        info_text+="\n\nWARNING: This operation will create a backup first"
     fi
     
-    if confirm_action "Execute this command?" 15 "n"; then
+    if whiptail --title "Execute Command" --yesno "$info_text\n\nExecute this command?" $WT_HEIGHT $WT_WIDTH --defaultno; then
         # Create backup if requested
         if [ "$backup_before" = "true" ]; then
             backup_configuration
         fi
         
-        print_message "info" "Executing: $description"
-        show_progress 1 "Processing"
+        show_progress "Executing: $description" 5
         
-        if eval "$cmd" 2>&1 | tee -a "$LOG_FILE"; then
-            print_message "success" "Command executed successfully"
+        if eval "$cmd" &>/dev/null; then
+            show_message "Command Executed" "$description completed successfully!" "success"
             log_action "SUCCESS" "Executed: $cmd"
         else
-            print_message "error" "Command failed"
+            show_message "Command Failed" "Failed to execute: $description" "error"
             log_action "ERROR" "Failed: $cmd"
-            
-            if [ -n "$rollback_cmd" ] && confirm_action "Execute rollback command?" 10 "y"; then
-                eval "$rollback_cmd"
-                print_message "info" "Rollback executed"
-            fi
         fi
     else
-        print_message "warning" "Command cancelled by user"
+        show_message "Cancelled" "Command execution cancelled by user" "warning"
         log_action "CANCELLED" "User cancelled: $cmd"
     fi
-    
-    echo
-    read -p "Press ENTER to continue..."
 }
 
 # =================== BACKUP AND RESTORE ===================
@@ -243,282 +165,734 @@ execute_command() {
 backup_configuration() {
     local backup_file="$BACKUP_DIR/ufw_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
     
-    print_message "info" "Creating UFW configuration backup..."
+    show_progress "Creating UFW configuration backup..." 3
     
     if sudo tar -czf "$backup_file" /etc/ufw/ /lib/ufw/ 2>/dev/null; then
-        print_message "success" "Backup created: $backup_file"
+        show_message "Backup Created" "Backup created successfully:\n$backup_file" "success"
         log_action "BACKUP" "Created backup: $backup_file"
     else
-        print_message "error" "Failed to create backup"
+        show_message "Backup Failed" "Failed to create backup" "error"
     fi
 }
 
 restore_configuration() {
-    print_header
-    echo -e "${COLORS[CYAN]}=== RESTORE UFW CONFIGURATION ===${COLORS[NC]}"
-    echo
-    
     if [ ! -d "$BACKUP_DIR" ] || [ -z "$(ls -A "$BACKUP_DIR" 2>/dev/null)" ]; then
-        print_message "error" "No backups found in $BACKUP_DIR"
-        read -p "Press ENTER to continue..."
+        show_message "No Backups" "No backups found in $BACKUP_DIR" "error"
         return
     fi
     
-    echo -e "${COLORS[CYAN]}Available backups:${COLORS[NC]}"
+    # Build menu options
+    local menu_options=()
     local i=1
-    local -a backups=()
     
     while IFS= read -r -d '' backup; do
-        backups+=("$backup")
-        echo "$i. $(basename "$backup")"
+        local filename=$(basename "$backup")
+        menu_options+=("$i" "$filename")
         ((i++))
     done < <(find "$BACKUP_DIR" -name "*.tar.gz" -print0 | sort -z)
     
-    echo
-    read -p "Select backup to restore (1-$((i-1))): " choice
-    
-    if [[ $choice =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -lt $i ]; then
-        local backup_file="${backups[$((choice-1))]}"
-        
-        if confirm_action "Restore from $(basename "$backup_file")?"; then
-            sudo ufw --force reset
-            sudo tar -xzf "$backup_file" -C / 2>/dev/null
-            sudo ufw reload
-            print_message "success" "Configuration restored successfully"
-        fi
-    else
-        print_message "error" "Invalid selection"
+    if [ ${#menu_options[@]} -eq 0 ]; then
+        show_message "No Backups" "No backup files found" "error"
+        return
     fi
     
-    read -p "Press ENTER to continue..."
+    local choice=$(whiptail --title "Restore Configuration" --menu "Select backup to restore:" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT "${menu_options[@]}" 3>&1 1>&2 2>&3)
+    
+    if [ -n "$choice" ]; then
+        local backup_file=$(find "$BACKUP_DIR" -name "*.tar.gz" | sort | sed -n "${choice}p")
+        local filename=$(basename "$backup_file")
+        
+        if confirm_action "Restore from backup: $filename?\n\nThis will reset current UFW configuration!"; then
+            show_progress "Restoring configuration..." 5
+            sudo ufw --force reset >/dev/null 2>&1
+            sudo tar -xzf "$backup_file" -C / 2>/dev/null
+            sudo ufw reload >/dev/null 2>&1
+            show_message "Restore Complete" "Configuration restored successfully from $filename" "success"
+        fi
+    fi
 }
 
-# =================== ENHANCED STATUS AND MONITORING ===================
+# =================== STATUS AND MONITORING ===================
 
 show_detailed_status() {
-    print_header
-    echo -e "${COLORS[CYAN]}=== DETAILED UFW STATUS ===${COLORS[NC]}"
-    echo
+    local status_info=""
     
-    # Basic status
-    echo -e "${COLORS[BOLD]}${ICONS[SHIELD]} Firewall Status:${COLORS[NC]}"
-    sudo ufw status verbose
-    echo
+    # Get UFW status
+    status_info+="FIREWALL STATUS:\n"
+    status_info+="$(sudo ufw status verbose)\n\n"
     
-    # Numbered rules
-    echo -e "${COLORS[BOLD]}${ICONS[BULLET]} Numbered Rules:${COLORS[NC]}"
-    sudo ufw status numbered
-    echo
+    # Get numbered rules
+    status_info+="NUMBERED RULES:\n"
+    status_info+="$(sudo ufw status numbered)\n\n"
     
-    # Application profiles
-    echo -e "${COLORS[BOLD]}${ICONS[BULLET]} Available Application Profiles:${COLORS[NC]}"
-    sudo ufw app list 2>/dev/null || echo "No application profiles found"
-    echo
-    
-    # Network interfaces
-    echo -e "${COLORS[BOLD]}${ICONS[BULLET]} Network Interfaces:${COLORS[NC]}"
-    ip -brief addr show | head -5
-    echo
-    
-    # Active connections
-    echo -e "${COLORS[BOLD]}${ICONS[BULLET]} Active Network Connections:${COLORS[NC]}"
-    ss -tuln | head -10
-    echo
+    # Get network interfaces
+    status_info+="NETWORK INTERFACES:\n"
+    status_info+="$(ip -brief addr show | head -5)\n\n"
     
     # Recent log entries
-    echo -e "${COLORS[BOLD]}${ICONS[BULLET]} Recent UFW Log Entries (last 5):${COLORS[NC]}"
-    sudo tail -5 /var/log/ufw.log 2>/dev/null | grep -v "^$" || echo "No recent log entries"
+    status_info+="RECENT LOG ENTRIES:\n"
+    status_info+="$(sudo tail -5 /var/log/ufw.log 2>/dev/null | grep -v "^$" || echo "No recent log entries")"
     
-    echo
-    read -p "Press ENTER to continue..."
+    whiptail --title "Detailed UFW Status" --scrolltext --msgbox "$status_info" 25 100
 }
 
-# Real-time monitoring
-real_time_monitoring() {
-    print_header
-    echo -e "${COLORS[CYAN]}=== REAL-TIME UFW MONITORING ===${COLORS[NC]}"
-    echo -e "${COLORS[YELLOW]}Press Ctrl+C to exit${COLORS[NC]}"
-    echo
-    
-    trap 'echo -e "\n${COLORS[YELLOW]}Monitoring stopped${COLORS[NC]}"; return' INT
-    
+# =================== MAIN MENU ===================
+
+main_menu() {
     while true; do
-        clear
-        print_header
-        echo -e "${COLORS[CYAN]}=== REAL-TIME UFW MONITORING ===${COLORS[NC]}"
-        echo -e "${COLORS[DIM]}Updated: $(date)${COLORS[NC]}"
-        echo
+        local choice=$(whiptail --title "UFW Manager Professional v$SCRIPT_VERSION" --menu "Choose an option:" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT \
+        "1" "View Detailed UFW Status" \
+        "2" "Basic UFW Control" \
+        "3" "Add Firewall Rules" \
+        "4" "Remove Firewall Rules" \
+        "5" "Advanced Rules Examples" \
+        "6" "Bulk Rule Management" \
+        "7" "Real-time Monitoring" \
+        "8" "Logs & Analytics" \
+        "9" "Predefined Configurations" \
+        "10" "Security Audit" \
+        "11" "Backup Configuration" \
+        "12" "Restore Configuration" \
+        "13" "System Information" \
+        "14" "Exit" 3>&1 1>&2 2>&3)
         
-        echo -e "${COLORS[BOLD]}Recent UFW Events:${COLORS[NC]}"
-        sudo tail -10 /var/log/ufw.log 2>/dev/null | grep -v "^$" || echo "No recent events"
-        
-        echo
-        echo -e "${COLORS[BOLD]}Active Connections:${COLORS[NC]}"
-        ss -tuln | head -10
-        
-        sleep 5
+        case $choice in
+            1) show_detailed_status ;;
+            2) manage_ufw_basic ;;
+            3) add_rules ;;
+            4) remove_rules ;;
+            5) show_advanced_examples ;;
+            6) bulk_rule_management ;;
+            7) real_time_monitoring ;;
+            8) log_management ;;
+            9) predefined_configurations ;;
+            10) security_audit ;;
+            11) backup_configuration ;;
+            12) restore_configuration ;;
+            13) show_system_info ;;
+            14) 
+                if confirm_action "Exit UFW Manager Professional?"; then
+                    echo "Thank you for using UFW Manager Professional!"
+                    log_action "EXIT" "UFW Manager Professional session ended"
+                    exit 0
+                fi
+                ;;
+            *) 
+                if [ -z "$choice" ]; then
+                    if confirm_action "Exit UFW Manager Professional?"; then
+                        exit 0
+                    fi
+                fi
+                ;;
+        esac
     done
 }
 
-# =================== ADVANCED RULE MANAGEMENT ===================
-
-advanced_rule() {
-    print_header
-    echo -e "${COLORS[CYAN]}=== UFW COMMAND EXAMPLES ===${COLORS[NC]}"
-    echo
-    echo "Here are some common and advanced UFW rules. These are for reference only and are NOT executed."
-    echo
-    
-    # 1. Allow incoming SSH traffic (port 22) from anywhere
-    echo -e "${COLORS[CYAN]}1. Allow incoming SSH (from any IP):${COLORS[NC]}"
-    echo -e "   ${COLORS[GREEN]}sudo ufw allow ssh${COLORS[NC]}"
-    echo -e "   ${COLORS[DIM]}# Shorthand for: sudo ufw allow 22/tcp${COLORS[NC]}"
-    echo
-    
-    # 2. Deny a specific port
-    echo -e "${COLORS[CYAN]}2. Deny a specific port (e.g., FTP):${COLORS[NC]}"
-    echo -e "   ${COLORS[RED]}sudo ufw deny 21/tcp${COLORS[NC]}"
-    echo -e "   ${COLORS[DIM]}# Blocks all incoming TCP traffic on port 21${COLORS[NC]}"
-    echo
-    
-    # 3. Limit connections to a port
-    echo -e "${COLORS[CYAN]}3. Limit incoming connections on port 22:${COLORS[NC]}"
-    echo -e "   ${COLORS[YELLOW]}sudo ufw limit 22/tcp${COLORS[NC]}"
-    echo -e "   ${COLORS[DIM]}# Limits connections to protect against brute-force attacks${COLORS[NC]}"
-    echo
-    
-    # 4. Allow traffic on a specific interface
-    echo -e "${COLORS[CYAN]}4. Allow traffic on a specific interface:${COLORS[NC]}"
-    echo -e "   ${COLORS[GREEN]}sudo ufw allow in on eth0 to any port 80${COLORS[NC]}"
-    echo -e "   ${COLORS[DIM]}# Allows incoming HTTP traffic on 'eth0'${COLORS[NC]}"
-    echo
-    
-    # 5. Allow traffic from a specific IP
-    echo -e "${COLORS[CYAN]}5. Allow traffic from a specific IP to a destination port:${COLORS[NC]}"
-    echo -e "   ${COLORS[GREEN]}sudo ufw allow proto tcp from 192.168.1.100 to any port 3306${COLORS[NC]}"
-    echo -e "   ${COLORS[DIM]}# Allows TCP traffic from 192.168.1.100 to port 3306 (MySQL)${COLORS[NC]}"
-    echo
-    
-    # 6. Reject outgoing traffic
-    echo -e "${COLORS[CYAN]}6. Reject outgoing traffic to a specific IP:${COLORS[NC]}"
-    echo -e "   ${COLORS[RED]}sudo ufw reject out to 10.0.0.50${COLORS[NC]}"
-    echo -e "   ${COLORS[DIM]}# Blocks and sends an ICMP 'port unreachable' message${COLORS[NC]}"
-    echo
-    
-    # 7. Allow a range of ports
-    echo -e "${COLORS[CYAN]}7. Allow a range of UDP ports:${COLORS[NC]}"
-    echo -e "   ${COLORS[GREEN]}sudo ufw allow 60000:61000/udp${COLORS[NC]}"
-    echo -e "   ${COLORS[DIM]}# Allows all incoming UDP traffic on ports 60000 through 61000${COLORS[NC]}"
-    echo
-    
-    # 8. Insert a rule at a specific position
-    echo -e "${COLORS[CYAN]}8. Insert a rule at a specific position:${COLORS[NC]}"
-    echo -e "   ${COLORS[WHITE]}sudo ufw insert 1 deny from 203.0.113.1${COLORS[NC]}"
-    echo -e "   ${COLORS[DIM]}# Inserts a new rule as the first one, denying traffic from IP 203.0.113.1${COLORS[NC]}"
-    echo
-
-    read -p "Press ENTER to continue..."
+manage_ufw_basic() {
+    while true; do
+        local ufw_status=""
+        if command -v ufw &> /dev/null; then
+            ufw_status=$(sudo ufw status | head -1 | awk '{print $2}' 2>/dev/null || echo "unknown")
+        else
+            ufw_status="not installed"
+        fi
+        
+        local choice=$(whiptail --title "Basic UFW Management (Status: $ufw_status)" --menu "Choose action:" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT \
+        "1" "Enable UFW" \
+        "2" "Disable UFW" \
+        "3" "Reset UFW (removes all rules)" \
+        "4" "Reload UFW" \
+        "5" "Show UFW Version" \
+        "6" "Set Default Policies" \
+        "7" "Return to Main Menu" 3>&1 1>&2 2>&3)
+        
+        case $choice in
+            1) execute_command "sudo ufw enable" "Enable UFW firewall" true ;;
+            2) execute_command "sudo ufw disable" "Disable UFW firewall" ;;
+            3) 
+                if confirm_action "Reset UFW completely? This will remove ALL rules!"; then
+                    execute_command "sudo ufw --force reset" "Complete UFW reset" true
+                fi
+                ;;
+            4) execute_command "sudo ufw reload" "Reload UFW configuration" ;;
+            5) 
+                local version_info="UFW Version Information:\n$(ufw --version 2>/dev/null || echo 'Version information not available')"
+                whiptail --title "UFW Version" --msgbox "$version_info" $WT_HEIGHT $WT_WIDTH
+                ;;
+            6) set_default_policies ;;
+            7|*) break ;;
+        esac
+    done
 }
 
-# Bulk rule management
-bulk_rule_management() {
-    print_header
-    echo -e "${COLORS[CYAN]}=== BULK RULE MANAGEMENT ===${COLORS[NC]}"
-    echo
-    echo "1. Import rules from file"
-    echo "2. Export current rules to file"
-    echo "3. Apply predefined rule set"
-    echo "4. Return to main menu"
-    echo
-    read -p "Choose option (1-4): " choice
+set_default_policies() {
+    local current_policies="Current default policies:\n$(sudo ufw status verbose | grep 'Default:' || echo 'Could not retrieve current policies')"
+    
+    local choice=$(whiptail --title "Set Default Policies" --menu "$current_policies\n\nChoose policy set:" 20 $WT_WIDTH $WT_MENU_HEIGHT \
+    "1" "Secure (deny incoming, allow outgoing)" \
+    "2" "Restrictive (deny both incoming/outgoing)" \
+    "3" "Permissive (allow both - NOT recommended)" \
+    "4" "Custom Configuration" 3>&1 1>&2 2>&3)
     
     case $choice in
         1)
-            read -p "Enter file path: " file_path
-            if [ -f "$file_path" ]; then
-                while IFS= read -r line; do
-                    if [[ $line =~ ^[[:space:]]*# ]] || [[ -z $line ]]; then
-                        continue
+            if confirm_action "Apply secure default policies?\n(deny incoming, allow outgoing)"; then
+                execute_command "sudo ufw default deny incoming && sudo ufw default allow outgoing" "Apply secure policies"
+            fi
+            ;;
+        2)
+            if confirm_action "Apply restrictive policies?\n\nWARNING: This may block internet access!"; then
+                execute_command "sudo ufw default deny incoming && sudo ufw default deny outgoing" "Apply restrictive policies"
+            fi
+            ;;
+        3)
+            if confirm_action "Apply permissive policies?\n\nWARNING: This is less secure!"; then
+                execute_command "sudo ufw default allow incoming && sudo ufw default allow outgoing" "Apply permissive policies"
+            fi
+            ;;
+        4) custom_default_policies ;;
+    esac
+}
+
+custom_default_policies() {
+    local incoming=$(whiptail --title "Incoming Policy" --menu "Choose default policy for incoming connections:" $WT_HEIGHT $WT_WIDTH 3 \
+    "allow" "Allow all incoming" \
+    "deny" "Deny all incoming (recommended)" \
+    "reject" "Reject all incoming" 3>&1 1>&2 2>&3)
+    
+    if [ -n "$incoming" ]; then
+        local outgoing=$(whiptail --title "Outgoing Policy" --menu "Choose default policy for outgoing connections:" $WT_HEIGHT $WT_WIDTH 3 \
+        "allow" "Allow all outgoing (recommended)" \
+        "deny" "Deny all outgoing" \
+        "reject" "Reject all outgoing" 3>&1 1>&2 2>&3)
+        
+        if [ -n "$outgoing" ]; then
+            if confirm_action "Apply custom policies?\nIncoming: $incoming\nOutgoing: $outgoing"; then
+                execute_command "sudo ufw default $incoming incoming && sudo ufw default $outgoing outgoing" "Apply custom policies"
+            fi
+        fi
+    fi
+}
+
+# =================== RULE MANAGEMENT ===================
+
+add_rules() {
+    while true; do
+        local choice=$(whiptail --title "Add Firewall Rules" --menu "Choose rule type:" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT \
+        "1" "Allow Specific Port" \
+        "2" "Block Specific Port" \
+        "3" "Limit Connections (Rate Limiting)" \
+        "4" "Allow Service by Name" \
+        "5" "Allow from Specific IP" \
+        "6" "Allow from Subnet/Range" \
+        "7" "Port Range Rules" \
+        "8" "Application Profile Rules" \
+        "9" "Custom Rule Builder" \
+        "10" "Return to Main Menu" 3>&1 1>&2 2>&3)
+        
+        case $choice in
+            1) add_port_rule "allow" ;;
+            2) add_port_rule "deny" ;;
+            3) add_port_rule "limit" ;;
+            4) add_service_rule ;;
+            5) add_ip_rule ;;
+            6) add_subnet_rule ;;
+            7) add_port_range_rule ;;
+            8) add_app_profile_rule ;;
+            9) custom_rule_builder ;;
+            10|*) break ;;
+        esac
+    done
+}
+
+add_port_rule() {
+    local action="$1"
+    local port=$(whiptail --title "Port Number" --inputbox "Enter port number (1-65535):\n\nExamples: 22 (SSH), 80 (HTTP), 443 (HTTPS), 8080" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+    
+    if [ -n "$port" ] && [[ $port =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
+        local protocol=$(whiptail --title "Protocol" --menu "Select protocol:" $WT_HEIGHT $WT_WIDTH 3 \
+        "tcp" "TCP Protocol" \
+        "udp" "UDP Protocol" \
+        "both" "Both TCP and UDP" 3>&1 1>&2 2>&3)
+        
+        if [ -n "$protocol" ]; then
+            local comment=$(whiptail --title "Comment (Optional)" --inputbox "Add a comment for this rule (optional):" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+            
+            local cmd=""
+            case $protocol in
+                "tcp") cmd="sudo ufw $action $port/tcp" ;;
+                "udp") cmd="sudo ufw $action $port/udp" ;;
+                "both") cmd="sudo ufw $action $port" ;;
+            esac
+            
+            if [ -n "$comment" ]; then
+                cmd+=" comment '$comment'"
+            fi
+            
+            execute_command "$cmd" "$action port $port ($protocol)"
+        fi
+    else
+        show_message "Invalid Input" "Invalid port number. Must be between 1 and 65535." "error"
+    fi
+}
+
+add_service_rule() {
+    local service=$(whiptail --title "Service Name" --inputbox "Enter service name:\n\nCommon services:\nssh, http, https, ftp, smtp, pop3, imap\n\nService name:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+    
+    if [ -n "$service" ]; then
+        execute_command "sudo ufw allow $service" "Allow service: $service"
+    fi
+}
+
+add_ip_rule() {
+    local ip=$(whiptail --title "IP Address" --inputbox "Enter IP address:\n\nExample: 192.168.1.100\n\nIP Address:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+    
+    if [ -n "$ip" ] && [[ $ip =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then
+        if (( ${BASH_REMATCH[1]} <= 255 && ${BASH_REMATCH[2]} <= 255 && ${BASH_REMATCH[3]} <= 255 && ${BASH_REMATCH[4]} <= 255 )); then
+            local choice=$(whiptail --title "IP Rule Type" --menu "Choose rule type for IP $ip:" $WT_HEIGHT $WT_WIDTH 4 \
+            "1" "Allow all traffic from this IP" \
+            "2" "Allow specific port from this IP" \
+            "3" "Block all traffic from this IP" 3>&1 1>&2 2>&3)
+            
+            case $choice in
+                1) execute_command "sudo ufw allow from $ip" "Allow all traffic from $ip" ;;
+                2)
+                    local port=$(whiptail --title "Port" --inputbox "Enter port number:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+                    if [[ $port =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )); then
+                        local proto=$(whiptail --title "Protocol" --inputbox "Protocol (tcp/udp, default: tcp):" $WT_HEIGHT $WT_WIDTH "tcp" 3>&1 1>&2 2>&3)
+                        proto=${proto:-tcp}
+                        if [[ "$proto" == "tcp" || "$proto" == "udp" ]]; then
+                            execute_command "sudo ufw allow proto $proto from $ip to any port $port" "Allow $ip to access port $port/$proto"
+                        fi
                     fi
-                    echo "Executing: sudo ufw $line"
-                    sudo ufw $line
-                done < "$file_path"
-                print_message "success" "Rules imported successfully"
+                    ;;
+                3) execute_command "sudo ufw deny from $ip" "Block all traffic from $ip" ;;
+            esac
+        else
+            show_message "Invalid IP" "Invalid IP address format" "error"
+        fi
+    else
+        show_message "Invalid IP" "Invalid IP address format" "error"
+    fi
+}
+
+add_subnet_rule() {
+    local subnet=$(whiptail --title "Subnet" --inputbox "Enter subnet in CIDR notation:\n\nExamples:\n192.168.1.0/24 (local network)\n10.0.0.0/8 (large private network)\n\nSubnet:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+    
+    if [ -n "$subnet" ] && [[ $subnet =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
+        execute_command "sudo ufw allow from $subnet" "Allow traffic from subnet $subnet"
+    else
+        show_message "Invalid Subnet" "Invalid subnet format. Use CIDR notation (e.g., 192.168.1.0/24)" "error"
+    fi
+}
+
+add_port_range_rule() {
+    local port_range=$(whiptail --title "Port Range" --inputbox "Enter port range:\n\nExample: 8000:8010\n\nPort Range:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+    
+    if [ -n "$port_range" ] && [[ $port_range =~ ^[0-9]+:[0-9]+$ ]]; then
+        local protocol=$(whiptail --title "Protocol" --menu "Select protocol:" $WT_HEIGHT $WT_WIDTH 2 \
+        "tcp" "TCP Protocol" \
+        "udp" "UDP Protocol" 3>&1 1>&2 2>&3)
+        
+        if [ -n "$protocol" ]; then
+            execute_command "sudo ufw allow $port_range/$protocol" "Allow port range $port_range ($protocol)"
+        fi
+    else
+        show_message "Invalid Range" "Invalid port range format. Use start:end (e.g., 8000:8010)" "error"
+    fi
+}
+
+add_app_profile_rule() {
+    local app_list=$(sudo ufw app list 2>/dev/null || echo "No application profiles available")
+    local app_name=$(whiptail --title "Application Profiles" --inputbox "$app_list\n\nEnter application profile name:" 20 $WT_WIDTH 3>&1 1>&2 2>&3)
+    
+    if [ -n "$app_name" ] && sudo ufw app info "$app_name" >/dev/null 2>&1; then
+        execute_command "sudo ufw allow '$app_name'" "Allow application profile: $app_name"
+    elif [ -n "$app_name" ]; then
+        show_message "Profile Not Found" "Application profile '$app_name' not found" "error"
+    fi
+}
+
+custom_rule_builder() {
+    local action=$(whiptail --title "Custom Rule Builder - Action" --menu "Select action:" $WT_HEIGHT $WT_WIDTH 4 \
+    "allow" "Allow traffic" \
+    "deny" "Deny traffic (silent)" \
+    "reject" "Reject traffic (with response)" \
+    "limit" "Rate limit traffic" 3>&1 1>&2 2>&3)
+    
+    if [ -z "$action" ]; then return; fi
+    
+    local rule_parts=("$action")
+    
+    # Direction
+    local direction=$(whiptail --title "Direction (Optional)" --menu "Select direction:" $WT_HEIGHT $WT_WIDTH 3 \
+    "in" "Incoming traffic" \
+    "out" "Outgoing traffic" \
+    "skip" "Skip (no direction specified)" 3>&1 1>&2 2>&3)
+    
+    if [ "$direction" != "skip" ] && [ -n "$direction" ]; then
+        rule_parts+=("$direction")
+    fi
+    
+    # From IP
+    local from_ip=$(whiptail --title "From IP (Optional)" --inputbox "Enter source IP or subnet (leave empty to skip):\n\nExamples:\n192.168.1.100\n192.168.1.0/24" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+    
+    if [ -n "$from_ip" ]; then
+        rule_parts+=("from" "$from_ip")
+    fi
+    
+    # To specification
+    local to_spec=$(whiptail --title "To Specification" --inputbox "Enter destination (leave empty for 'any'):" $WT_HEIGHT $WT_WIDTH "any" 3>&1 1>&2 2>&3)
+    to_spec=${to_spec:-any}
+    rule_parts+=("to" "$to_spec")
+    
+    # Port
+    local port=$(whiptail --title "Port (Optional)" --inputbox "Enter port number (leave empty to skip):" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+    
+    if [ -n "$port" ]; then
+        rule_parts+=("port" "$port")
+    fi
+    
+    # Protocol
+    local protocol=$(whiptail --title "Protocol (Optional)" --menu "Select protocol:" $WT_HEIGHT $WT_WIDTH 4 \
+    "tcp" "TCP Protocol" \
+    "udp" "UDP Protocol" \
+    "icmp" "ICMP Protocol" \
+    "skip" "Skip protocol specification" 3>&1 1>&2 2>&3)
+    
+    if [ "$protocol" != "skip" ] && [ -n "$protocol" ]; then
+        rule_parts+=("proto" "$protocol")
+    fi
+    
+    # Comment
+    local comment=$(whiptail --title "Comment (Optional)" --inputbox "Add a comment for this rule:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+    
+    if [ -n "$comment" ]; then
+        rule_parts+=("comment" "\"$comment\"")
+    fi
+    
+    # Preview and confirm
+    local final_cmd="sudo ufw ${rule_parts[*]}"
+    if whiptail --title "Rule Preview" --yesno "Generated rule:\n\n$final_cmd\n\nAdd this custom rule?" $WT_HEIGHT $WT_WIDTH; then
+        execute_command "$final_cmd" "Custom UFW rule"
+    fi
+}
+
+# =================== REMOVE RULES ===================
+
+remove_rules() {
+    while true; do
+        local choice=$(whiptail --title "Remove Firewall Rules" --menu "Choose removal method:" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT \
+        "1" "Remove by Rule Number" \
+        "2" "Remove by Port" \
+        "3" "Remove by Service Name" \
+        "4" "Remove by IP Address" \
+        "5" "Remove Multiple Rules" \
+        "6" "Remove All Rules (Reset)" \
+        "7" "Return to Main Menu" 3>&1 1>&2 2>&3)
+        
+        case $choice in
+            1) remove_by_number ;;
+            2) remove_by_port ;;
+            3) remove_by_service ;;
+            4) remove_by_ip ;;
+            5) remove_multiple_rules ;;
+            6)
+                if confirm_action "Remove ALL rules? This will reset UFW completely!\n\nWARNING: This action cannot be undone!"; then
+                    execute_command "sudo ufw --force reset" "Remove all UFW rules" true
+                fi
+                ;;
+            7|*) break ;;
+        esac
+    done
+}
+
+remove_by_number() {
+    local rules_output=$(sudo ufw status numbered 2>/dev/null)
+    if ! echo "$rules_output" | grep -q "^\["; then
+        show_message "No Rules" "No numbered rules found" "error"
+        return
+    fi
+    
+    local rule_num=$(whiptail --title "Rule Number" --inputbox "Current numbered rules:\n\n$rules_output\n\nEnter rule number to remove:" 25 $WT_WIDTH 3>&1 1>&2 2>&3)
+    
+    if [ -n "$rule_num" ] && [[ $rule_num =~ ^[0-9]+$ ]]; then
+        local rule_line=$(echo "$rules_output" | grep "^\[ *$rule_num\]")
+        if [ -n "$rule_line" ]; then
+            if confirm_action "Remove this rule?\n\n$rule_line"; then
+                execute_command "sudo ufw delete $rule_num" "Remove rule number $rule_num" true
+            fi
+        else
+            show_message "Rule Not Found" "Rule number $rule_num not found" "error"
+        fi
+    elif [ -n "$rule_num" ]; then
+        show_message "Invalid Input" "Invalid rule number format" "error"
+    fi
+}
+
+remove_by_port() {
+    local port=$(whiptail --title "Port Number" --inputbox "Enter port number to remove rules for:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+    
+    if [ -n "$port" ] && [[ $port =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
+        local choice=$(whiptail --title "Remove Port Rules" --menu "Select rule type to remove for port $port:" $WT_HEIGHT $WT_WIDTH 6 \
+        "1" "Remove TCP allow rule" \
+        "2" "Remove UDP allow rule" \
+        "3" "Remove both TCP and UDP allow rules" \
+        "4" "Remove TCP deny rule" \
+        "5" "Remove UDP deny rule" \
+        "6" "Remove all rules for this port" 3>&1 1>&2 2>&3)
+        
+        case $choice in
+            1) execute_command "sudo ufw delete allow $port/tcp" "Remove TCP allow rule for port $port" true ;;
+            2) execute_command "sudo ufw delete allow $port/udp" "Remove UDP allow rule for port $port" true ;;
+            3) execute_command "sudo ufw delete allow $port" "Remove allow rules for port $port" true ;;
+            4) execute_command "sudo ufw delete deny $port/tcp" "Remove TCP deny rule for port $port" true ;;
+            5) execute_command "sudo ufw delete deny $port/udp" "Remove UDP deny rule for port $port" true ;;
+            6)
+                if confirm_action "Remove ALL rules for port $port?"; then
+                    sudo ufw delete allow $port 2>/dev/null || true
+                    sudo ufw delete deny $port 2>/dev/null || true
+                    sudo ufw delete reject $port 2>/dev/null || true
+                    show_message "Rules Removed" "All rules for port $port have been removed" "success"
+                fi
+                ;;
+        esac
+    else
+        show_message "Invalid Port" "Invalid port number (must be 1-65535)" "error"
+    fi
+}
+
+remove_by_service() {
+    local service=$(whiptail --title "Service Name" --inputbox "Enter service name to remove:\n\nExamples: ssh, http, https, ftp" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+    
+    if [ -n "$service" ]; then
+        execute_command "sudo ufw delete allow $service" "Remove rule for service $service"
+    fi
+}
+
+remove_by_ip() {
+    local ip=$(whiptail --title "IP Address" --inputbox "Enter IP address to remove rules for:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+    
+    if [ -n "$ip" ] && [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        execute_command "sudo ufw delete allow from $ip" "Remove rules for IP $ip"
+    else
+        show_message "Invalid IP" "Invalid IP address format" "error"
+    fi
+}
+
+remove_multiple_rules() {
+    local rules_output=$(sudo ufw status numbered 2>/dev/null)
+    if ! echo "$rules_output" | grep -q "^\["; then
+        show_message "No Rules" "No numbered rules found" "error"
+        return
+    fi
+    
+    local rule_numbers=$(whiptail --title "Multiple Rule Removal" --inputbox "Current rules:\n\n$rules_output\n\nEnter rule numbers separated by spaces (e.g., 1 3 5):" 25 100 3>&1 1>&2 2>&3)
+    
+    if [ -n "$rule_numbers" ]; then
+        local -a rules
+        read -ra rules <<< "$rule_numbers"
+        
+        # Sort in descending order
+        local IFS=$'\n'
+        rules=($(sort -nr <<<"${rules[*]}"))
+        unset IFS
+        
+        local valid_rules=()
+        local preview_text="Rules to be removed:\n\n"
+        
+        for rule in "${rules[@]}"; do
+            if [[ $rule =~ ^[0-9]+$ ]]; then
+                local rule_line=$(echo "$rules_output" | grep "^\[ *$rule\]")
+                if [ -n "$rule_line" ]; then
+                    valid_rules+=("$rule")
+                    preview_text+="$rule_line\n"
+                fi
+            fi
+        done
+        
+        if [ ${#valid_rules[@]} -gt 0 ]; then
+            if whiptail --title "Confirm Multiple Removal" --yesno "$preview_text\nRemove ${#valid_rules[@]} rule(s)?" 20 100; then
+                backup_configuration
+                for rule in "${valid_rules[@]}"; do
+                    sudo ufw --force delete "$rule" 2>/dev/null || true
+                    sleep 0.5
+                done
+                show_message "Rules Removed" "${#valid_rules[@]} rules removed successfully" "success"
+            fi
+        else
+            show_message "No Valid Rules" "No valid rules found to remove" "error"
+        fi
+    fi
+}
+
+# =================== ADVANCED FEATURES ===================
+
+show_advanced_examples() {
+    local examples_text="ADVANCED UFW COMMAND EXAMPLES\n\n"
+    
+    examples_text+="=== BASICS AND MANAGEMENT ===\n"
+    examples_text+="1. Enable/disable UFW:\n"
+    examples_text+="    sudo ufw enable\n    sudo ufw disable\n\n"
+    
+    examples_text+="2. Check status:\n"
+    examples_text+="    sudo ufw status verbose\n    sudo ufw status numbered\n\n"
+    
+    examples_text+="=== BASIC RULES ===\n"
+    examples_text+="3. Allow SSH from anywhere:\n"
+    examples_text+="    sudo ufw allow ssh\n\n"
+    
+    examples_text+="4. Deny FTP traffic:\n"
+    examples_text+="    sudo ufw deny 21/tcp\n\n"
+    
+    examples_text+="5. Limit SSH connections (anti-brute force):\n"
+    examples_text+="    sudo ufw limit 22/tcp\n\n"
+    
+    examples_text+="=== SUBNETS AND CIDR ===\n"
+    examples_text+="6. Allow entire subnet (CIDR notation):\n"
+    examples_text+="    sudo ufw allow from 192.168.1.0/24\n\n"
+    
+    examples_text+="7. Allow subnet to specific port:\n"
+    examples_text+="    sudo ufw allow from 10.0.0.0/8 to any port 22\n\n"
+    
+    examples_text+="8. Deny range of IPs:\n"
+    examples_text+="    sudo ufw deny from 203.0.113.0/24\n\n"
+    
+    examples_text+="9. Allow specific IP range to web server:\n"
+    examples_text+="    sudo ufw allow proto tcp from 172.16.0.0/12 to any port 80,443\n\n"
+    
+    examples_text+="=== INTERFACES AND DIRECTION ===\n"
+    examples_text+="10. Allow on specific interface:\n"
+    examples_text+="     sudo ufw allow in on eth0 to any port 80\n\n"
+    
+    examples_text+="11. Block outgoing traffic to IP:\n"
+    examples_text+="     sudo ufw reject out to 10.0.0.50\n\n"
+    
+    examples_text+="12. Allow from specific interface and IP range:\n"
+    examples_text+="     sudo ufw allow in on eth1 from 192.168.2.0/24\n\n"
+    
+    examples_text+="=== PORTS AND PROTOCOLS ===\n"
+    examples_text+="13. Allow port range:\n"
+    examples_text+="     sudo ufw allow 60000:61000/udp\n\n"
+    
+    examples_text+="14. Allow multiple ports:\n"
+    examples_text+="     sudo ufw allow 80,443/tcp\n\n"
+    
+    examples_text+="15. Allow specific protocol:\n"
+    examples_text+="     sudo ufw allow proto udp to any port 53\n\n"
+    
+    examples_text+="=== MANAGING RULES ===\n"
+    examples_text+="16. Insert rule at specific position:\n"
+    examples_text+="     sudo ufw insert 1 deny from 203.0.113.1\n\n"
+    
+    examples_text+="17. Delete rule by number:\n"
+    examples_text+="     sudo ufw delete 3\n\n"
+    
+    examples_text+="18. Delete specific rule:\n"
+    examples_text+="     sudo ufw delete allow 80/tcp\n\n"
+    
+    examples_text+="=== COMPLEX EXAMPLES ===\n"
+    examples_text+="19. Allow LAN access but restrict specific IP:\n"
+    examples_text+="     sudo ufw allow from 192.168.1.0/24\n"
+    examples_text+="     sudo ufw deny from 192.168.1.100\n\n"
+    
+    examples_text+="20. Complex rule with multiple parameters:\n"
+    examples_text+="     sudo ufw allow proto tcp from 192.168.1.0/24 to any port 22,80,443\n"
+    
+    whiptail --title "Advanced UFW Examples" --scrolltext --msgbox "$examples_text" 30 100
+}
+
+bulk_rule_management() {
+    local choice=$(whiptail --title "Bulk Rule Management" --menu "Choose bulk operation:" $WT_HEIGHT $WT_WIDTH 4 \
+    "1" "Import rules from file" \
+    "2" "Export current rules to file" \
+    "3" "Apply predefined rule set" \
+    "4" "Return to main menu" 3>&1 1>&2 2>&3)
+    
+    case $choice in
+        1)
+            local file_path=$(whiptail --title "Import Rules" --inputbox "Enter file path containing UFW rules:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+            if [ -n "$file_path" ] && [ -f "$file_path" ]; then
+                if confirm_action "Import rules from $file_path?"; then
+                    local count=0
+                    while IFS= read -r line; do
+                        if [[ $line =~ ^[[:space:]]*# ]] || [[ -z $line ]]; then
+                            continue
+                        fi
+                        sudo ufw $line 2>/dev/null && ((count++))
+                    done < "$file_path"
+                    show_message "Import Complete" "$count rules imported successfully" "success"
+                fi
             else
-                print_message "error" "File not found"
+                show_message "File Error" "File not found or invalid path" "error"
             fi
             ;;
         2)
             local export_file="/tmp/ufw_rules_$(date +%Y%m%d_%H%M%S).txt"
             sudo ufw status numbered > "$export_file"
-            print_message "success" "Rules exported to: $export_file"
+            show_message "Export Complete" "Rules exported to:\n$export_file" "success"
             ;;
         3)
-            apply_predefined_rules
-            ;;
-        4)
-            return
+            predefined_configurations
             ;;
     esac
-    
-    read -p "Press ENTER to continue..."
 }
 
-# =================== PREDEFINED CONFIGURATIONS ===================
-
-apply_predefined_rules() {
-    echo -e "${COLORS[CYAN]}=== PREDEFINED RULE SETS ===${COLORS[NC]}"
-    echo
-    echo "1. Web Server (HTTP/HTTPS + SSH)"
-    echo "2. Database Server (MySQL/PostgreSQL + SSH)"
-    echo "3. Mail Server (SMTP/POP3/IMAP + SSH)"
-    echo "4. Development Server (Common dev ports + SSH)"
-    echo "5. Secure Desktop (Minimal access)"
-    echo "6. Gaming Server (Steam/Minecraft/Custom)"
-    echo
-    read -p "Choose configuration (1-6): " config_choice
+predefined_configurations() {
+    local choice=$(whiptail --title "Predefined Rule Sets" --menu "Choose configuration:" $WT_HEIGHT $WT_WIDTH 6 \
+    "1" "Web Server (HTTP/HTTPS + SSH)" \
+    "2" "Database Server (MySQL/PostgreSQL + SSH)" \
+    "3" "Mail Server (SMTP/POP3/IMAP + SSH)" \
+    "4" "Development Server (Common dev ports)" \
+    "5" "Secure Desktop (Minimal access)" \
+    "6" "Gaming Server configurations" 3>&1 1>&2 2>&3)
     
-    case $config_choice in
+    case $choice in
         1)
-            if confirm_action "Apply web server configuration?"; then
+            if confirm_action "Apply web server configuration?\n\nThis will allow:\n- SSH (22)\n- HTTP (80)\n- HTTPS (443)\n- Alt HTTP (8080)"; then
+                show_progress "Applying web server rules..." 4
                 sudo ufw allow ssh
                 sudo ufw allow http
                 sudo ufw allow https
                 sudo ufw allow 8080/tcp comment 'Alternative HTTP'
-                print_message "success" "Web server configuration applied"
+                show_message "Configuration Applied" "Web server configuration applied successfully" "success"
             fi
             ;;
         2)
-            if confirm_action "Apply database server configuration?"; then
+            if confirm_action "Apply database server configuration?\n\nThis will allow:\n- SSH (22)\n- MySQL (3306)\n- PostgreSQL (5432)"; then
+                show_progress "Applying database server rules..." 3
                 sudo ufw allow ssh
                 sudo ufw allow 3306/tcp comment 'MySQL'
                 sudo ufw allow 5432/tcp comment 'PostgreSQL'
-                print_message "success" "Database server configuration applied"
+                show_message "Configuration Applied" "Database server configuration applied successfully" "success"
             fi
             ;;
         3)
-            if confirm_action "Apply mail server configuration?"; then
+            if confirm_action "Apply mail server configuration?\n\nThis will allow:\n- SSH, SMTP, POP3, POP3S, IMAP, IMAPS"; then
+                show_progress "Applying mail server rules..." 6
                 sudo ufw allow ssh
                 sudo ufw allow 25/tcp comment 'SMTP'
                 sudo ufw allow 110/tcp comment 'POP3'
                 sudo ufw allow 995/tcp comment 'POP3S'
                 sudo ufw allow 143/tcp comment 'IMAP'
                 sudo ufw allow 993/tcp comment 'IMAPS'
-                print_message "success" "Mail server configuration applied"
+                show_message "Configuration Applied" "Mail server configuration applied successfully" "success"
             fi
             ;;
         4)
-            if confirm_action "Apply development server configuration?"; then
+            if confirm_action "Apply development server configuration?\n\nCommon development ports for Node.js, Django, Angular, React"; then
+                show_progress "Applying development server rules..." 5
                 sudo ufw allow ssh
                 sudo ufw allow 3000/tcp comment 'Node.js dev'
                 sudo ufw allow 8000/tcp comment 'Django dev'
                 sudo ufw allow 4200/tcp comment 'Angular dev'
                 sudo ufw allow 3001/tcp comment 'React dev'
-                print_message "success" "Development server configuration applied"
+                show_message "Configuration Applied" "Development server configuration applied successfully" "success"
             fi
             ;;
         5)
-            if confirm_action "Apply secure desktop configuration?"; then
+            if confirm_action "Apply secure desktop configuration?\n\nThis will reset UFW and apply minimal rules"; then
+                show_progress "Applying secure desktop rules..." 4
                 sudo ufw --force reset
                 sudo ufw default deny incoming
                 sudo ufw default allow outgoing
@@ -526,113 +900,124 @@ apply_predefined_rules() {
                 sudo ufw allow out 80 comment 'HTTP'
                 sudo ufw allow out 443 comment 'HTTPS'
                 sudo ufw enable
-                print_message "success" "Secure desktop configuration applied"
+                show_message "Configuration Applied" "Secure desktop configuration applied successfully" "success"
             fi
             ;;
         6)
-            apply_gaming_rules
+            gaming_server_config
             ;;
     esac
 }
 
-apply_gaming_rules() {
-    echo -e "${COLORS[CYAN]}Gaming Server Rules:${COLORS[NC]}"
-    echo "1. Steam Server"
-    echo "2. Minecraft Server"
-    echo "3. Custom Gaming Ports"
-    echo
-    read -p "Choose gaming type (1-3): " game_choice
+gaming_server_config() {
+    local choice=$(whiptail --title "Gaming Server Configuration" --menu "Choose gaming server type:" $WT_HEIGHT $WT_WIDTH 3 \
+    "1" "Steam Server" \
+    "2" "Minecraft Server" \
+    "3" "Custom Gaming Ports" 3>&1 1>&2 2>&3)
     
-    case $game_choice in
+    case $choice in
         1)
-            sudo ufw allow 27015/tcp comment 'Steam Server'
-            sudo ufw allow 27015/udp comment 'Steam Server'
+            if confirm_action "Configure Steam server ports?\n(27015 TCP/UDP)"; then
+                sudo ufw allow 27015/tcp comment 'Steam Server'
+                sudo ufw allow 27015/udp comment 'Steam Server'
+                show_message "Steam Config" "Steam server ports configured" "success"
+            fi
             ;;
         2)
-            sudo ufw allow 25565/tcp comment 'Minecraft Server'
+            if confirm_action "Configure Minecraft server port?\n(25565 TCP)"; then
+                sudo ufw allow 25565/tcp comment 'Minecraft Server'
+                show_message "Minecraft Config" "Minecraft server port configured" "success"
+            fi
             ;;
         3)
-            read -p "Enter custom port range (e.g., 7777:7784): " port_range
-            sudo ufw allow $port_range comment 'Custom Gaming'
+            local port_range=$(whiptail --title "Custom Gaming Ports" --inputbox "Enter custom port range (e.g., 7777:7784):" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+            if [ -n "$port_range" ]; then
+                sudo ufw allow $port_range comment 'Custom Gaming'
+                show_message "Custom Gaming" "Custom gaming ports configured" "success"
+            fi
             ;;
     esac
 }
 
-# =================== ENHANCED MAIN MENU ===================
-
-main_menu() {
-    while true; do
-        print_header
-        echo -e "${COLORS[CYAN]}=== MAIN MENU ===${COLORS[NC]}"
-        echo
-        echo -e "${COLORS[BOLD]}${ICONS[SHIELD]} Firewall Management:${COLORS[NC]}"
-        echo "  1.  ${ICONS[INFO]} Detailed UFW Status"
-        echo "  2.  ${ICONS[FIRE]} Basic UFW Control"
-        echo "  3.  ${ICONS[ARROW]} Add Rules"
-        echo "  4.  ${ICONS[ARROW]} Remove Rules"
-        echo "  5.  ${ICONS[BULLET]} Advanced Rule"
-        echo "  6.  ${ICONS[BULLET]} Bulk Rule Management"
-        echo
-        echo -e "${COLORS[BOLD]}${ICONS[LOCK]} Security & Monitoring:${COLORS[NC]}"
-        echo "  7.  ${ICONS[INFO]} Real-time Monitoring"
-        echo "  8.  ${ICONS[BULLET]} View Logs & Analytics"
-        echo "  9.  ${ICONS[SHIELD]} Predefined Configurations"
-        echo "  10. ${ICONS[WARNING]} Security Audit"
-        echo
-        echo -e "${COLORS[BOLD]}${ICONS[INFO]} Backup & Maintenance:${COLORS[NC]}"
-        echo "  11. ${ICONS[SUCCESS]} Backup Configuration"
-        echo "  12. ${ICONS[WARNING]} Restore Configuration"
-        echo "  13. ${ICONS[INFO]} System Information"
-        echo
-        echo "  14. ${ICONS[ERROR]} Exit"
-        echo
-        read -p "Choose option (1-14): " choice
-        
-        case $choice in
-            1) show_detailed_status ;;
-            2) manage_ufw_basic ;;
-            3) add_rules ;;
-            4) remove_rules ;;
-            5) advanced_rule ;;
-            6) bulk_rule_management ;;
-            7) real_time_monitoring ;;
-            8) enhanced_log_management ;;
-            9) apply_predefined_rules; read -p "Press ENTER to continue..." ;;
-            10) security_audit ;;
-            11) backup_configuration; read -p "Press ENTER to continue..." ;;
-            12) restore_configuration ;;
-            13) show_system_info ;;
-            14) 
-                print_message "success" "Thank you for using UFW Manager Professional!"
-                log_action "EXIT" "UFW Manager Professional session ended"
-                exit 0
-                ;;
-            *) 
-                print_message "error" "Invalid option selected"
-                sleep 1
-                ;;
-        esac
-    done
+real_time_monitoring() {
+    show_message "Real-time Monitoring" "Real-time monitoring would require a separate terminal.\n\nUse this command in another terminal:\n\nsudo tail -f /var/log/ufw.log" "info"
 }
 
-# =================== ADDITIONAL FEATURES ===================
+log_management() {
+    local choice=$(whiptail --title "Log Management" --menu "Choose log operation:" $WT_HEIGHT $WT_WIDTH 6 \
+    "1" "View recent UFW logs" \
+    "2" "Search logs by IP" \
+    "3" "Search logs by port" \
+    "4" "Log statistics" \
+    "5" "Export logs" \
+    "6" "Configure logging" 3>&1 1>&2 2>&3)
+    
+    case $choice in
+        1)
+            local recent_logs=$(sudo tail -20 /var/log/ufw.log 2>/dev/null || echo "No logs found")
+            whiptail --title "Recent UFW Logs" --scrolltext --msgbox "$recent_logs" 25 100
+            ;;
+        2)
+            local search_ip=$(whiptail --title "Search by IP" --inputbox "Enter IP address to search for:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+            if [ -n "$search_ip" ]; then
+                local results=$(grep "$search_ip" /var/log/ufw.log 2>/dev/null | tail -10 || echo "No matches found")
+                whiptail --title "Search Results for $search_ip" --scrolltext --msgbox "$results" 25 100
+            fi
+            ;;
+        3)
+            local search_port=$(whiptail --title "Search by Port" --inputbox "Enter port number to search for:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+            if [ -n "$search_port" ]; then
+                local results=$(grep "DPT=$search_port" /var/log/ufw.log 2>/dev/null | tail -10 || echo "No matches found")
+                whiptail --title "Search Results for Port $search_port" --scrolltext --msgbox "$results" 25 100
+            fi
+            ;;
+        4)
+            local stats="LOG STATISTICS\n\n"
+            stats+="Total log entries: $(wc -l /var/log/ufw.log 2>/dev/null | cut -d' ' -f1 || echo '0')\n\n"
+            stats+="Most blocked IPs:\n"
+            stats+="$(grep 'BLOCK' /var/log/ufw.log 2>/dev/null | awk '{print $13}' | cut -d'=' -f2 | sort | uniq -c | sort -nr | head -5 || echo 'No data')"
+            whiptail --title "Log Statistics" --scrolltext --msgbox "$stats" $WT_HEIGHT $WT_WIDTH
+            ;;
+        5)
+            local export_file="/tmp/ufw_logs_$(date +%Y%m%d_%H%M%S).txt"
+            sudo cp /var/log/ufw.log "$export_file" 2>/dev/null
+            show_message "Logs Exported" "Logs exported to:\n$export_file" "success"
+            ;;
+        6)
+            configure_logging
+            ;;
+    esac
+}
+
+configure_logging() {
+    local current_logging=$(sudo ufw status verbose | grep "Logging:" || echo "Logging: unknown")
+    
+    local choice=$(whiptail --title "Configure Logging" --menu "$current_logging\n\nChoose logging option:" $WT_HEIGHT $WT_WIDTH 5 \
+    "1" "Enable logging" \
+    "2" "Disable logging" \
+    "3" "Set logging level - Low" \
+    "4" "Set logging level - Medium" \
+    "5" "Set logging level - High" 3>&1 1>&2 2>&3)
+    
+    case $choice in
+        1) execute_command "sudo ufw logging on" "Enable UFW logging" ;;
+        2) execute_command "sudo ufw logging off" "Disable UFW logging" ;;
+        3) execute_command "sudo ufw logging low" "Set logging level to low" ;;
+        4) execute_command "sudo ufw logging medium" "Set logging level to medium" ;;
+        5) execute_command "sudo ufw logging high" "Set logging level to high" ;;
+    esac
+}
 
 security_audit() {
-    print_header
-    echo -e "${COLORS[CYAN]}=== SECURITY AUDIT ===${COLORS[NC]}"
-    echo
+    show_progress "Running security audit..." 5
     
-    print_message "info" "Running comprehensive security audit..."
-    show_progress 3 "Analyzing"
-    
-    echo -e "${COLORS[BOLD]}Audit Results:${COLORS[NC]}"
-    echo
+    local audit_results="SECURITY AUDIT RESULTS\n\n"
     
     # Check if UFW is enabled
     if sudo ufw status | grep -q "Status: active"; then
-        print_message "success" "UFW is active"
+        audit_results+="[OK] UFW is active\n"
     else
-        print_message "error" "UFW is not active"
+        audit_results+="[WARNING] UFW is not active\n"
     fi
     
     # Check default policies
@@ -640,823 +1025,54 @@ security_audit() {
     local default_out=$(sudo ufw status verbose | grep "Default:" | awk '{print $4}')
     
     if [ "$default_in" = "deny" ]; then
-        print_message "success" "Default incoming policy is secure (deny)"
+        audit_results+="[OK] Default incoming policy is secure (deny)\n"
     else
-        print_message "warning" "Default incoming policy: $default_in"
+        audit_results+="[WARNING] Default incoming policy: $default_in\n"
     fi
     
-    # Check for common security issues
-    echo
-    echo -e "${COLORS[BOLD]}Security Recommendations:${COLORS[NC]}"
+    audit_results+="\nSECURITY RECOMMENDATIONS:\n\n"
     
     if sudo ufw status | grep -q "22/tcp.*ALLOW.*Anywhere"; then
-        print_message "warning" "SSH is open to everywhere - consider restricting to specific IPs"
+        audit_results+="[WARNING] SSH is open to everywhere - consider restricting to specific IPs\n"
     fi
     
     if sudo ufw status | grep -q "80/tcp.*ALLOW.*Anywhere"; then
-        print_message "info" "HTTP port is open (standard for web servers)"
+        audit_results+="[INFO] HTTP port is open (standard for web servers)\n"
     fi
     
-    read -p "Press ENTER to continue..."
+    audit_results+="\nRule count: $(sudo ufw status numbered | grep -c '^\[' || echo '0')\n"
+    
+    whiptail --title "Security Audit Results" --scrolltext --msgbox "$audit_results" 25 $WT_WIDTH
 }
 
 show_system_info() {
-    print_header
-    echo -e "${COLORS[CYAN]}=== SYSTEM INFORMATION ===${COLORS[NC]}"
-    echo
+    local system_info="SYSTEM INFORMATION\n\n"
+    system_info+="OS: $(lsb_release -d 2>/dev/null | cut -f2 || uname -a)\n"
+    system_info+="Kernel: $(uname -r)\n"
+    system_info+="Uptime: $(uptime -p 2>/dev/null || uptime)\n\n"
+    system_info+="UFW INFORMATION:\n"
+    system_info+="Version: $(ufw --version 2>/dev/null || echo 'Unknown')\n"
+    system_info+="Rules count: $(sudo ufw status numbered | grep -c '^\[' || echo '0')\n\n"
+    system_info+="NETWORK INTERFACES:\n"
+    system_info+="$(ip -brief addr show)\n"
     
-    echo -e "${COLORS[BOLD]}System Details:${COLORS[NC]}"
-    echo "OS: $(lsb_release -d 2>/dev/null | cut -f2 || uname -a)"
-    echo "Kernel: $(uname -r)"
-    echo "Uptime: $(uptime -p 2>/dev/null || uptime)"
-    echo
-    
-    echo -e "${COLORS[BOLD]}UFW Information:${COLORS[NC]}"
-    echo "Version: $(ufw --version 2>/dev/null || echo 'Unknown')"
-    echo "Rules count: $(sudo ufw status numbered | grep -c "^\[" || echo '0')"
-    echo
-    
-    echo -e "${COLORS[BOLD]}Network Interfaces:${COLORS[NC]}"
-    ip -brief addr show
-    echo
-    
-    read -p "Press ENTER to continue..."
+    whiptail --title "System Information" --scrolltext --msgbox "$system_info" 25 90
 }
 
-enhanced_log_management() {
-    while true; do
-        print_header
-        echo -e "${COLORS[CYAN]}=== ENHANCED LOG MANAGEMENT ===${COLORS[NC]}"
-        echo
-        echo "1. View recent UFW logs"
-        echo "2. Search logs by IP"
-        echo "3. Search logs by port"
-        echo "4. Log statistics"
-        echo "5. Export logs"
-        echo "6. Configure logging"
-        echo "7. Return to main menu"
-        echo
-        read -p "Choose option (1-7): " choice
-        
-        case $choice in
-            1)
-                echo -e "${COLORS[CYAN]}Recent UFW logs (last 20 entries):${COLORS[NC]}"
-                sudo tail -20 /var/log/ufw.log 2>/dev/null || echo "No logs found"
-                ;;
-            2)
-                read -p "Enter IP to search for: " search_ip
-                grep "$search_ip" /var/log/ufw.log 2>/dev/null | tail -10 || echo "No matches found"
-                ;;
-            3)
-                read -p "Enter port to search for: " search_port
-                grep "DPT=$search_port" /var/log/ufw.log 2>/dev/null | tail -10 || echo "No matches found"
-                ;;
-            4)
-                echo -e "${COLORS[CYAN]}Log Statistics:${COLORS[NC]}"
-                echo "Total log entries: $(wc -l /var/log/ufw.log 2>/dev/null | cut -d' ' -f1 || echo '0')"
-                echo "Most blocked IPs:"
-                grep "BLOCK" /var/log/ufw.log 2>/dev/null | awk '{print $13}' | cut -d'=' -f2 | sort | uniq -c | sort -nr | head -5 || echo "No data"
-                ;;
-            5)
-                local export_file="/tmp/ufw_logs_$(date +%Y%m%d_%H%M%S).txt"
-                sudo cp /var/log/ufw.log "$export_file" 2>/dev/null
-                print_message "success" "Logs exported to: $export_file"
-                ;;
-            6)
-                configure_logging
-                ;;
-            7)
-                break
-                ;;
-        esac
-        echo
-        read -p "Press ENTER to continue..."
-    done
-}
+# =================== INITIALIZATION ===================
 
-configure_logging() {
-    echo -e "${COLORS[CYAN]}Current logging configuration:${COLORS[NC]}"
-    sudo ufw status verbose | grep "Logging:"
-    echo
-    echo "1. Enable logging"
-    echo "2. Disable logging"
-    echo "3. Set logging level"
-    echo
-    read -p "Choose option (1-3): " log_choice
-    
-    case $log_choice in
-        1) execute_command "sudo ufw logging on" "Enable UFW logging" ;;
-        2) execute_command "sudo ufw logging off" "Disable UFW logging" ;;
-        3)
-            echo "Available levels: off, low, medium, high, full"
-            read -p "Enter logging level: " level
-            execute_command "sudo ufw logging $level" "Set logging level to $level"
-            ;;
-    esac
-}
-
-# =================== LEGACY FUNCTIONS (ENHANCED) ===================
-
-manage_ufw_basic() {
-    while true; do
-        print_header
-        echo -e "${COLORS[CYAN]}=== BASIC UFW MANAGEMENT ===${COLORS[NC]}"
-        echo
-        echo "1. ${ICONS[SUCCESS]} Enable UFW"
-        echo "2. ${ICONS[ERROR]} Disable UFW"
-        echo "3. ${ICONS[WARNING]} Reset UFW (removes all rules)"
-        echo "4. ${ICONS[ARROW]} Reload UFW"
-        echo "5. ${ICONS[INFO]} Show UFW version"
-        echo "6. ${ICONS[SHIELD]} Set default policies"
-        echo "7. ${ICONS[ARROW]} Return to main menu"
-        echo
-        read -p "Choose option (1-7): " choice
-        
-        case $choice in
-            1)
-                execute_command "sudo ufw enable" "Enable UFW firewall" true
-                ;;
-            2)
-                execute_command "sudo ufw disable" "Disable UFW firewall"
-                ;;
-            3)
-                execute_command "sudo ufw --force reset" "Complete UFW reset (removes all rules)" true
-                ;;
-            4)
-                execute_command "sudo ufw reload" "Reload UFW configuration"
-                ;;
-            5)
-                echo -e "${COLORS[CYAN]}UFW Version Information:${COLORS[NC]}"
-                ufw --version
-                echo
-                read -p "Press ENTER to continue..."
-                ;;
-            6)
-                set_default_policies
-                ;;
-            7)
-                break
-                ;;
-            *)
-                print_message "error" "Invalid option"
-                sleep 1
-                ;;
-        esac
-    done
-}
-
-set_default_policies() {
-    echo -e "${COLORS[CYAN]}=== SET DEFAULT POLICIES ===${COLORS[NC]}"
-    echo
-    echo "Current default policies:"
-    sudo ufw status verbose | grep "Default:"
-    echo
-    
-    echo "1. Secure (deny incoming, allow outgoing)"
-    echo "2. Restrictive (deny incoming, deny outgoing)"
-    echo "3. Permissive (allow incoming, allow outgoing)"
-    echo "4. Custom configuration"
-    echo
-    read -p "Choose policy set (1-4): " policy_choice
-    
-    case $policy_choice in
-        1)
-            if confirm_action "Apply secure default policies?"; then
-                sudo ufw default deny incoming
-                sudo ufw default allow outgoing
-                print_message "success" "Secure policies applied"
-            fi
-            ;;
-        2)
-            if confirm_action "Apply restrictive policies? (WARNING: May block internet)"; then
-                sudo ufw default deny incoming
-                sudo ufw default deny outgoing
-                print_message "warning" "Restrictive policies applied"
-            fi
-            ;;
-        3)
-            if confirm_action "Apply permissive policies? (WARNING: Less secure)"; then
-                sudo ufw default allow incoming
-                sudo ufw default allow outgoing
-                print_message "warning" "Permissive policies applied"
-            fi
-            ;;
-        4)
-            custom_default_policies
-            ;;
-    esac
-    
-    read -p "Press ENTER to continue..."
-}
-
-custom_default_policies() {
-    echo -e "${COLORS[CYAN]}Custom Default Policies:${COLORS[NC]}"
-    echo
-    
-    echo "Incoming policy:"
-    select incoming in "allow" "deny" "reject"; do
-        if [ -n "$incoming" ]; then break; fi
-    done
-    
-    echo "Outgoing policy:"
-    select outgoing in "allow" "deny" "reject"; do
-        if [ -n "$outgoing" ]; then break; fi
-    done
-    
-    if confirm_action "Apply custom policies (incoming: $incoming, outgoing: $outgoing)?"; then
-        sudo ufw default $incoming incoming
-        sudo ufw default $outgoing outgoing
-        print_message "success" "Custom policies applied"
-    fi
-}
-
-add_rules() {
-    while true; do
-        print_header
-        echo -e "${COLORS[CYAN]}=== ADD FIREWALL RULES ===${COLORS[NC]}"
-        echo
-        echo "1. ${ICONS[SUCCESS]} Allow specific port"
-        echo "2. ${ICONS[ERROR]} Block specific port"
-        echo "3. ${ICONS[SHIELD]} Limit connections (rate limiting)"
-        echo "4. ${ICONS[BULLET]} Allow service by name"
-        echo "5. ${ICONS[BULLET]} Allow from specific IP"
-        echo "6. ${ICONS[BULLET]} Allow from subnet/range"
-        echo "7. ${ICONS[ARROW]} Port range rules"
-        echo "8. ${ICONS[INFO]} Application profile rules"
-        echo "9. ${ICONS[FIRE]} Custom rule builder"
-        echo "10. ${ICONS[ARROW]} Return to main menu"
-        echo
-        read -p "Choose option (1-10): " choice
-        
-        case $choice in
-            1)
-                add_port_rule "allow"
-                ;;
-            2)
-                add_port_rule "deny"
-                ;;
-            3)
-                add_port_rule "limit"
-                ;;
-            4)
-                add_service_rule
-                ;;
-            5)
-                add_ip_rule
-                ;;
-            6)
-                add_subnet_rule
-                ;;
-            7)
-                add_port_range_rule
-                ;;
-            8)
-                add_app_profile_rule
-                ;;
-            9)
-                custom_rule_builder
-                ;;
-            10)
-                break
-                ;;
-            *)
-                print_message "error" "Invalid option"
-                sleep 1
-                ;;
-        esac
-    done
-}
-
-add_port_rule() {
-    local action="$1"
-    echo -e "${COLORS[YELLOW]}Examples: 22, 80, 443, 8080${COLORS[NC]}"
-    read -p "Enter port number: " port
-    
-    if [[ $port =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
-        echo "Protocol selection:"
-        select protocol in "tcp" "udp" "both"; do
-            if [ -n "$protocol" ]; then break; fi
-        done
-        
-        local cmd=""
-        case $protocol in
-            "tcp")
-                cmd="sudo ufw $action $port/tcp"
-                ;;
-            "udp")
-                cmd="sudo ufw $action $port/udp"
-                ;;
-            "both")
-                cmd="sudo ufw $action $port"
-                ;;
-        esac
-        
-        read -p "Add comment (optional): " comment
-        if [ -n "$comment" ]; then
-            cmd+=" comment '$comment'"
-        fi
-        
-        execute_command "$cmd" "$action port $port ($protocol)" false
-    else
-        print_message "error" "Invalid port number (1-65535)"
-        sleep 2
-    fi
-}
-
-add_service_rule() {
-    echo -e "${COLORS[YELLOW]}Common services: ssh, http, https, ftp, smtp, pop3, imap${COLORS[NC]}"
-    echo -e "${COLORS[INFO]}Available services on system:${COLORS[NC]}"
-    grep -E '^[a-zA-Z]' /etc/services | head -10 | awk '{print $1}' | tr '\n' ' '
-    echo
-    echo
-    read -p "Enter service name: " service
-    
-    if [ -n "$service" ]; then
-        execute_command "sudo ufw allow $service" "Allow service: $service"
-    else
-        print_message "error" "Service name cannot be empty"
-        sleep 2
-    fi
-}
-
-add_ip_rule() {
-    echo -e "${COLORS[YELLOW]}${ICONS[QUESTION]} Enter IP address (e.g., 192.168.1.100):${COLORS[NC]}"
-    read -p "IP address: " ip
-    
-    # Validate IP address
-    if [[ $ip =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then
-        # Check if each octet is between 0 and 255
-        if (( ${BASH_REMATCH[1]} <= 255 && ${BASH_REMATCH[2]} <= 255 && ${BASH_REMATCH[3]} <= 255 && ${BASH_REMATCH[4]} <= 255 )); then
-            echo -e "${COLORS[CYAN]}${ICONS[SHIELD]} Rule type:${COLORS[NC]}"
-            echo "${ICONS[BULLET]} 1. Allow all traffic from this IP"
-            echo "${ICONS[BULLET]} 2. Allow specific port from this IP"
-            echo "${ICONS[BULLET]} 3. Block all traffic from this IP"
-            read -p "Choose (1-3): " ip_choice
-            
-            case $ip_choice in
-                1)
-                    execute_command "sudo ufw allow from $ip" "Allow all traffic from $ip"
-                    ;;
-                2)
-                    read -p "Enter port: " port
-                    if [[ $port =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )); then
-                        read -p "Protocol (tcp/udp, press Enter for tcp): " proto
-                        proto=${proto:-tcp}  # Default to tcp if empty
-                        if [[ "$proto" == "tcp" || "$proto" == "udp" ]]; then
-                            execute_command "sudo ufw allow from $ip to any port $port proto $proto" "Allow $ip to access port $port/$proto"
-                        else
-                            print_message "error" "Invalid protocol: must be tcp or udp"
-                        fi
-                    else
-                        print_message "error" "Invalid port: must be a number between 1 and 65535"
-                    fi
-                    ;;
-                3)
-                    execute_command "sudo ufw deny from $ip" "Block all traffic from $ip"
-                    ;;
-                *)
-                    print_message "error" "Invalid choice: must be 1, 2, or 3"
-                    ;;
-            esac
-        else
-            print_message "error" "Invalid IP address: each octet must be between 0 and 255"
-        fi
-    else
-        print_message "error" "Invalid IP address format: use xxx.xxx.xxx.xxx"
-    fi
-    
-    read -p "Press ENTER to continue..."
-}
-
-add_subnet_rule() {
-    echo -e "${COLORS[YELLOW]}Examples: 192.168.1.0/24, 10.0.0.0/8${COLORS[NC]}"
-    read -p "Enter subnet (CIDR notation): " subnet
-    
-    if [[ $subnet =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
-        execute_command "sudo ufw allow from $subnet" "Allow traffic from subnet $subnet"
-    else
-        print_message "error" "Invalid subnet format (use CIDR notation)"
-        sleep 2
-    fi
-}
-
-add_port_range_rule() {
-    echo -e "${COLORS[YELLOW]}Example: 8000:8010${COLORS[NC]}"
-    read -p "Enter port range (start:end): " port_range
-    
-    if [[ $port_range =~ ^[0-9]+:[0-9]+$ ]]; then
-        echo "Protocol:"
-        select protocol in "tcp" "udp"; do
-            if [ -n "$protocol" ]; then break; fi
-        done
-        
-        execute_command "sudo ufw allow $port_range/$protocol" "Allow port range $port_range ($protocol)"
-    else
-        print_message "error" "Invalid port range format (use start:end)"
-        sleep 2
-    fi
-}
-
-add_app_profile_rule() {
-    echo -e "${COLORS[CYAN]}Available application profiles:${COLORS[NC]}"
-    sudo ufw app list 2>/dev/null || {
-        print_message "error" "No application profiles available"
-        sleep 2
-        return
-    }
-    echo
-    read -p "Enter application profile name: " app_name
-    
-    if sudo ufw app info "$app_name" >/dev/null 2>&1; then
-        execute_command "sudo ufw allow '$app_name'" "Allow application profile: $app_name"
-    else
-        print_message "error" "Application profile not found"
-        sleep 2
-    fi
-}
-
-custom_rule_builder() {
-    echo -e "${COLORS[CYAN]}${ICONS[SHIELD]} === CUSTOM RULE BUILDER ===${COLORS[NC]}"
-    echo -e "${COLORS[YELLOW]}Build your custom UFW rule step by step${COLORS[NC]}"
-    echo
-    
-    local rule_parts=()
-    
-    # Action
-    echo "${ICONS[QUESTION]} 1. Select action:"
-    select action in "allow" "deny" "reject" "limit"; do
-        if [ -n "$action" ]; then
-            rule_parts+=("$action")
-            break
-        fi
-    done
-    
-    # Direction (optional)
-    echo -e "\n${ICONS[QUESTION]} 2. Direction (optional):"
-    select direction in "in" "out" "skip"; do
-        case $direction in
-            "in"|"out") rule_parts+=("$direction"); break ;;
-            "skip") break ;;
-        esac
-    done
-    
-    # Interface (optional)
-    read -p "\n${ICONS[QUESTION]} 3. Interface (optional, press Enter to skip): " interface
-    if [ -n "$interface" ]; then
-        rule_parts+=("on" "$interface")
-    fi
-    
-    # Protocol (optional) - Moved here to match UFW syntax order
-    echo -e "\n${ICONS[QUESTION]} 4. Protocol (optional):"
-    select proto in "tcp" "udp" "icmp" "esp" "ah" "skip"; do
-        case $proto in
-            "tcp"|"udp"|"icmp"|"esp"|"ah") rule_parts+=("proto" "$proto"); break ;;
-            "skip") break ;;
-        esac
-    done
-    
-    # From specification
-    read -p "\n${ICONS[QUESTION]} 5. From IP/subnet (optional, press Enter to skip): " from_spec
-    if [ -n "$from_spec" ]; then
-        # Basic validation for IP/subnet (IPv4 or CIDR)
-        if [[ $from_spec =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(/[0-9]{1,2})?$ ]]; then
-            rule_parts+=("from" "$from_spec")
-            read -p "${ICONS[QUESTION]} From port (optional, press Enter to skip): " from_port
-            if [ -n "$from_port" ]; then
-                if [[ $from_port =~ ^[0-9]+$ ]] && (( from_port >= 1 && from_port <= 65535 )); then
-                    rule_parts+=("port" "$from_port")
-                else
-                    print_message "error" "Invalid from port: must be a number between 1 and 65535"
-                    return 1
-                fi
-            fi
-        else
-            print_message "error" "Invalid from IP/subnet format (use xxx.xxx.xxx.xxx or xxx.xxx.xxx.xxx/xx)"
-            return 1
-        fi
-    fi
-    
-    # To specification
-    read -p "\n${ICONS[QUESTION]} 6. To IP/subnet (optional, press Enter for any): " to_spec
-    if [ -n "$to_spec" ]; then
-        # Basic validation for IP/subnet (IPv4 or CIDR)
-        if [[ $to_spec =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(/[0-9]{1,2})?$ ]]; then
-            rule_parts+=("to" "$to_spec")
-        else
-            print_message "error" "Invalid to IP/subnet format (use xxx.xxx.xxx.xxx or xxx.xxx.xxx.xxx/xx)"
-            return 1
-        fi
-    else
-        rule_parts+=("to" "any")
-    fi
-    
-    read -p "${ICONS[QUESTION]} To port (optional, press Enter to skip): " to_port
-    if [ -n "$to_port" ]; then
-        if [[ $to_port =~ ^[0-9]+$ ]] && (( to_port >= 1 && to_port <= 65535 )); then
-            rule_parts+=("port" "$to_port")
-        else
-            print_message "error" "Invalid to port: must be a number between 1 and 65535"
-            return 1
-        fi
-    fi
-    
-    # Comment
-    read -p "\n${ICONS[QUESTION]} 7. Comment (optional, press Enter to skip): " comment
-    if [ -n "$comment" ]; then
-        rule_parts+=("comment" "\"$comment\"")  # Use double quotes for comments with spaces
-    fi
-    
-    # Preview the rule
-    echo -e "\n${COLORS[CYAN]}${ICONS[INFO]} Preview of the rule:${COLORS[NC]}"
-    echo "sudo ufw ${rule_parts[*]}"
-    
-    # Confirm before execution
-    if confirm_action "Add this custom rule?"; then
-        local final_cmd="sudo ufw ${rule_parts[*]}"
-        execute_command "$final_cmd" "Custom UFW rule"
-    fi
-    
-    read -p "Press ENTER to continue..."
-}
-
-remove_rules() {
-    while true; do
-        print_header
-        echo -e "${COLORS[CYAN]}=== REMOVE FIREWALL RULES ===${COLORS[NC]}"
-        echo
-        
-        # Show current rules with proper formatting
-        echo -e "${COLORS[YELLOW]}Current rules:${COLORS[NC]}"
-        if ! sudo ufw status numbered | grep -q "^\["; then
-            print_message "info" "No numbered rules found"
-        else
-            sudo ufw status numbered
-        fi
-        echo
-        
-        echo "1. ${ICONS[ERROR]} Remove by rule number"
-        echo "2. ${ICONS[ERROR]} Remove by port"
-        echo "3. ${ICONS[ERROR]} Remove by service name"
-        echo "4. ${ICONS[ERROR]} Remove by IP address"
-        echo "5. ${ICONS[WARNING]} Remove multiple rules"
-        echo "6. ${ICONS[FIRE]} Remove all rules (reset)"
-        echo "7. ${ICONS[ARROW]} Return to main menu"
-        echo
-        read -p "Choose option (1-7): " choice
-        
-        case $choice in
-            1)
-                remove_by_number
-                ;;
-            2)
-                remove_by_port
-                ;;
-            3)
-                remove_by_service
-                ;;
-            4)
-                remove_by_ip
-                ;;
-            5)
-                remove_multiple_rules
-                ;;
-            6)
-                if confirm_action "Remove ALL rules? This will reset UFW completely!" 20 "n"; then
-                    execute_command "sudo ufw --force reset" "Remove all UFW rules" true
-                fi
-                ;;
-            7)
-                break
-                ;;
-            *)
-                print_message "error" "Invalid option"
-                sleep 1
-                ;;
-        esac
-    done
-}
-
-remove_by_number() {
-    echo -e "${COLORS[CYAN]}Current numbered rules:${COLORS[NC]}"
-    sudo ufw status numbered
-    echo
-    
-    read -p "Enter rule number to remove: " rule_num
-    
-    if [[ $rule_num =~ ^[0-9]+$ ]]; then
-        # Show the rule that will be deleted - fixed regex pattern
-        echo -e "${COLORS[YELLOW]}Rule to be removed:${COLORS[NC]}"
-        local rule_line=$(sudo ufw status numbered | grep "^\[ *$rule_num\]")
-        if [ -n "$rule_line" ]; then
-            echo "$rule_line"
-            echo
-            execute_command "sudo ufw delete $rule_num" "Remove rule number $rule_num" true
-        else
-            print_message "error" "Rule number $rule_num not found"
-            sleep 2
-            return
-        fi
-    else
-        print_message "error" "Invalid rule number"
-        sleep 2
-    fi
-}
-
-remove_by_port() {
-    echo -e "${COLORS[CYAN]}Current rules:${COLORS[NC]}"
-    sudo ufw status numbered
-    echo
-    
-    read -p "Enter port number: " port
-    
-    if [[ $port =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
-        echo "Select protocol and action:"
-        echo "1. Remove TCP allow rule for port $port"
-        echo "2. Remove UDP allow rule for port $port"  
-        echo "3. Remove both TCP and UDP allow rules for port $port"
-        echo "4. Remove TCP deny rule for port $port"
-        echo "5. Remove UDP deny rule for port $port"
-        echo "6. Remove all rules (allow/deny) for port $port"
-        
-        read -p "Choose option (1-6): " port_choice
-        
-        case $port_choice in
-            1)
-                execute_command "sudo ufw delete allow $port/tcp" "Remove TCP allow rule for port $port" true
-                ;;
-            2)
-                execute_command "sudo ufw delete allow $port/udp" "Remove UDP allow rule for port $port" true
-                ;;
-            3)
-                execute_command "sudo ufw delete allow $port" "Remove allow rules for port $port" true
-                ;;
-            4)
-                execute_command "sudo ufw delete deny $port/tcp" "Remove TCP deny rule for port $port" true
-                ;;
-            5)
-                execute_command "sudo ufw delete deny $port/udp" "Remove UDP deny rule for port $port" true
-                ;;
-            6)
-                if confirm_action "Remove ALL rules for port $port?"; then
-                    sudo ufw delete allow $port 2>/dev/null || true
-                    sudo ufw delete deny $port 2>/dev/null || true
-                    sudo ufw delete reject $port 2>/dev/null || true
-                    print_message "success" "All rules for port $port removed"
-                fi
-                ;;
-            *)
-                print_message "error" "Invalid choice"
-                ;;
-        esac
-    else
-        print_message "error" "Invalid port number (must be 1-65535)"
-        sleep 2
-    fi
-}
-
-remove_by_service() {
-    read -p "Enter service name: " service
-    
-    if [ -n "$service" ]; then
-        execute_command "sudo ufw delete allow $service" "Remove rule for service $service"
-    else
-        print_message "error" "Service name cannot be empty"
-        sleep 2
-    fi
-}
-
-remove_by_ip() {
-    read -p "Enter IP address: " ip
-    
-    if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-        execute_command "sudo ufw delete allow from $ip" "Remove rules for IP $ip"
-    else
-        print_message "error" "Invalid IP address"
-        sleep 2
-    fi
-}
-
-remove_multiple_rules() {
-    echo -e "${COLORS[CYAN]}Current numbered rules:${COLORS[NC]}"
-    sudo ufw status numbered
-    echo
-    
-    echo -e "${COLORS[YELLOW]}${ICONS[QUESTION]} Enter rule numbers separated by spaces (e.g., 1 3 5):${COLORS[NC]}"
-    read -p "Rule numbers: " rule_numbers
-    
-    # Validate input
-    if [ -z "$rule_numbers" ]; then
-        print_message "error" "No rule numbers provided"
-        read -p "Press ENTER to continue..."
-        return 1
-    fi
-    
-    # Convert to array and sort in descending order (to maintain rule numbers during deletion)
-    local -a rules
-    read -ra rules <<< "$rule_numbers"
-    
-    # Sort in descending order
-    local IFS=$'\n'
-    rules=($(sort -nr <<<"${rules[*]}"))
-    unset IFS
-    
-    # Validate and display rules
-    local valid_rules=()
-    echo -e "${COLORS[CYAN]}${ICONS[SHIELD]} Rules to be removed:${COLORS[NC]}"
-    
-    for rule in "${rules[@]}"; do
-        # Skip empty values
-        if [ -z "$rule" ]; then
-            continue
-        fi
-        
-        if [[ ! $rule =~ ^[0-9]+$ ]]; then
-            print_message "warning" "Invalid rule number: $rule (must be numeric)"
-            continue
-        fi
-        
-        # Fixed pattern matching - look for rule number at start of line
-        local rule_line=$(sudo ufw status numbered | grep "^\[ *$rule\]")
-        if [ -n "$rule_line" ]; then
-            echo "${ICONS[BULLET]} $rule_line"
-            valid_rules+=("$rule")
-        else
-            print_message "warning" "Rule $rule not found"
-        fi
-    done
-    
-    # Check if there are valid rules to delete
-    if [ ${#valid_rules[@]} -eq 0 ]; then
-        print_message "error" "No valid rules to remove"
-        read -p "Press ENTER to continue..."
-        return 1
-    fi
-    
-    # Confirm and delete rules
-    echo
-    if confirm_action "Remove ${#valid_rules[@]} rule(s)?"; then
-        # Create backup before making changes
-        backup_configuration
-        
-        for rule in "${valid_rules[@]}"; do
-            echo "${ICONS[ARROW]} Removing rule $rule..."
-            if sudo ufw --force delete "$rule" 2>/dev/null; then
-                print_message "success" "Rule $rule removed successfully"
-                log_action "DELETE" "Removed UFW rule number $rule"
-            else
-                print_message "warning" "Failed to remove rule $rule"
-                log_action "ERROR" "Failed to remove UFW rule number $rule"
-            fi
-            
-            # Small delay to avoid issues with rapid deletions
-            sleep 0.5
-        done
-        print_message "success" "Multiple rule removal completed"
-    else
-        print_message "info" "Operation cancelled"
-    fi
-    
-    read -p "Press ENTER to continue..."
-}
-
-# =================== INITIALIZATION AND MAIN EXECUTION ===================
-
-# Signal handlers
-cleanup_and_exit() {
-    echo
-    print_message "info" "UFW Manager Professional terminated"
-    log_action "EXIT" "Script terminated by signal"
-    exit 0
-}
-
-# Set up signal handlers
-trap cleanup_and_exit SIGINT SIGTERM
-
-# Main initialization function
 initialize_script() {
-    # Create necessary directories
     setup_directories
-    
-    # Log script start
-    log_action "START" "UFW Manager Professional v${SCRIPT_VERSION:-1.0} started"
-    
-    # Check system requirements
+    log_action "START" "UFW Manager Professional v$SCRIPT_VERSION started"
     check_system_requirements
-    
-    # Show welcome message
-    print_message "success" "UFW Manager Professional v${SCRIPT_VERSION:-1.0} initialized successfully"
-    sleep 1
 }
 
-# =================== SCRIPT ENTRY POINT ===================
+# =================== MAIN EXECUTION ===================
 
 main() {
-    # Initialize the script
     initialize_script
-    
-    # Show main menu
     main_menu
 }
 
-# Execute the main function
+# Execute main function
 main "$@"
