@@ -5,6 +5,18 @@
 
 set -euo pipefail
 
+# Color codes
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+CYAN_BOLD='\033[1;36m'
+WHITE='\033[1;37m'
+GRAY='\033[0;37m'
+NC='\033[0m' # No Color
+
 # Check if whiptail is available
 if ! command -v whiptail >/dev/null 2>&1; then
     echo "Error: 'whiptail' is required but not installed."
@@ -595,6 +607,66 @@ show_status() {
              --scrolltext
 }
 
+show_manual_commands() {
+    clear
+    echo
+    echo -e "${CYAN_BOLD}╔══════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN_BOLD}║${NC}                    ${WHITE}Manual LUKS Commands Reference ${NC}                   ${CYAN_BOLD}║${NC}"
+    echo -e "${CYAN_BOLD}╚══════════════════════════════════════════════════════════════════════╝${NC}"
+    echo
+    
+    echo -e "${YELLOW}CREATE CONTAINER:${NC}"
+    echo -e "${GREEN}# Create 500MB file${NC}"
+    echo -e "${WHITE}truncate -s 500M container.luks${NC}"
+    echo -e "${GREEN}# Setup loop device${NC}"
+    echo -e "${WHITE}sudo losetup --find --show container.luks${NC}"
+    echo -e "${GREEN}# Format with LUKS (replace /dev/loopX with actual device)${NC}"
+    echo -e "${WHITE}sudo cryptsetup luksFormat /dev/loopX${NC}"
+    echo -e "${GREEN}# Open container${NC}"
+    echo -e "${WHITE}sudo cryptsetup open /dev/loopX my_container${NC}"
+    echo -e "${GREEN}# Create filesystem${NC}"
+    echo -e "${WHITE}sudo mkfs.ext4 /dev/mapper/my_container${NC}"
+    echo
+    
+    echo -e "${YELLOW}MOUNT EXISTING:${NC}"
+    echo -e "${GREEN}# Setup loop device${NC}"
+    echo -e "${WHITE}sudo losetup --find --show container.luks${NC}"
+    echo -e "${GREEN}# Open LUKS (replace /dev/loopX)${NC}"
+    echo -e "${WHITE}sudo cryptsetup open /dev/loopX my_container${NC}"
+    echo -e "${GREEN}# Create mount point and mount${NC}"
+    echo -e "${WHITE}mkdir -p ~/mnt/secure${NC}"
+    echo -e "${WHITE}sudo mount /dev/mapper/my_container ~/mnt/secure${NC}"
+    echo -e "${GREEN}# Fix permissions${NC}"
+    echo -e "${WHITE}sudo chown $REAL_USER:$REAL_USER ~/mnt/secure${NC}"
+    echo
+    
+    echo -e "${YELLOW}UNMOUNT:${NC}"
+    echo -e "${GREEN}# Unmount filesystem${NC}"
+    echo -e "${WHITE}sudo umount ~/mnt/secure${NC}"
+    echo -e "${GREEN}# Close LUKS${NC}"
+    echo -e "${WHITE}sudo cryptsetup close my_container${NC}"
+    echo -e "${GREEN}# Detach loop device (find with: losetup -a)${NC}"
+    echo -e "${WHITE}sudo losetup -d /dev/loopX${NC}"
+    echo
+    
+    echo -e "${YELLOW}USEFUL COMMANDS:${NC}"
+    echo -e "${GREEN}# List active loop devices${NC}"
+    echo -e "${WHITE}losetup -a${NC}"
+    echo -e "${GREEN}# List active LUKS mappings${NC}"
+    echo -e "${WHITE}ls -la /dev/mapper/${NC}"
+    echo -e "${GREEN}# Check LUKS status${NC}"
+    echo -e "${WHITE}sudo cryptsetup status my_container${NC}"
+    echo -e "${GREEN}# Check mount points${NC}"
+    echo -e "${WHITE}mount | grep mapper${NC}"
+    echo -e "${GREEN}# Force cleanup (if something is stuck)${NC}"
+    echo -e "${WHITE}sudo cryptsetup close my_container${NC}"
+    echo -e "${WHITE}sudo losetup -D  ${GREEN}# Detach all unused loop devices${NC}"
+    echo
+    
+    echo -e "${CYAN}Press Enter to continue...${NC}"
+    read
+}
+
 show_menu() {
     local container_count=0
     if [ -s "$STATE_FILE" ]; then
@@ -611,7 +683,8 @@ show_menu() {
                          "3" "Unmount container" \
                          "4" "Delete container (⚠ destroys data)" \
                          "5" "Show container status" \
-                         "6" "Exit" 3>&1 1>&2 2>&3) || break
+                         "6" "Show manual commands" \
+                         "7" "Exit" 3>&1 1>&2 2>&3) || break
         
         case "$choice" in
             1) create_container ;;
@@ -619,7 +692,8 @@ show_menu() {
             3) unmount_container ;;
             4) delete_container ;;
             5) show_status ;;
-            6) break ;;
+            6) show_manual_commands ;;
+            7) break ;;
         esac
         
         # Update container count
