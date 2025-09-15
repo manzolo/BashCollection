@@ -1,7 +1,6 @@
 #!/bin/bash
-
-# Ubuntu USB Installer Script - Fixed Version
-# This script installs Ubuntu on a USB drive with proper GRUB configuration
+# Ubuntu USB Installer Script - Batch Configuration Version
+# This script installs Ubuntu on a USB drive with all configuration collected upfront
 
 # Colors for output
 RED='\033[0;31m'
@@ -10,26 +9,28 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Global variables
+# Global variables - Configuration will be collected upfront
 DEVICE=""
 EFI_PARTITION=""
 ROOT_PARTITION=""
 HOSTNAME="ubuntu-usb"
 USERNAME="ubuntu"
+USER_PASSWORD=""
+ROOT_PASSWORD=""
+SET_ROOT_PASSWORD=false
+UBUNTU_RELEASE="noble"
+INSTALL_DESKTOP=false
 
 # Function to print colored output
 print_status() {
     echo -e "${BLUE}[INFO]${NC} $1"
 }
-
 print_success() {
     echo -e "${GREEN}[SUCCESS]${NC} $1"
 }
-
 print_warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
 }
-
 print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
@@ -72,8 +73,11 @@ get_block_devices() {
     done
 }
 
-# Select target device
-select_device() {
+# Collect all configuration upfront
+collect_all_configuration() {
+    print_status "Collecting full configuration..."
+    
+    # 1. Select target device
     local devices=()
     
     print_status "Scanning for available devices..."
@@ -87,8 +91,8 @@ select_device() {
         exit 1
     fi
     
-    DEVICE=$(whiptail --title "Select Target Device" \
-        --menu "Choose the device to install Ubuntu on:\n\nWARNING: ALL DATA WILL BE ERASED!" \
+    DEVICE=$(whiptail --title "1/7 - Select Target Device" \
+        --menu "Choose the device to install Ubuntu on:\n\n⚠️  WARNING: ALL DATA WILL BE ERASED!" \
         20 80 10 "${devices[@]}" 3>&1 1>&2 2>&3)
     
     if [ $? -ne 0 ]; then
@@ -96,15 +100,169 @@ select_device() {
         exit 1
     fi
     
-    # Final confirmation
-    whiptail --title "⚠️  WARNING  ⚠️" \
-        --yesno "ALL DATA ON $DEVICE WILL BE PERMANENTLY DESTROYED!\n\nAre you absolutely sure?" \
+    # 2. Final device confirmation
+    whiptail --title "⚠️  DEVICE CONFIRMATION  ⚠️" \
+        --yesno "ALL DATA ON $DEVICE WILL BE PERMANENTLY DESTROYED!\n\nAre you absolutely sure you want to continue?" \
         10 60
     
     if [ $? -ne 0 ]; then
         print_error "Operation cancelled."
         exit 1
     fi
+    
+    # 3. Ubuntu release selection
+    UBUNTU_RELEASE=$(whiptail --title "2/7 - Ubuntu Version" \
+        --menu "Choose the Ubuntu version to install:" \
+        15 60 4 \
+        "noble" "24.04 LTS (Noble Numbat) - Recommended" \
+        "jammy" "22.04 LTS (Jammy Jellyfish)" \
+        "mantic" "23.10 (Mantic Minotaur)" 3>&1 1>&2 2>&3)
+    
+    if [ $? -ne 0 ]; then
+        UBUNTU_RELEASE="noble"
+        print_status "Using default version: Ubuntu 24.04 LTS (Noble)"
+    fi
+    
+    # 4. Desktop environment
+    whiptail --title "3/7 - Desktop Environment" \
+        --yesno "Do you want to install the Ubuntu desktop environment (GNOME)?\n\n• YES: Full system with graphical interface (~2GB additional)\n• NO: Command-line base system only\n\nInstall the desktop?" \
+        12 70
+    
+    if [ $? -eq 0 ]; then
+        INSTALL_DESKTOP=true
+        print_status "Desktop environment will be installed"
+    else
+        INSTALL_DESKTOP=false
+        print_status "Base system only will be installed"
+    fi
+    
+    # 5. System hostname
+    HOSTNAME=$(whiptail --title "4/7 - System Hostname" \
+        --inputbox "Enter the system hostname:" \
+        10 50 "ubuntu-usb" 3>&1 1>&2 2>&3)
+    
+    if [ $? -ne 0 ] || [ -z "$HOSTNAME" ]; then
+        HOSTNAME="ubuntu-usb"
+        print_status "Using default hostname: ubuntu-usb"
+    fi
+    
+    # 6. Username
+    USERNAME=$(whiptail --title "5/7 - Username" \
+        --inputbox "Enter the username:" \
+        10 50 "ubuntu" 3>&1 1>&2 2>&3)
+    
+    if [ $? -ne 0 ] || [ -z "$USERNAME" ]; then
+        USERNAME="ubuntu"
+        print_status "Using default username: ubuntu"
+    fi
+    
+    # 7. User password
+    local password_set=false
+    while [ "$password_set" = false ]; do
+        USER_PASSWORD=$(whiptail --title "6/7 - User Password" \
+            --passwordbox "Enter the password for user $USERNAME:" \
+            10 60 3>&1 1>&2 2>&3)
+    
+        if [ $? -ne 0 ]; then
+            print_error "Password is required to continue."
+            exit 1
+        fi
+    
+        if [ -z "$USER_PASSWORD" ]; then
+            whiptail --title "Error" --msgbox "Password cannot be empty!" 8 40
+            continue
+        fi
+    
+        local password_confirm=$(whiptail --title "6/7 - Confirm Password" \
+            --passwordbox "Confirm the password for $USERNAME:" \
+            10 60 3>&1 1>&2 2>&3)
+    
+        if [ "$USER_PASSWORD" = "$password_confirm" ]; then
+            print_success "User password configured"
+            password_set=true
+        else
+            whiptail --title "Error" --msgbox "Passwords do not match! Please try again." 8 40
+        fi
+    done
+    
+    # 8. Root password (optional)
+    whiptail --title "7/7 - Root Password" \
+        --yesno "Do you want to set a password for the root user?\n\n• YES: You will be able to log in as root\n• NO: Root will be disabled (use sudo)\n\nRecommended: NO for better security\n\nSet root password?" \
+        14 70
+    
+    if [ $? -eq 0 ]; then
+        SET_ROOT_PASSWORD=true
+        local root_password_set=false
+        
+        while [ "$root_password_set" = false ]; do
+            ROOT_PASSWORD=$(whiptail --title "7/7 - Root Password" \
+                --passwordbox "Enter the password for root:" \
+                10 60 3>&1 1>&2 2>&3)
+        
+            if [ $? -ne 0 ]; then
+                # User cancelled, ask if they want to skip
+                whiptail --title "Skip Root Password?" \
+                    --yesno "Do you want to skip setting the root password?\nRoot will be disabled." \
+                    10 50
+                if [ $? -eq 0 ]; then
+                    SET_ROOT_PASSWORD=false
+                    break
+                else
+                    continue
+                fi
+            fi
+        
+            if [ -n "$ROOT_PASSWORD" ]; then
+                local root_confirm=$(whiptail --title "7/7 - Confirm Root Password" \
+                    --passwordbox "Confirm the password for root:" \
+                    10 60 3>&1 1>&2 2>&3)
+            
+                if [ "$ROOT_PASSWORD" = "$root_confirm" ]; then
+                    print_success "Root password configured"
+                    root_password_set=true
+                else
+                    whiptail --title "Error" --msgbox "Passwords do not match! Please try again." 8 40
+                fi
+            else
+                whiptail --title "Error" --msgbox "Password cannot be empty!" 8 40
+            fi
+        done
+    else
+        SET_ROOT_PASSWORD=false
+        print_status "Root will be disabled"
+    fi
+}
+
+# Show configuration summary and final confirmation
+show_configuration_summary() {
+    local desktop_text="NO - Base system only"
+    if [ "$INSTALL_DESKTOP" = true ]; then
+        desktop_text="YES - Ubuntu Desktop (GNOME)"
+    fi
+    
+    local root_text="NO - Root disabled"
+    if [ "$SET_ROOT_PASSWORD" = true ]; then
+        root_text="YES - Password set"
+    fi
+    
+    # Convert release codename to readable version
+    local release_text="$UBUNTU_RELEASE"
+    case "$UBUNTU_RELEASE" in
+        "noble") release_text="Ubuntu 24.04 LTS (Noble)" ;;
+        "jammy") release_text="Ubuntu 22.04 LTS (Jammy)" ;;
+        "mantic") release_text="Ubuntu 23.10 (Mantic)" ;;
+    esac
+    
+    whiptail --title "🔍 CONFIGURATION SUMMARY" \
+        --yesno "Confirm the selected configuration:\n\n• Device: $DEVICE\n• Version: $release_text\n• Hostname: $HOSTNAME\n• Username: $USERNAME\n• Desktop: $desktop_text\n• Root Password: $root_text\n\n⚠️  The installation will now proceed automatically!\n\nContinue with the installation?" \
+        18 70
+    
+    if [ $? -ne 0 ]; then
+        print_error "Installation cancelled by user"
+        exit 1
+    fi
+    
+    print_success "Configuration confirmed. Starting automated installation..."
 }
 
 # Partition the device
@@ -162,21 +320,9 @@ mount_partitions() {
 install_base_system() {
     print_status "Installing Ubuntu base system (this will take time)..."
     
-    # Get Ubuntu release codename
-    local RELEASE=$(whiptail --title "Ubuntu Release" \
-        --menu "Choose Ubuntu release:" \
-        12 50 4 \
-        "noble" "24.04 LTS (Noble)" \
-        "jammy" "22.04 LTS (Jammy)" \
-        "mantic" "23.10 (Mantic)" 3>&1 1>&2 2>&3)
-    
-    if [ $? -ne 0 ]; then
-        RELEASE="noble"
-    fi
-    
     sudo debootstrap --arch=amd64 \
         --include=linux-image-generic,grub-efi-amd64,grub-efi-amd64-signed,shim-signed \
-        "$RELEASE" /mnt/usb-install http://archive.ubuntu.com/ubuntu/
+        "$UBUNTU_RELEASE" /mnt/usb-install http://archive.ubuntu.com/ubuntu/
     
     print_success "Base system installed"
 }
@@ -195,17 +341,6 @@ setup_chroot() {
     sudo cp -L /etc/resolv.conf /mnt/usb-install/etc/resolv.conf
 }
 
-# Get user configuration
-get_user_config() {
-    HOSTNAME=$(whiptail --title "System Configuration" \
-        --inputbox "Enter hostname:" \
-        10 50 "ubuntu-usb" 3>&1 1>&2 2>&3) || HOSTNAME="ubuntu-usb"
-    
-    USERNAME=$(whiptail --title "System Configuration" \
-        --inputbox "Enter username:" \
-        10 50 "ubuntu" 3>&1 1>&2 2>&3) || USERNAME="ubuntu"
-}
-
 # Configure system
 configure_system() {
     print_status "Configuring system..."
@@ -217,7 +352,6 @@ configure_system() {
     # Create configuration script
     cat > /tmp/chroot_config.sh << CHROOT_SCRIPT
 #!/bin/bash
-
 export DEBIAN_FRONTEND=noninteractive
 export LC_ALL=C
 
@@ -323,29 +457,24 @@ update-grub
 cat > /boot/efi/EFI/BOOT/grub.cfg << GRUBCFG
 set timeout=10
 set default=0
-
 # Search for root partition
 search --no-floppy --fs-uuid --set=root $ROOT_UUID
-
 # Load modules
 insmod gzio
 insmod part_gpt
 insmod ext2
-
 # Main entry
 menuentry "Ubuntu USB" {
     search --no-floppy --fs-uuid --set=root $ROOT_UUID
     linux /boot/vmlinuz root=UUID=$ROOT_UUID ro quiet splash
     initrd /boot/initrd.img
 }
-
 # Recovery mode
 menuentry "Ubuntu USB (Recovery Mode)" {
     search --no-floppy --fs-uuid --set=root $ROOT_UUID
     linux /boot/vmlinuz root=UUID=$ROOT_UUID ro recovery nomodeset
     initrd /boot/initrd.img
 }
-
 # UEFI Firmware Settings
 if [ "\\\${grub_platform}" = "efi" ]; then
     menuentry "System Setup" {
@@ -367,10 +496,9 @@ EOF
 
 # Clean apt cache
 apt-get clean
-
 echo "System configuration completed"
 CHROOT_SCRIPT
-    
+
     # Execute configuration script
     chmod +x /tmp/chroot_config.sh
     sudo cp /tmp/chroot_config.sh /mnt/usb-install/tmp/
@@ -379,14 +507,10 @@ CHROOT_SCRIPT
     print_success "System configured"
 }
 
-# Install desktop environment (optional)
+# Install desktop environment
 install_desktop() {
-    whiptail --title "Desktop Environment" \
-        --yesno "Install Ubuntu Desktop (GNOME)?\n\nThis will take additional time and ~2GB space." \
-        10 60
-    
-    if [ $? -eq 0 ]; then
-        print_status "Installing Ubuntu Desktop..."
+    if [ "$INSTALL_DESKTOP" = true ]; then
+        print_status "Installing Ubuntu Desktop (this will take additional time)..."
         
         cat > /tmp/install_desktop.sh << 'DESKTOP_SCRIPT'
 #!/bin/bash
@@ -402,66 +526,26 @@ DESKTOP_SCRIPT
         
         print_success "Desktop installed"
     else
-        print_status "Skipping desktop installation"
+        print_status "Skipping desktop installation (system base only)"
     fi
 }
 
 # Set passwords
 set_passwords() {
-    # Set user password
-    print_status "Setting password for user: $USERNAME"
+    print_status "Setting user password for: $USERNAME"
     
-    local password_set=false
-    while [ "$password_set" = false ]; do
-        PASSWORD=$(whiptail --title "User Password" \
-            --passwordbox "Enter password for $USERNAME:" \
-            10 50 3>&1 1>&2 2>&3)
-        
-        if [ $? -ne 0 ]; then
-            print_warning "Password is required. Please set a password."
-            continue
-        fi
-        
-        PASSWORD_CONFIRM=$(whiptail --title "Confirm Password" \
-            --passwordbox "Confirm password:" \
-            10 50 3>&1 1>&2 2>&3)
-        
-        if [ "$PASSWORD" = "$PASSWORD_CONFIRM" ]; then
-            echo "$USERNAME:$PASSWORD" | sudo chroot /mnt/usb-install chpasswd
-            print_success "User password set"
-            password_set=true
-        else
-            whiptail --title "Error" --msgbox "Passwords don't match!" 8 40
-        fi
-    done
+    # Set user password (already collected)
+    echo "$USERNAME:$USER_PASSWORD" | sudo chroot /mnt/usb-install chpasswd
+    print_success "User password set"
     
-    # Root password (optional)
-    whiptail --title "Root Password" \
-        --yesno "Set a root password?\n\nIf not, root will be disabled (use sudo)." \
-        10 60
-    
-    if [ $? -eq 0 ]; then
+    # Set or disable root password based on configuration
+    if [ "$SET_ROOT_PASSWORD" = true ]; then
         print_status "Setting root password..."
-        local root_set=false
-        while [ "$root_set" = false ]; do
-            ROOT_PASS=$(whiptail --title "Root Password" \
-                --passwordbox "Enter root password:" \
-                10 50 3>&1 1>&2 2>&3)
-            
-            if [ $? -eq 0 ] && [ -n "$ROOT_PASS" ]; then
-                echo "root:$ROOT_PASS" | sudo chroot /mnt/usb-install chpasswd
-                print_success "Root password set"
-                root_set=true
-            else
-                whiptail --title "Skip?" --yesno "Skip root password?" 8 40
-                if [ $? -eq 0 ]; then
-                    break
-                fi
-            fi
-        done
+        echo "root:$ROOT_PASSWORD" | sudo chroot /mnt/usb-install chpasswd
+        print_success "Root password set"
     else
         sudo chroot /mnt/usb-install passwd -l root
-        print_status "Root account disabled"
+        print_success "Root account disabled (use sudo)"
     fi
 }
 
@@ -475,7 +559,6 @@ fix_grub_boot() {
     # Create comprehensive GRUB fix script
     cat > /tmp/fix_grub.sh << 'GRUBFIX'
 #!/bin/bash
-
 # Reinstall GRUB packages
 apt-get install --reinstall -y grub-efi-amd64 grub-efi-amd64-signed shim-signed
 
@@ -509,10 +592,9 @@ done
 
 # Update GRUB
 update-grub
-
 echo "GRUB fixes applied"
 GRUBFIX
-    
+
     chmod +x /tmp/fix_grub.sh
     sudo cp /tmp/fix_grub.sh /mnt/usb-install/tmp/
     sudo chroot /mnt/usb-install /tmp/fix_grub.sh
@@ -541,13 +623,14 @@ cleanup() {
     print_success "Cleanup completed"
 }
 
-# Test with QEMU
+# Test with QEMU (optional)
 test_with_qemu() {
     if ! command -v qemu-system-x86_64 &> /dev/null; then
-        whiptail --title "QEMU Not Found" \
-            --yesno "Install QEMU for testing?" 10 50
+        whiptail --title "Test with QEMU" \
+            --yesno "QEMU is not installed. Do you want to install it to test the USB?\n\nThis is an optional step." 10 60
         
         if [ $? -eq 0 ]; then
+            print_status "Installing QEMU..."
             sudo apt update
             sudo apt install -y qemu-system-x86 ovmf
         else
@@ -586,30 +669,23 @@ test_with_qemu() {
 # Main installation
 main() {
     clear
-    echo "================================"
-    echo "  Ubuntu USB Installer - Fixed  "
-    echo "================================"
+    echo "========================================"
+    echo "  Ubuntu USB Installer - Batch Config  "
+    echo "========================================"
     echo ""
     
     check_root
     check_dependencies
     
-    # Get configuration
-    select_device
-    get_user_config
+    # Collect ALL configuration upfront
+    collect_all_configuration
     
-    # Confirm installation
-    whiptail --title "Confirm Installation" \
-        --yesno "Ready to install:\n\nDevice: $DEVICE\nHostname: $HOSTNAME\nUsername: $USERNAME\n\nContinue?" \
-        12 60
+    # Show summary and get final confirmation
+    show_configuration_summary
     
-    if [ $? -ne 0 ]; then
-        print_error "Installation cancelled"
-        exit 1
-    fi
-    
-    # Installation steps
-    print_status "Starting installation..."
+    # Installation steps - now fully automated
+    print_status "🚀 Starting automated installation process..."
+    echo ""
     
     partition_device
     format_partitions
@@ -622,25 +698,31 @@ main() {
     fix_grub_boot
     cleanup
     
-    # Success message
-    whiptail --title "✅ Installation Complete!" \
-        --msgbox "Ubuntu successfully installed on $DEVICE!\n\nTo boot:\n1. Restart computer\n2. Access boot menu (F12/F8/ESC)\n3. Select USB device\n4. Choose 'Ubuntu USB' from GRUB\n\nIf you see 'grub>' prompt:\n> configfile (hd0,gpt1)/EFI/BOOT/grub.cfg" \
-        18 70
+    # Success message with more details
+    local desktop_info=""
+    if [ "$INSTALL_DESKTOP" = true ]; then
+        desktop_info="\n\nAfter the first boot:\n• Login: $USERNAME\n• Environment: Ubuntu Desktop (GNOME)"
+    else
+        desktop_info="\n\nAfter the first boot:\n• Login: $USERNAME\n• System: Command-line only"
+    fi
     
-    # Offer testing
+    whiptail --title "✅ INSTALLATION COMPLETED!" \
+        --msgbox "Ubuntu has been successfully installed on $DEVICE!$desktop_info\n\nTo boot:\n1. Restart your computer\n2. Access the boot menu (F12/F8/ESC/F2)\n3. Select the USB device\n4. Choose 'Ubuntu USB' from GRUB\n" \
+        22 80
+    
+    # Optional testing
     whiptail --title "Test Installation" \
-        --yesno "Test the installation with QEMU?" \
-        8 50
+        --yesno "Do you want to test the installation with QEMU?\n\n(Optional - you can also test directly by rebooting)" \
+        10 70
     
     if [ $? -eq 0 ]; then
         test_with_qemu
     fi
     
-    print_success "All done! Your USB is ready to boot."
+    print_success "🎉 Installation completed! Your USB is ready to boot."
 }
 
 # Run main with error handling
 set +e  # Disable exit on error for proper error handling
 trap cleanup EXIT INT TERM
-
 main "$@"
