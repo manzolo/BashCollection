@@ -4,6 +4,42 @@ interactive_mode() {
         exit 1
     fi
     
+    # First, ask the user what type of chroot they want
+    local chroot_type
+    if chroot_type=$(dialog --title "Chroot Type Selection" \
+                           --menu "Select the type of chroot environment:" \
+                           15 60 4 \
+                           "physical" "Physical disk/partition chroot" \
+                           "image" "Virtual disk image chroot" \
+                           3>&1 1>&2 2>&3); then
+        case "$chroot_type" in
+            "image")
+                # Check if vchroot exists in PATH
+                if command -v vchroot &> /dev/null; then
+                    log "Launching virtual disk image chroot (vchroot)..."
+                    exec vchroot "$@"
+                elif [[ -x "$SCRIPT_DIR/virtual_chroot.sh" ]]; then
+                    log "Launching virtual disk image chroot (local script)..."
+                    exec "$SCRIPT_DIR/virtual_chroot.sh" "$@"
+                else
+                    dialog --title "Error" --msgbox "vchroot command not found in PATH and virtual_chroot.sh not found in script directory.\n\nPlease install vchroot or place virtual_chroot.sh in the same directory as this script." 12 60
+                    exit 1
+                fi
+                ;;
+            "physical")
+                # Continue with normal physical device chroot
+                ;;
+            *)
+                error "Unknown chroot type selected"
+                exit 1
+                ;;
+        esac
+    else
+        error "No chroot type selected or operation cancelled"
+        exit 1
+    fi
+    
+    # Continue with original physical device chroot logic
     if ! ROOT_DEVICE=$(select_device "Root" false); then
         error "No root device selected or operation cancelled"
         exit 1

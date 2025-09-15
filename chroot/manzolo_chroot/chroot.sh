@@ -10,6 +10,7 @@ setup_chroot() {
         return 1
     fi
 
+    # Handle boot partition mounting first, then EFI
     if [[ -n "$BOOT_PART" ]]; then
         if ! validate_filesystem "$BOOT_PART"; then
             return 1
@@ -19,28 +20,39 @@ setup_chroot() {
             return 1
         fi
 
+        # If we have both boot partition and EFI partition
         if [[ -n "$EFI_PART" ]]; then
             if ! validate_filesystem "$EFI_PART"; then
                 return 1
             fi
 
-            if [[ -d "$ROOT_MOUNT/boot/efi" ]]; then
-                if ! safe_mount "$EFI_PART" "$ROOT_MOUNT/boot/efi"; then
+            # Check if /boot/efi exists in the boot partition, if not create it
+            if [[ ! -d "$ROOT_MOUNT/boot/efi" ]]; then
+                debug "Creating /boot/efi directory in boot partition"
+                if ! run_with_privileges mkdir -p "$ROOT_MOUNT/boot/efi"; then
+                    error "Failed to create /boot/efi directory in boot partition"
                     return 1
                 fi
-            else
-                run_with_privileges mkdir -p "$ROOT_MOUNT/efi"
-                if ! safe_mount "$EFI_PART" "$ROOT_MOUNT/efi"; then
-                    return 1
-                fi
+            fi
+            
+            if ! safe_mount "$EFI_PART" "$ROOT_MOUNT/boot/efi"; then
+                return 1
             fi
         fi
 
     else
+        # No separate boot partition, mount EFI directly under /boot/efi
         if [[ -n "$EFI_PART" ]]; then
             if ! validate_filesystem "$EFI_PART"; then
                 return 1
             fi
+            
+            # Ensure /boot/efi exists in root filesystem
+            if ! run_with_privileges mkdir -p "$ROOT_MOUNT/boot/efi"; then
+                error "Failed to create /boot/efi directory in root filesystem"
+                return 1
+            fi
+            
             if ! safe_mount "$EFI_PART" "$ROOT_MOUNT/boot/efi"; then
                 return 1
             fi
