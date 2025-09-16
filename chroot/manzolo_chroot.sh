@@ -1,17 +1,19 @@
 #!/bin/bash
 
-# Advanced interactive chroot with enhanced features
-# Usage: ./manzolo_chroot.sh [OPTIONS]
+# Advanced Interactive Chroot Script
+# Supports both physical disks/partitions and virtual disk images
+# Usage: ./manzolo_unified_chroot.sh [OPTIONS]
 # Options:
 #   -c, --config FILE    Use configuration file
 #   -q, --quiet          Quiet mode (no dialog)
 #   -d, --debug          Debug mode
+#   -v, --virtual FILE   Direct virtual image mode
 #   -h, --help           Show help
 
 set -euo pipefail
 
 # Constants
-readonly ORIGINAL_USER="$USER"
+readonly ORIGINAL_USER="${USER:-root}"
 readonly SCRIPT_NAME=$(basename "$0")
 readonly SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
 readonly LOG_FILE="/tmp/${SCRIPT_NAME%.sh}.log"
@@ -30,9 +32,26 @@ EFI_PART=""
 BOOT_PART=""
 ADDITIONAL_MOUNTS=()
 MOUNTED_POINTS=()
+BIND_MOUNTS=()
 ENABLE_GUI_SUPPORT=false
 CHROOT_USER=""
-CHROOT_PROCESSES=()
+CUSTOM_SHELL="/bin/bash"
+PRESERVE_ENV=false
+
+# Virtual disk specific variables
+VIRTUAL_MODE=false
+VIRTUAL_IMAGE=""
+NBD_DEVICE=""
+LUKS_MAPPINGS=()
+ACTIVATED_VGS=()
+OPEN_LUKS_PARTS=()
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
 
 # Scan and "source" .sh file recursive.
 for script in "$SCRIPT_DIR/manzolo_chroot/"*.sh; do
@@ -44,7 +63,6 @@ for script in "$SCRIPT_DIR/manzolo_chroot/"*.sh; do
     fi
 done
 
-# Parse command line arguments
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -61,6 +79,11 @@ parse_args() {
                 DEBUG_MODE=true
                 shift
                 ;;
+            -v|--virtual)
+                VIRTUAL_MODE=true
+                VIRTUAL_IMAGE="$2"
+                shift 2
+                ;;
             -h|--help)
                 show_help
                 exit 0
@@ -74,13 +97,13 @@ parse_args() {
     done
 }
 
-# Main function
 main() {
     : > "$LOG_FILE"
-    log "Starting $SCRIPT_NAME v2.1"
+    log "Starting Unified Chroot Script v3.0"
     
     parse_args "$@"
     
+    # Check for existing instance
     if [[ -f "$LOCK_FILE" ]]; then
         local pid=$(cat "$LOCK_FILE" 2>/dev/null || echo "")
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
@@ -92,39 +115,53 @@ main() {
         fi
     fi
     
-    echo $$ > "$LOCK_FILE"
+    echo $ > "$LOCK_FILE"
     
-    check_system_requirements
-    
+    # Set trap for cleanup
     trap cleanup EXIT INT TERM
     
+    # Check system requirements
+    check_system_requirements
+    
+    # Load config if specified
     load_config
     
-    if [[ "$QUIET_MODE" == false ]] && [[ "$USE_CONFIG" == false ]]; then
+    # Interactive mode if not quiet and no config
+    if [[ "$QUIET_MODE" == false ]] && [[ "$USE_CONFIG" == false ]] && [[ -z "$VIRTUAL_IMAGE" ]]; then
         if ! interactive_mode; then
             error "Interactive mode failed"
             exit 1
         fi
     fi
     
-    if [[ -z "$ROOT_DEVICE" ]]; then
-        error "ROOT_DEVICE not specified"
-        exit 1
+    # Validate we have what we need
+    if [[ "$VIRTUAL_MODE" == true ]]; then
+        if [[ -z "$VIRTUAL_IMAGE" ]]; then
+            error "Virtual mode selected but no image specified"
+            exit 1
+        fi
+    else
+        if [[ -z "$ROOT_DEVICE" ]]; then
+            error "ROOT_DEVICE not specified"
+            exit 1
+        fi
     fi
     
+    # Print configuration summary
     log "=== Configuration Summary ==="
-    log "  ROOT_DEVICE: $ROOT_DEVICE"
+    log "  Mode: $([ "$VIRTUAL_MODE" == true ] && echo "Virtual Disk" || echo "Physical Disk")"
+    [[ "$VIRTUAL_MODE" == true ]] && log "  Image: $VIRTUAL_IMAGE"
+    [[ -n "$ROOT_DEVICE" ]] && log "  ROOT_DEVICE: $ROOT_DEVICE"
     log "  ROOT_MOUNT: $ROOT_MOUNT"
     log "  EFI_PART: ${EFI_PART:-none}"
     log "  BOOT_PART: ${BOOT_PART:-none}"
     log "  GUI_SUPPORT: $ENABLE_GUI_SUPPORT"
     log "  CHROOT_USER: ${CHROOT_USER:-root}"
-    log "  ADDITIONAL_MOUNTS: ${#ADDITIONAL_MOUNTS[@]} configured"
     log "========================="
     
+    # Setup and enter chroot
     if setup_chroot; then
         setup_gui_support
-        create_summary_report
         enter_chroot
     else
         error "Failed to setup chroot environment"
@@ -132,10 +169,12 @@ main() {
     fi
     
     if [[ "$QUIET_MODE" == false ]]; then
-        dialog --title "Complete" --msgbox "Chroot session ended successfully.\n\nAll mount points have been cleaned up gracefully.\n\nSummary report: /tmp/${SCRIPT_NAME%.sh}_summary.log" 12 60
+        success "Chroot session ended successfully"
+        echo "All mount points have been cleaned up gracefully."
     fi
     
     log "Script completed successfully"
 }
 
+# Run main function
 main "$@"

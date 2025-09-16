@@ -16,11 +16,7 @@ run_with_privileges() {
     local exit_code=$?
     
     if [[ $exit_code -ne 0 ]]; then
-        error "Failed to execute privileged command: $*"
-        if [[ "$QUIET_MODE" == false ]]; then
-            echo "Press Enter to continue..."
-            read -r dummy_input || true
-        fi
+        debug "Failed to execute privileged command: $*"
         return 1
     fi
     return 0

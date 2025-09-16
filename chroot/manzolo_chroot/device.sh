@@ -1,4 +1,3 @@
-# Enhanced device detection
 get_devices() {
     debug "Detecting available devices"
     local devices
@@ -17,7 +16,6 @@ get_devices() {
     echo "$devices"
 }
 
-# Interactive device selection
 select_device() {
     local device_type="$1"
     local allow_skip="$2"

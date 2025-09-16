@@ -1,4 +1,3 @@
-# Find processes using a mount point
 find_processes_using_mount() {
     local mount_point="$1"
     local processes=()
@@ -128,48 +127,50 @@ find_chroot_processes() {
     printf '%s\n' "${processes[@]}"
 }
 
-# Terminate all chroot processes gracefully
 terminate_chroot_processes() {
-    local processes
-    processes=($(find_chroot_processes))
-    
-    if [[ ${#processes[@]} -eq 0 ]]; then
-        debug "No chroot processes found"
-        return 0
-    fi
-    
-    log "Found ${#processes[@]} chroot processes to terminate"
-    local success=true
-    
-    for process in "${processes[@]}"; do
-        local pid="${process%%:*}"
-        local cmd="${process#*:}"
-        if kill -0 "$pid" 2>/dev/null; then
-            log "Sending SIGTERM to chroot process $pid ($cmd)"
-            kill -TERM "$pid" 2>/dev/null || { warning "Failed to send SIGTERM to $pid"; success=false; }
+    local chroot_path
+    chroot_path=$(realpath "$ROOT_MOUNT" 2>/dev/null || echo "$ROOT_MOUNT")
+
+    debug "Scanning for processes inside chroot: $chroot_path"
+
+    local processes_found=0
+    for pid_dir in /proc/[0-9]*; do
+        pid=${pid_dir#/proc/}
+        
+        # Check if chroot process
+        local proc_root
+        proc_root=$(readlink "$pid_dir/root" 2>/dev/null || true)
+        
+        if [[ "$proc_root" == "$chroot_path" ]] || [[ "$proc_root" == $chroot_path/* ]]; then
+            local cmd
+            cmd=$(ps -o comm= -p "$pid" 2>/dev/null || echo "unknown")
+            log "Killing chroot process (TERM): $pid ($cmd)"
+            
+            # Send kill term
+            if kill -TERM "$pid" 2>/dev/null; then
+                processes_found=1
+            fi
         fi
     done
-    
-    sleep 3
-    
-    for process in "${processes[@]}"; do
-        local pid="${process%%:*}"
-        local cmd="${process#*:}"
-        if kill -0 "$pid" 2>/dev/null; then
-            warning "Chroot process $pid ($cmd) still running, sending SIGKILL"
-            kill -KILL "$pid" 2>/dev/null || { error "Failed to kill $pid"; success=false; }
-        else
-            debug "Chroot process $pid ($cmd) terminated gracefully"
-        fi
-    done
-    
-    sleep 1
-    
-    if [[ "$success" == true ]]; then
-        log "All chroot processes terminated"
-        return 0
-    else
-        error "Some chroot processes could not be terminated"
-        return 1
+
+    if [[ $processes_found -eq 1 ]]; then
+        sleep 1
+        for pid_dir in /proc/[0-9]*; do
+            pid=${pid_dir#/proc/}
+            
+            local proc_root
+            proc_root=$(readlink "$pid_dir/root" 2>/dev/null || true)
+
+            if [[ "$proc_root" == "$chroot_path" ]] || [[ "$proc_root" == $chroot_path/* ]]; then
+                if kill -0 "$pid" 2>/dev/null; then
+                    local cmd
+                    cmd=$(ps -o comm= -p "$pid" 2>/dev/null || echo "unknown")
+                    warning "Force killing stubborn chroot process (KILL): $pid ($cmd)"
+                    kill -KILL "$pid" 2>/dev/null || true
+                fi
+            fi
+        done
     fi
+
+    return 0
 }
