@@ -76,3 +76,29 @@ check_system_requirements() {
     
     log "System requirements check completed"
 }
+
+check_nixos_environment() {
+    local chroot_path="$1"
+    
+    debug "Checking if chroot is NixOS..."
+    
+    if [[ -f "$chroot_path/etc/NIXOS" ]] || [[ -d "$chroot_path/nix/store" ]]; then
+        log "NixOS detected in chroot environment"
+        
+        # Check for NixOS-specific shell paths
+        if [[ -d "$chroot_path/run/current-system/sw/bin" ]]; then
+            debug "NixOS system profile found"
+            return 0
+        fi
+        
+        if [[ -d "$chroot_path/nix/var/nix/profiles/system/sw/bin" ]]; then
+            debug "NixOS alternative profile found"  
+            return 0
+        fi
+        
+        warning "NixOS detected but system profile not found"
+        return 1
+    fi
+    
+    return 1
+}

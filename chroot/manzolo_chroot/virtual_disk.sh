@@ -1,3 +1,4 @@
+# Fix per setup_virtual_disk() - dare priorità ai LV invece che alle partizioni
 setup_virtual_disk() {
     local image_file="$1"
     
@@ -45,9 +46,12 @@ setup_virtual_disk() {
             # Detect partition types
             case "$fs_type" in
                 ext4|ext3|ext2|xfs|btrfs)
-                    local size_mb=$(lsblk -bno SIZE "$part" 2>/dev/null | awk '{print int($1/1024/1024)}')
-                    if [[ -z "$linux_part" ]] || (( size_mb > 500 )); then
+                    # NON dare priorità automaticamente alle partizioni ext4
+                    # Le useremo solo come fallback se non troviamo LV
+                    debug "Found ext4 partition: $part (size: $size)"
+                    if [[ -z "$linux_part" ]]; then
                         linux_part="$part"
+                        debug "Set as potential fallback root: $part"
                     fi
                     ;;
                 vfat)
@@ -73,6 +77,7 @@ setup_virtual_disk() {
     [[ -n "$luks_csv" ]] && log "LUKS partitions found: $luks_csv"
     [[ -n "$lvm_csv" ]] && log "LVM physical volumes found: $lvm_csv"
     
+    # Gestisci LUKS prima di tutto
     if [[ -n "$luks_csv" ]]; then
         handle_luks_open "$luks_csv"
     fi
@@ -80,27 +85,75 @@ setup_virtual_disk() {
     sudo partprobe 2>/dev/null || true
     sleep 1
     
+    # Gestisci LVM dopo LUKS
     handle_lvm_activate
     
-    if [[ -z "$linux_part" ]]; then
-        # Try to find root LV
-        local root_lv
-        root_lv=$(sudo lvs --noheadings -o lv_path 2>/dev/null | head -1 || true)
-        if [[ -n "$root_lv" ]]; then
-            linux_part="$root_lv"
-            log "Using logical volume as root: $linux_part"
-        fi
+    # ORA cerca il miglior candidato per root
+    # PRIORITÀ: 1. Logical Volume, 2. Partizione ext4
+    
+    local best_root_candidate=""
+    
+    # Prima priorità: cerca logical volume appropriato
+    if [[ ${#ACTIVATED_VGS[@]} -gt 0 ]]; then
+        log "Searching for root logical volume in activated VGs..."
+        
+        for vg in "${ACTIVATED_VGS[@]}"; do
+            [[ -z "$vg" ]] && continue
+            
+            local all_lvs
+            all_lvs=$(sudo lvs --noheadings -o lv_name,lv_size "$vg" 2>/dev/null || true)
+            
+            debug "Logical volumes in $vg:"
+            while IFS= read -r lv_line; do
+                [[ -z "$lv_line" ]] && continue
+                debug "  $lv_line"
+            done <<< "$all_lvs"
+            
+            # Cerca LV con nomi che indicano root
+            local root_lv_names
+            root_lv_names=$(sudo lvs --noheadings -o lv_path "$vg" 2>/dev/null | grep -E "(root|ubuntu|system)" || true)
+            
+            if [[ -n "$root_lv_names" ]]; then
+                local first_root_lv
+                first_root_lv=$(echo "$root_lv_names" | head -1 | awk '{print $1}')
+                if [[ -n "$first_root_lv" ]]; then
+                    best_root_candidate="$first_root_lv"
+                    log "Found root-like LV: $best_root_candidate"
+                    break
+                fi
+            fi
+            
+            # Se non trova LV con nome "root", prendi il più grande
+            if [[ -z "$best_root_candidate" ]]; then
+                local largest_lv
+                largest_lv=$(sudo lvs --noheadings -o lv_path,lv_size --units b "$vg" 2>/dev/null | \
+                           sort -k2 -nr | head -1 | awk '{print $1}' || true)
+                if [[ -n "$largest_lv" ]]; then
+                    best_root_candidate="$largest_lv"
+                    log "Using largest LV as root: $best_root_candidate"
+                    break
+                fi
+            fi
+        done
     fi
     
-    if [[ -z "$linux_part" ]]; then
-        error "No Linux partition found in virtual disk"
+    # Seconda priorità: usa partizione ext4 come fallback
+    if [[ -z "$best_root_candidate" ]] && [[ -n "$linux_part" ]]; then
+        best_root_candidate="$linux_part"
+        log "No logical volumes found, using ext4 partition as fallback: $best_root_candidate"
+    fi
+    
+    # Verifica finale
+    if [[ -z "$best_root_candidate" ]]; then
+        error "No suitable root device found in virtual disk"
+        error "Checked: LVM logical volumes, ext4 partitions"
         return 1
     fi
     
-    ROOT_DEVICE="$linux_part"
+    ROOT_DEVICE="$best_root_candidate"
     EFI_PART="$efi_part"
     
-    log "Linux partition found: $ROOT_DEVICE"
+    log "Selected root device: $ROOT_DEVICE"
     return 0
 }
 
