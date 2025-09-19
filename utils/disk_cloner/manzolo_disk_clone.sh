@@ -1,7 +1,6 @@
 #!/bin/bash
 
-# Simple Disk Cloner v2.2 - Enhanced with Physical to Physical Cloning
-# Now includes direct physical device cloning with optional UUID preservation
+# Manzolo Disk Cloner v2.3
 
 # Colors for output
 RED='\033[0;31m'
@@ -47,7 +46,7 @@ run_log() {
 }
 
 log "=============================="
-log "🚀 Clone Script v2.2 - started at $(date)"
+log "🚀 Clone Script v2.3 - started at $(date)"
 log "Logfile: $LOGFILE"
 log "=============================="
 
@@ -1399,10 +1398,10 @@ clone_physical_to_physical_simple() {
     
     local confirm_text
     confirm_text=$(dialog --clear --title "Final Confirmation" \
-        --inputbox "To proceed with this DESTRUCTIVE operation, type exactly: DESTROY DATA" 10 70 \
+        --inputbox "To proceed with this DESTRUCTIVE operation, type exactly: DESTROY" 10 70 \
         3>&1 1>&2 2>&3)
     
-    if [ "$confirm_text" != "DESTROY DATA" ]; then
+    if [ "$confirm_text" != "DESTROY" ]; then
         dialog --title "Cancelled" --msgbox "Operation cancelled - confirmation text did not match." 8 60
         return 1
     fi
@@ -1537,10 +1536,10 @@ clone_physical_to_physical_with_uuid() {
     
     local confirm_text
     confirm_text=$(dialog --clear --title "Final Safety Check" \
-        --inputbox "This will DESTROY all data on $target_device!\n\nTo confirm, type exactly: CLONE WITH UUID PRESERVATION" 12 80 \
+        --inputbox "This will DESTROY all data on $target_device!\n\nTo confirm, type exactly: CLONE" 12 80 \
         3>&1 1>&2 2>&3)
     
-    if [ "$confirm_text" != "CLONE WITH UUID PRESERVATION" ]; then
+    if [ "$confirm_text" != "CLONE" ]; then
         dialog --title "Cancelled" --msgbox "Operation cancelled - safety check failed." 8 60
         return 1
     fi
@@ -1981,7 +1980,7 @@ clone_virtual_to_virtual() {
 main_menu() {
     while true; do
         local choice
-        choice=$(dialog --clear --title "⚡ Simple Disk Cloner v2.3 ✨" \
+        choice=$(dialog --clear --title "⚡ Manzolo Disk Cloner v2.3 ✨" \
             --menu "Select cloning type:" 18 85 7 \
             "1" "📦 → 📼 Virtual to Physical" \
             "2" "📼 → 📦 Physical to Virtual" \
@@ -2001,8 +2000,8 @@ main_menu() {
             4) clone_physical_to_physical_simple ;;
             5) clone_physical_to_physical_with_uuid ;;
             6)
-                dialog --title "About Simple Disk Cloner v2.2 - Enhanced Edition" \
-                    --msgbox "🚀 FEATURES & ENHANCEMENTS:\n\n✓ Smart Cloning: Copies only used space\n✓ Physical to Physical: Direct device cloning\n✓ UUID Preservation: Maintains filesystem & partition UUIDs\n✓ Proportional Resize: Fits larger disks to smaller ones\n✓ LUKS Support: Safe encrypted partition handling\n✓ Safety Checks: Prevents system damage\n✓ Multiple Formats: qcow2, vmdk, vdi, raw, vhd\n\n🔧 PHYSICAL TO PHYSICAL MODES:\n\n• Simple Mode: Fast sector-by-sector copy\n• UUID Mode: Smart cloning with ID preservation\n  - Filesystem UUIDs maintained\n  - Partition UUIDs preserved\n  - Disk GUID maintained\n  - Bootloader compatibility\n\n⚡ Perfect for system migrations and disk upgrades!" 24 85
+                dialog --title "About Manzolo Disk Cloner v2.3" \
+                    --msgbox "🚀 FEATURES:\n\n✓ Smart Cloning: Copies only used space\n✓ Physical to Physical: Direct device cloning\n✓ UUID Preservation: Maintains filesystem & partition UUIDs\n✓ Proportional Resize: Fits larger disks to smaller ones\n✓ LUKS Support: Safe encrypted partition handling\n✓ Safety Checks: Prevents system damage\n✓ Multiple Formats: qcow2, vmdk, vdi, raw, vhd\n\n🔧 PHYSICAL TO PHYSICAL MODES:\n\n• Simple Mode: Fast sector-by-sector copy\n• UUID Mode: Smart cloning with ID preservation\n  - Filesystem UUIDs maintained\n  - Partition UUIDs preserved\n  - Disk GUID maintained\n  - Bootloader compatibility\n\n⚡ Perfect for system migrations and disk upgrades!" 24 85
                 ;;
             0|"") break ;;
         esac
@@ -2029,8 +2028,7 @@ check_optional_tools() {
 
 clear
 log "╔═══════════════════════════════════════╗"
-log "║   Simple Disk Cloner v2.2 - Enhanced  ║"
-log "║   🚀 Physical to Physical Support!    ║"
+log "║   🚀 Manzolo Disk Cloner v2.3 🚀      ║"
 log "╚═══════════════════════════════════════╝"
 
 check_optional_tools
