@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# USB Inspector v4.0
+# USB Inspector v4.1
 # Script to correctly identify USB disks and adapters with performance
 # Enhanced visual output with beautiful tables and colors
 # Author: Manzolo
@@ -67,18 +67,18 @@ draw_header_box() {
     echo -e "${LIGHT_CYAN}${BOTTOM_LEFT}$(printf '%.0s'"${HORIZONTAL}" $(seq 1 $((width-2))))${BOTTOM_RIGHT}${NC}"
 }
 
-# Function to determine USB version from speed
-get_usb_version() {
+# Function to determine USB version and theoretical speed
+get_usb_version_and_speed() {
     local speed=$1
     case $speed in
-        "1.5") echo "USB 1.0 (1.5 Mbps)" ;;
-        "12") echo "USB 1.1 (12 Mbps)" ;;
-        "480") echo "USB 2.0 (480 Mbps)" ;;
-        "5000") echo "USB 3.0 (5 Gbps)" ;;
-        "10000") echo "USB 3.1 Gen2 (10 Gbps)" ;;
-        "20000") echo "USB 3.2 (20 Gbps)" ;;
-        "40000") echo "USB 4.0 (40 Gbps)" ;;
-        *) echo "Unknown ($speed Mbps)" ;;
+        "1.5") echo "USB 1.0|1.5 Mbps|1.5" ;;
+        "12") echo "USB 1.1|12 Mbps|12" ;;
+        "480") echo "USB 2.0|480 Mbps|480" ;;
+        "5000") echo "USB 3.0|5 Gbps|5000" ;;
+        "10000") echo "USB 3.1 Gen2|10 Gbps|10000" ;;
+        "20000") echo "USB 3.2|20 Gbps|20000" ;;
+        "40000") echo "USB 4.0|40 Gbps|40000" ;;
+        *) echo "Unknown|Unknown|0" ;;
     esac
 }
 
@@ -263,7 +263,7 @@ get_device_type_and_icon() {
 # Header
 clear
 echo ""
-draw_header_box "USB INSPECTOR v4.0"
+draw_header_box "USB INSPECTOR v4.1"
 echo ""
 
 # Check dependencies
@@ -287,15 +287,15 @@ fi
 
 # USB Storage Devices Section
 echo -e "${BOLD}${LIGHT_CYAN}📦 DETECTED USB STORAGE DEVICES${NC}"
-draw_separator 80 "$LIGHT_CYAN"
+draw_separator 95 "$LIGHT_CYAN"
 echo ""
 
 # Storage table header
-printf "${BOLD}${WHITE}%-12s %-10s %-22s %-20s %-15s %s %s${NC}\n" \
-    "DEVICE" "CAPACITY" "USB VERSION" "MODEL" "MOUNT POINT" "PERF" "PERFORMANCE"
+printf "${BOLD}${WHITE}%-12s %-10s %-12s %-10s %-20s %-15s %-5s %s${NC}\n" \
+    "DEVICE" "CAPACITY" "USB VERSION" "T. SPEED" "MODEL" "MOUNT POINT" "PERF" "PERFORMANCE"
 
-printf "${DIM}%s %s %s %s %s %s %s${NC}\n" \
-    "────────────" "──────────" "──────────────────────" "────────────────────" "───────────────" "─────" "───────────────"
+printf "${DIM}%s %s %s %s %s %s %s %s${NC}\n" \
+    "────────────" "──────────" "────────────" "──────────" "────────────────────" "───────────────" "─────" "───────────────"
 
 # Array to store USB storage info
 declare -a usb_storage_devices
@@ -343,13 +343,13 @@ for device in /dev/sd* /dev/nvme*n*; do
         # USB information
         if [ ! -z "$usb_info" ]; then
             IFS=':' read -r vendor_id product_id speed <<< "$usb_info"
-            usb_version=$(get_usb_version "$speed")
+            IFS='|' read -r usb_version theoretical_speed speed_raw <<< "$(get_usb_version_and_speed "$speed")"
             speed_color=$(get_speed_color "$speed")
             
             # Performance test
             if [ "$EUID" -eq 0 ]; then
                 printf "${DIM}  Testing $device...${NC}\r"
-                performance=$(test_performance "$device" "$speed")
+                performance=$(test_performance "$device" "$speed_raw")
                 printf "                    \r"
             else
                 performance="${GRAY}N/A${NC}|${GRAY}Need sudo${NC}"
@@ -358,6 +358,7 @@ for device in /dev/sd* /dev/nvme*n*; do
             vendor_id="Unknown"
             product_id="Unknown"
             usb_version="Unknown"
+            theoretical_speed="N/A"
             speed_color="$GRAY"
             performance="N/A|N/A"
         fi
@@ -366,16 +367,17 @@ for device in /dev/sd* /dev/nvme*n*; do
         IFS='|' read -r perf_indicator perf_description <<< "$performance"
         
         # Print storage device row with reordered columns
-        printf "${BOLD}${WHITE}%-12s ${LIGHT_GREEN}%-10s ${speed_color}%-22s ${LIGHT_MAGENTA}%-20s ${LIGHT_CYAN}%-15s %-5s %-15s${NC}\n" \
+        printf "${BOLD}${WHITE}%-12s ${LIGHT_GREEN}%-10s ${speed_color}%-12s ${LIGHT_MAGENTA}%-10s ${LIGHT_BLUE}%-20s ${LIGHT_CYAN}%-15s %-5s %-15s${NC}\n" \
             "$device" \
             "$size" \
             "$usb_version" \
+            "$theoretical_speed" \
             "${model:0:20}" \
             "${mount_point:0:15}" \
             "$perf_indicator" \
             "$perf_description"
         
-        usb_storage_devices+=("$device|$vendor_id:$product_id|$model|$size|$usb_version|$mount_point|$performance")
+        usb_storage_devices+=("$device|$vendor_id:$product_id|$model|$size|$usb_version|$theoretical_speed|$mount_point|$performance")
     fi
 done
 
@@ -387,7 +389,7 @@ echo ""
 
 # USB Adapters and Other Devices Section
 echo -e "${BOLD}${YELLOW}🔌 DETECTED USB ADAPTERS & DEVICES${NC}"
-draw_separator 80 "$YELLOW"
+draw_separator 95 "$YELLOW"
 echo ""
 
 # Function to strip ANSI color codes for accurate length calculation
@@ -397,16 +399,18 @@ strip_ansi() {
 }
 
 # Table header
-printf "${BOLD}${WHITE}%-20s %-15s %-35s %-22s %-5s${NC}\n" \
-    "TYPE" "VENDOR:PRODUCT" "MODEL" "USB VERSION" "ICON"
+printf "${BOLD}${WHITE}%-20s %-15s %-30s %-12s %-10s %-15s %s${NC}\n" \
+    "TYPE" "VENDOR:PRODUCT" "MODEL" "USB VERSION" "T. SPEED" "DEVICE PATH" "ICON"
 
-printf "${DIM}%s %s %s %s %s${NC}\n" \
-    "────────────────────" "───────────────" "───────────────────────────────────" "──────────────────────" "─────"
+printf "${DIM}%s %s %s %s %s %s %s${NC}\n" \
+    "────────────────────" "───────────────" "──────────────────────────────" "────────────" "──────────" "───────────────" "─────"
 
 # Track what we've already shown as storage
 declare -A shown_devices
 
 lsusb | while IFS= read -r line; do
+    bus=$(echo "$line" | cut -d' ' -f2)
+    dev=$(echo "$line" | cut -d' ' -f4 | sed 's/://')
     vendor_id=$(echo "$line" | grep -oP 'ID \K[0-9a-f]{4}')
     product_id=$(echo "$line" | grep -oP 'ID [0-9a-f]{4}:\K[0-9a-f]{4}')
     description=$(echo "$line" | cut -d' ' -f7-)
@@ -420,20 +424,26 @@ lsusb | while IFS= read -r line; do
         continue
     fi
     
-    # Get USB speed
+    # Get USB speed and version
     speed=""
+    device_path_id="N/A"
     for dev_path in /sys/bus/usb/devices/*; do
         if [ -f "$dev_path/idVendor" ] && [ -f "$dev_path/idProduct" ]; then
             dev_vendor=$(cat "$dev_path/idVendor" 2>/dev/null)
             dev_product=$(cat "$dev_path/idProduct" 2>/dev/null)
             if [ "$dev_vendor" == "$vendor_id" ] && [ "$dev_product" == "$product_id" ]; then
                 speed=$(cat "$dev_path/speed" 2>/dev/null)
+                # Construct the device path using bus and device number
+                device_path="/dev/bus/usb/$bus/$dev"
+                if [ -e "$device_path" ]; then
+                    device_path_id="$bus/$dev"
+                fi
                 break
             fi
         fi
     done
     
-    usb_version=$(get_usb_version "$speed")
+    IFS='|' read -r usb_version theoretical_speed speed_raw <<< "$(get_usb_version_and_speed "$speed")"
     speed_color=$(get_speed_color "$speed")
     
     # Get device type and icon
@@ -453,16 +463,18 @@ lsusb | while IFS= read -r line; do
     
     # Format fields with consistent width
     vendor_product="${vendor_id}:${product_id}"
-    model_truncated="${description:0:35}"
-    usb_version_truncated="${usb_version:0:22}"
+    model_truncated="${description:0:30}"
+    usb_version_truncated="${usb_version:0:12}"
     
     # Print device row with adjusted alignment
-    printf "${WHITE}%-20s ${LIGHT_GREEN}%s%-*s${NC} ${LIGHT_BLUE}%-35s ${speed_color}%-22s ${YELLOW}%-5s${NC}\n" \
+    printf "${WHITE}%-20s ${LIGHT_GREEN}%s%-*s${NC} ${LIGHT_BLUE}%-30s ${speed_color}%-12s ${LIGHT_MAGENTA}%-10s ${LIGHT_CYAN}%-15s ${YELLOW}%s${NC}\n" \
         "$device_type" \
         "$vendor_product" \
         $((15 - ${#vendor_product})) "" \
         "$model_truncated" \
         "$usb_version_truncated" \
+        "$theoretical_speed" \
+        "$device_path_id" \
         "$icon"
 done
 
@@ -471,17 +483,17 @@ echo ""
 # Statistics and Summary
 total_usb_storage=${#usb_storage_devices[@]}
 echo -e "${BOLD}${LIGHT_CYAN}📊 SUMMARY${NC}"
-draw_separator 80 "$LIGHT_CYAN"
+draw_separator 95 "$LIGHT_CYAN"
 echo -e "${LIGHT_GREEN}✅ USB storage devices found: ${BOLD}$total_usb_storage${NC}"
 
 # Show detailed analysis for storage devices
 if [ $total_usb_storage -gt 0 ]; then
     echo ""
     echo -e "${BOLD}${LIGHT_MAGENTA}🔍 DETAILED ANALYSIS${NC}"
-    draw_separator 80 "$LIGHT_MAGENTA"
+    draw_separator 95 "$LIGHT_MAGENTA"
     
     for info in "${usb_storage_devices[@]}"; do
-        IFS='|' read -r device ids model size usb_version mount_point performance <<< "$info"
+        IFS='|' read -r device ids model size usb_version theoretical_speed mount_point performance <<< "$info"
         
         echo ""
         echo -e "${CYAN}📱 Device: ${BOLD}$device${NC}"
@@ -489,6 +501,7 @@ if [ $total_usb_storage -gt 0 ]; then
         echo -e "   ${GRAY}├─${NC} Model: ${LIGHT_BLUE}$model${NC}"
         echo -e "   ${GRAY}├─${NC} Capacity: ${LIGHT_GREEN}$size${NC}"
         echo -e "   ${GRAY}├─${NC} USB Version: ${LIGHT_CYAN}$usb_version${NC}"
+        echo -e "   ${GRAY}├─${NC} Theoretical Speed: ${LIGHT_MAGENTA}$theoretical_speed${NC}"
         echo -e "   ${GRAY}├─${NC} Mount Point: ${YELLOW}$mount_point${NC}"
         echo -e "   ${GRAY}└─${NC} Performance: ${performance}"
         
@@ -513,7 +526,7 @@ fi
 
 echo ""
 echo -e "${BOLD}${YELLOW}💡 PERFORMANCE OPTIMIZATION TIPS${NC}"
-draw_separator 80 "$YELLOW"
+draw_separator 95 "$YELLOW"
 echo -e "${LIGHT_BLUE}🔌${NC} Use USB 3.0+ ports (blue/teal colored) for best performance"
 echo -e "${LIGHT_BLUE}🚫${NC} Avoid USB hubs for high-speed storage devices"
 echo -e "${LIGHT_BLUE}⚡${NC} For detailed tests: ${CYAN}sudo hdparm -tT /dev/sdX${NC}"
@@ -522,12 +535,12 @@ echo -e "${LIGHT_BLUE}🌡️${NC} Monitor temperature: ${CYAN}sudo hddtemp /dev
 
 echo ""
 echo -e "${BOLD}${LIGHT_CYAN}🎛️  SYSTEM USB CONTROLLERS${NC}"
-draw_separator 80 "$LIGHT_CYAN"
+draw_separator 95 "$LIGHT_CYAN"
 lspci | grep -i usb | while read controller; do
     echo -e "${LIGHT_GREEN}🔧${NC} $controller"
 done
 
 echo ""
-draw_separator 80 "$LIGHT_GREEN"
+draw_separator 95 "$LIGHT_GREEN"
 echo -e "${BOLD}${LIGHT_GREEN}✅ Scan completed successfully!${NC}"
 echo ""
