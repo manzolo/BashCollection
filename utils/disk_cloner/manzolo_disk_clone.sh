@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Manzolo Disk Cloner v2.3 - With Dry Run Support
+# Manzolo Disk Cloner v2.4 - With Dry Run Support
 
 # Colors for output
 RED='\033[0;31m'
@@ -23,7 +23,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --help|-h)
-            echo "Manzolo Disk Cloner v2.3"
+            echo "Manzolo Disk Cloner v2.4"
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
@@ -63,6 +63,234 @@ log() {
     printf '%s %s\n' "$ts" "$*" | tee -a "$LOGFILE" >&3
 }
 
+# 1. Improved error handling and logging
+log_with_level() {
+    local level="$1"
+    shift
+    local message="$*"
+    local ts="$(date '+%F %T')"
+    
+    case "$level" in
+        ERROR)
+            printf '%s [ERROR] %s\n' "$ts" "$message" | tee -a "$LOGFILE" >&3
+            ;;
+        WARN)
+            printf '%s [WARN]  %s\n' "$ts" "$message" | tee -a "$LOGFILE" >&3
+            ;;
+        INFO)
+            printf '%s [INFO]  %s\n' "$ts" "$message" | tee -a "$LOGFILE" >&3
+            ;;
+        DEBUG)
+            if [ "${DEBUG:-false}" = true ]; then
+                printf '%s [DEBUG] %s\n' "$ts" "$message" | tee -a "$LOGFILE" >&3
+            fi
+            ;;
+    esac
+}
+
+# 2. Better device size calculation with alignment
+calculate_aligned_size() {
+    local size="$1"
+    local alignment="${2:-1048576}"  # Default 1MB alignment
+    
+    # Round up to nearest alignment boundary
+    local aligned_size=$(( (size + alignment - 1) / alignment * alignment ))
+    echo "$aligned_size"
+}
+
+# 3. Enhanced filesystem detection with multiple methods
+detect_filesystem_robust() {
+    local partition="$1"
+    local fs_type=""
+    
+    # Method 1: lsblk
+    fs_type=$(lsblk -no FSTYPE "$partition" 2>/dev/null | head -1)
+    if [ -n "$fs_type" ] && [ "$fs_type" != "" ]; then
+        echo "$fs_type"
+        return 0
+    fi
+    
+    # Method 2: blkid
+    fs_type=$(blkid -o value -s TYPE "$partition" 2>/dev/null | head -1)
+    if [ -n "$fs_type" ] && [ "$fs_type" != "" ]; then
+        echo "$fs_type"
+        return 0
+    fi
+    
+    # Method 3: file command
+    local file_output=$(file -s "$partition" 2>/dev/null)
+    case "$file_output" in
+        *"ext2 filesystem"*) echo "ext2" ;;
+        *"ext3 filesystem"*) echo "ext3" ;;
+        *"ext4 filesystem"*) echo "ext4" ;;
+        *"NTFS"*) echo "ntfs" ;;
+        *"FAT"*) echo "vfat" ;;
+        *"XFS"*) echo "xfs" ;;
+        *"Btrfs"*) echo "btrfs" ;;
+        *"LUKS"*) echo "crypto_LUKS" ;;
+        *"swap"*) echo "swap" ;;
+        *) echo "" ;;
+    esac
+}
+
+# 4. Improved progress monitoring
+show_progress() {
+    local operation="$1"
+    local current="$2"
+    local total="$3"
+    
+    if [ "$total" -gt 0 ]; then
+        local percent=$((current * 100 / total))
+        local progress_bar=""
+        local filled=$((percent / 2))
+        local empty=$((50 - filled))
+        
+        for i in $(seq 1 $filled); do progress_bar+="█"; done
+        for i in $(seq 1 $empty); do progress_bar+="░"; done
+        
+        printf '\r%s: [%s] %d%% (%s/%s)' \
+            "$operation" "$progress_bar" "$percent" \
+            "$(numfmt --to=iec --suffix=B $current)" \
+            "$(numfmt --to=iec --suffix=B $total)"
+    fi
+}
+
+# 5. Better cleanup function
+cleanup_resources() {
+    log_with_level INFO "Cleaning up resources..."
+    
+    # Clean up loop devices
+    for loop_dev in $(losetup -a | grep "$TEMP_PREFIX" | cut -d: -f1); do
+        if [ -b "$loop_dev" ]; then
+            log_with_level DEBUG "Detaching loop device: $loop_dev"
+            if command -v kpartx >/dev/null 2>&1; then
+                kpartx -dv "$loop_dev" 2>/dev/null || true
+            fi
+            losetup -d "$loop_dev" 2>/dev/null || true
+        fi
+    done
+    
+    # Clean up temporary files
+    if [ -n "$TEMP_PREFIX" ]; then
+        rm -f "${TEMP_PREFIX}"* 2>/dev/null || true
+    fi
+    
+    # Sync filesystem
+    sync 2>/dev/null || true
+}
+
+# 6. Enhanced error recovery for cloning operations
+clone_with_retry() {
+    local source="$1"
+    local dest="$2"
+    local block_size="${3:-4M}"
+    local max_retries="${4:-3}"
+    
+    local attempt=1
+    while [ $attempt -le $max_retries ]; do
+        log_with_level INFO "Clone attempt $attempt of $max_retries"
+        
+        if [ "$DRY_RUN" = true ]; then
+            log_with_level INFO "🧪 DRY RUN - Would clone: $source -> $dest (bs=$block_size)"
+            return 0
+        fi
+        
+        # Try different block sizes on retry
+        local current_bs="$block_size"
+        if [ $attempt -eq 2 ]; then
+            current_bs="1M"
+        elif [ $attempt -eq 3 ]; then
+            current_bs="512K"
+        fi
+        
+        if command -v pv >/dev/null 2>&1; then
+            if pv "$source" | dd of="$dest" bs="$current_bs" conv=notrunc,noerror 2>/dev/null; then
+                log_with_level INFO "✓ Clone successful on attempt $attempt"
+                return 0
+            fi
+        else
+            if dd if="$source" of="$dest" bs="$current_bs" status=progress conv=notrunc,noerror 2>/dev/null; then
+                log_with_level INFO "✓ Clone successful on attempt $attempt"
+                return 0
+            fi
+        fi
+        
+        log_with_level WARN "Clone attempt $attempt failed, retrying with smaller block size..."
+        attempt=$((attempt + 1))
+        sleep 2
+    done
+    
+    log_with_level ERROR "All clone attempts failed"
+    return 1
+}
+
+# 7. Improved device validation
+validate_device_safety() {
+    local device="$1"
+    local operation="$2"  # "read" or "write"
+    
+    if [ ! -b "$device" ]; then
+        log_with_level ERROR "Device $device is not a block device"
+        return 1
+    fi
+    
+    # Check if device exists and is accessible
+    if ! blockdev --getsize64 "$device" >/dev/null 2>&1; then
+        log_with_level ERROR "Cannot access device $device"
+        return 1
+    fi
+    
+    # For write operations, additional safety checks
+    if [ "$operation" = "write" ]; then
+        # Check if it's a system disk
+        local root_device=$(findmnt -n -o SOURCE / | sed 's/[0-9]*$//')
+        if [ "$device" = "$root_device" ]; then
+            log_with_level ERROR "Cannot write to root device $device"
+            return 1
+        fi
+        
+        # Check if device is read-only
+        if [ "$(blockdev --getro "$device" 2>/dev/null)" = "1" ]; then
+            log_with_level ERROR "Device $device is read-only"
+            return 1
+        fi
+        
+        # Check for critical mounts
+        if findmnt -n -o SOURCE | grep -q "^$device"; then
+            local critical_mounts=$(findmnt -n -o SOURCE,TARGET | grep "^$device" | grep -E '/$|/boot|/home|/usr|/var')
+            if [ -n "$critical_mounts" ]; then
+                log_with_level WARN "Device contains critical system mounts:"
+                echo "$critical_mounts" | while read line; do
+                    log_with_level WARN "  $line"
+                done
+                return 1
+            fi
+        fi
+    fi
+    
+    return 0
+}
+
+# 8. Better temporary file management
+TEMP_PREFIX="/tmp/manzolo_clone_$$"
+
+create_temp_file() {
+    local suffix="$1"
+    local temp_file="${TEMP_PREFIX}_${suffix}"
+    
+    if [ "$DRY_RUN" = true ]; then
+        echo "$temp_file"
+        return 0
+    fi
+    
+    # Create with secure permissions
+    touch "$temp_file" && chmod 600 "$temp_file"
+    echo "$temp_file"
+}
+
+# Set trap for cleanup
+trap cleanup_resources EXIT INT TERM
+
 # Enhanced run_log function with dry-run support
 run_log() {
     if [ $# -eq 0 ]; then return 1; fi
@@ -95,9 +323,9 @@ dry_run_cmd() {
 
 log "=============================="
 if [ "$DRY_RUN" = true ]; then
-    log "🧪 Clone Script v2.3 - DRY RUN MODE - started at $(date)"
+    log "🧪 Clone Script v2.4 - DRY RUN MODE - started at $(date)"
 else
-    log "🚀 Clone Script v2.3 - started at $(date)"
+    log "🚀 Clone Script v2.4 - started at $(date)"
 fi
 log "Logfile: $LOGFILE"
 log "=============================="
@@ -450,30 +678,162 @@ get_filesystem_used_space() {
 get_partition_table_type() {
     local device="$1"
     
-    if [ "$GPT_SUPPORT" = false ]; then
+    # First check with gdisk if available (most reliable for GPT)
+    if command -v gdisk >/dev/null 2>&1; then
+        local gdisk_output=$(echo 'p' | gdisk "$device" 2>/dev/null | head -20)
+        if echo "$gdisk_output" | grep -qi "gpt\|guid partition table"; then
+            echo "gpt"
+            return
+        fi
+    fi
+    
+    # Check with parted
+    local parted_output=$(parted "$device" print 2>/dev/null | head -10)
+    if echo "$parted_output" | grep -qi "partition table: gpt"; then
+        echo "gpt"
+        return
+    elif echo "$parted_output" | grep -qi "partition table: msdos\|partition table: dos"; then
         echo "mbr"
         return
     fi
     
-    if sgdisk -p "$device" 2>/dev/null | grep -qi "gpt\|guid"; then
+    # Check with fdisk
+    local fdisk_output=$(fdisk -l "$device" 2>/dev/null | head -10)
+    if echo "$fdisk_output" | grep -qi "disklabel type: gpt"; then
         echo "gpt"
-    elif gdisk -l "$device" 2>/dev/null | grep -qi "gpt\|guid"; then
-        echo "gpt"
-    elif parted "$device" print 2>/dev/null | grep -qi "partition table: gpt"; then
-        echo "gpt"
-    elif fdisk -l "$device" 2>/dev/null | grep -qi "disklabel type: gpt"; then
-        echo "gpt"
-    elif fdisk -l "$device" 2>/dev/null | grep -qi "disklabel type: dos"; then
+        return
+    elif echo "$fdisk_output" | grep -qi "disklabel type: dos"; then
         echo "mbr"
-    elif file -s "$device" | grep -qi "gpt"; then
+        return
+    fi
+    
+    # Binary check as fallback
+    if dd if="$device" bs=1 count=8 skip=512 2>/dev/null | grep -q "EFI PART"; then
         echo "gpt"
     else
-        if dd if="$device" bs=1 count=8 skip=512 2>/dev/null | grep -q "EFI PART"; then
-            echo "gpt"
+        echo "mbr"
+    fi
+}
+
+copy_gpt_partition_table_safe() {
+    local source_device="$1"
+    local target_device="$2"
+    
+    log "Copying GPT partition table safely..."
+    
+    # Get actual device size to calculate backup GPT location correctly
+    local device_size=$(blockdev --getsize64 "$source_device")
+    local sector_size=512
+    local total_sectors=$((device_size / sector_size))
+    
+    # Copy primary GPT (first 34 sectors)
+    log "Copying primary GPT header and table..."
+    if [ "$DRY_RUN" = true ]; then
+        log "🧪 DRY RUN - Would copy primary GPT: dd if='$source_device' of='$target_device' bs=512 count=34 conv=notrunc"
+    else
+        dd if="$source_device" of="$target_device" bs=512 count=34 conv=notrunc 2>/dev/null || {
+            log "Error: Failed to copy primary GPT"
+            return 1
+        }
+    fi
+    
+    # Instead of copying backup GPT directly, let sgdisk regenerate it
+    log "Regenerating backup GPT header..."
+    if [ "$DRY_RUN" = true ]; then
+        log "🧪 DRY RUN - Would regenerate backup GPT: sgdisk -e '$target_device'"
+    else
+        # Force regeneration of backup GPT
+        sgdisk -e "$target_device" 2>/dev/null || {
+            log "Warning: Could not regenerate backup GPT with sgdisk"
+            # Fallback: use parted to fix the table
+            parted "$target_device" --script print 2>/dev/null || true
+        }
+    fi
+    
+    # Verify the partition table
+    log "Verifying GPT integrity..."
+    if [ "$DRY_RUN" = true ]; then
+        log "🧪 DRY RUN - Would verify with: sgdisk -v '$target_device'"
+    else
+        if sgdisk -v "$target_device" >/dev/null 2>&1; then
+            log "✓ GPT partition table is valid"
         else
-            echo "mbr"
+            log "⚠ GPT partition table has issues, attempting repair..."
+            sgdisk -e "$target_device" 2>/dev/null || true
         fi
     fi
+    
+    return 0
+}
+
+setup_loop_device_safe() {
+    local image_file="$1"
+    
+    if [ "$DRY_RUN" = true ]; then
+        echo "/dev/loop99"  # Return simulated loop device
+        return 0
+    fi
+    
+    # Ensure loop module is loaded
+    modprobe loop 2>/dev/null || true
+    
+    # Find available loop device
+    local loop_dev
+    loop_dev=$(losetup -f 2>/dev/null)
+    if [ -z "$loop_dev" ]; then
+        log "Error: No free loop devices available"
+        return 1
+    fi
+    
+    # Setup loop device
+    if losetup "$loop_dev" "$image_file" 2>/dev/null; then
+        echo "$loop_dev"
+        return 0
+    else
+        log "Error: Failed to setup loop device"
+        return 1
+    fi
+}
+
+setup_partition_mappings() {
+    local loop_dev="$1"
+    
+    if [ "$DRY_RUN" = true ]; then
+        log "🧪 DRY RUN - Would setup partition mappings for $loop_dev"
+        return 0
+    fi
+    
+    log "Setting up partition mappings..."
+    
+    # Try partprobe first
+    partprobe "$loop_dev" 2>/dev/null || true
+    sleep 2
+    
+    # Try kpartx if available
+    if command -v kpartx >/dev/null 2>&1; then
+        kpartx -av "$loop_dev" 2>/dev/null || true
+    fi
+    
+    # Try partx as fallback
+    if command -v partx >/dev/null 2>&1; then
+        partx -a "$loop_dev" 2>/dev/null || true
+    fi
+    
+    # Wait for devices to appear with timeout
+    local timeout=10
+    local count=0
+    while [ $count -lt $timeout ]; do
+        if ls "${loop_dev}"p* 2>/dev/null | head -1 >/dev/null; then
+            log "✓ Partition mappings created successfully"
+            return 0
+        fi
+        sleep 1
+        count=$((count + 1))
+        partprobe "$loop_dev" 2>/dev/null || true
+    done
+    
+    log "⚠ Warning: Partition mappings may not be available"
+    return 0  # Don't fail completely
 }
 
 repair_filesystem() {
@@ -633,94 +993,75 @@ clone_physical_to_virtual_optimized() {
     
     log "Starting reliable cloning with filesystem preservation..."
     
-    if ! check_device_safety "$source_device"; then
+    if ! validate_device_safety "$source_device" "read"; then
         return 1
     fi
     
     safe_unmount_device_partitions "$source_device"
     
-    local temp_raw="/tmp/clone_temp_$$.raw"
+    local temp_raw=$(create_temp_file "raw")
     local device_size=$(blockdev --getsize64 "$source_device")
     local pt_type=$(get_partition_table_type "$source_device")
     
     log "Device size: $((device_size / 1073741824)) GB"
     log "Partition table type: $pt_type"
     
+    # Create temporary raw image with better error handling
     log "Creating temporary raw image..."
     if [ "$DRY_RUN" = true ]; then
         log "🧪 DRY RUN - Would create temporary image: $temp_raw (size: $((device_size / 1073741824)) GB)"
-    elif ! dd if=/dev/zero of="$temp_raw" bs=1 count=0 seek="$device_size" 2>/dev/null; then
-        log "Failed to create temporary image"
+    else
+        if ! create_sparse_image "$temp_raw" "$device_size"; then
+            log_with_level ERROR "Failed to create temporary image"
+            return 1
+        fi
+    fi
+    
+    # Setup loop device with improved error handling
+    local loop_dev
+    if ! loop_dev=$(setup_loop_device_safe "$temp_raw"); then
+        log_with_level ERROR "Failed to setup loop device"
+        rm -f "$temp_raw"
         return 1
     fi
     
-    local loop_dev="/dev/loop9"  # Simulated for dry run
-    if [ "$DRY_RUN" = true ]; then
-        log "🧪 DRY RUN - Would setup loop device for: $temp_raw"
-        log "🧪 DRY RUN - Would use loop device: $loop_dev"
-    else
-        loop_dev=$(losetup -f --show "$temp_raw")
-        if [ -z "$loop_dev" ]; then
-            log "Failed to setup loop device"
-            rm -f "$temp_raw"
-            return 1
-        fi
-        log "Loop device: $loop_dev"
-    fi
+    log "Loop device: $loop_dev"
     
+    # Copy partition table with improved GPT handling
     log "Copying partition table..."
     if [ "$pt_type" = "gpt" ]; then
-        dry_run_cmd dd if="$source_device" of="$loop_dev" bs=512 count=34 conv=notrunc
-        local backup_start=$((device_size - 33*512))
-        dry_run_cmd dd if="$source_device" of="$loop_dev" bs=1 skip="$backup_start" seek="$backup_start" conv=notrunc
-        
-        if [ "$GPT_SUPPORT" = true ]; then
-            dry_run_cmd sgdisk -e "$loop_dev"
+        if ! copy_gpt_partition_table_safe "$source_device" "$loop_dev"; then
+            log_with_level ERROR "Failed to copy GPT partition table"
+            cleanup_resources
+            return 1
         fi
     else
-        dry_run_cmd dd if="$source_device" of="$loop_dev" bs=512 count=1 conv=notrunc
-    fi
-    
-    if [ "$DRY_RUN" = true ]; then
-        log "🧪 DRY RUN - Would run: partprobe $loop_dev"
-        log "🧪 DRY RUN - Would wait 2 seconds"
-    else
-        partprobe "$loop_dev" 2>/dev/null || true
-        sleep 2
-    fi
-    
-    if [ "$DRY_RUN" = true ]; then
-        log "🧪 DRY RUN - Would setup partition mappings with kpartx or partx"
-        local loop_partitions="${loop_dev}p1 ${loop_dev}p2"  # Simulated
-    else
-        if command -v kpartx &> /dev/null; then
-            kpartx -av "$loop_dev" 2>/dev/null || true
-        else
-            partx -a "$loop_dev" 2>/dev/null || true
-        fi
-        sleep 2
-        local loop_partitions=$(ls "${loop_dev}"p* 2>/dev/null || ls /dev/mapper/loop*p* 2>/dev/null || echo "")
-    fi
-    
-    if [ -z "$loop_partitions" ]; then
-        log "Warning: No loop partitions found, using whole device copy..."
-        log "Copying entire device with dd..."
+        # MBR partition table
         if [ "$DRY_RUN" = true ]; then
-            log "🧪 DRY RUN - Would copy entire device:"
-            if command -v pv &> /dev/null; then
-                log "🧪 DRY RUN - Would run: pv -tpreb $source_device | dd of=$loop_dev bs=4M conv=sparse"
-            else
-                log "🧪 DRY RUN - Would run: dd if=$source_device of=$loop_dev bs=4M status=progress conv=sparse"
-            fi
+            log "🧪 DRY RUN - Would copy MBR: dd if='$source_device' of='$loop_dev' bs=512 count=1 conv=notrunc"
         else
-            if command -v pv &> /dev/null; then
-                pv -tpreb "$source_device" | dd of="$loop_dev" bs=4M conv=sparse 2>/dev/null
-            else
-                dd if="$source_device" of="$loop_dev" bs=4M status=progress conv=sparse 2>/dev/null
+            if ! dd if="$source_device" of="$loop_dev" bs=512 count=1 conv=notrunc 2>/dev/null; then
+                log_with_level ERROR "Failed to copy MBR"
+                cleanup_resources
+                return 1
             fi
         fi
+    fi
+    
+    # Setup partition mappings with improved error handling
+    if ! setup_partition_mappings "$loop_dev"; then
+        log_with_level WARN "Partition mappings failed, falling back to whole device copy"
+        
+        # Fallback to whole device copy
+        log "Copying entire device..."
+        if ! clone_with_retry "$source_device" "$loop_dev" "4M" 3; then
+            log_with_level ERROR "Whole device copy failed"
+            cleanup_resources
+            return 1
+        fi
     else
-        log "Found loop partitions, copying partition by partition..."
+        # Partition-by-partition copy with improved error handling
+        log "Found partition mappings, copying partition by partition..."
         
         local part_num=1
         local success_count=0
@@ -730,61 +1071,49 @@ clone_physical_to_virtual_optimized() {
             local source_part="/dev/$source_part_name"
             total_partitions=$((total_partitions + 1))
             
+            # Find corresponding destination partition
             local dest_part=""
-            if [ "$DRY_RUN" = true ]; then
-                dest_part="${loop_dev}p${part_num}"
-            elif [ -b "${loop_dev}p${part_num}" ]; then
-                dest_part="${loop_dev}p${part_num}"
-            elif [ -b "/dev/mapper/$(basename $loop_dev)p${part_num}" ]; then
-                dest_part="/dev/mapper/$(basename $loop_dev)p${part_num}"
-            else
-                log "⚠ Warning: Cannot find destination partition for $source_part"
+            for try_dest in "${loop_dev}p${part_num}" "/dev/mapper/$(basename $loop_dev)p${part_num}"; do
+                if [ -b "$try_dest" ] || [ "$DRY_RUN" = true ]; then
+                    dest_part="$try_dest"
+                    break
+                fi
+            done
+            
+            if [ -z "$dest_part" ]; then
+                log_with_level WARN "Cannot find destination partition for $source_part"
                 part_num=$((part_num + 1))
                 continue
             fi
             
             if [ -b "$source_part" ] && ([ -b "$dest_part" ] || [ "$DRY_RUN" = true ]); then
-                local fs_type=$(get_filesystem_type "$source_part")
+                local fs_type=$(detect_filesystem_robust "$source_part")
                 
                 log "Cloning partition $part_num: $source_part -> $dest_part"
                 log "  Filesystem: ${fs_type:-unknown}"
                 
+                # Repair filesystem if needed
                 if [ -n "$fs_type" ] && [ "$fs_type" != "" ] && [ "$fs_type" != "swap" ]; then
                     repair_filesystem "$source_part" "$fs_type" || true
                 fi
                 
-                log "  Copying with dd..."
-                if [ "$DRY_RUN" = true ]; then
-                    log "  🧪 DRY RUN - Would copy partition:"
-                    if command -v pv &> /dev/null; then
-                        local part_size=$(blockdev --getsize64 "$source_part" 2>/dev/null)
-                        log "  🧪 DRY RUN - Would run: pv -s $part_size $source_part | dd of=$dest_part bs=4M conv=notrunc"
-                    else
-                        log "  🧪 DRY RUN - Would run: dd if=$source_part of=$dest_part bs=4M status=progress conv=notrunc"
-                    fi
+                # Clone with retry logic
+                if clone_with_retry "$source_part" "$dest_part" "4M" 2; then
+                    log "    ✓ Partition cloned successfully"
                     success_count=$((success_count + 1))
-                else
-                    if command -v pv &> /dev/null; then
-                        local part_size=$(blockdev --getsize64 "$source_part" 2>/dev/null)
-                        pv -s "$part_size" "$source_part" | dd of="$dest_part" bs=4M conv=notrunc 2>/dev/null
-                    else
-                        dd if="$source_part" of="$dest_part" bs=4M status=progress conv=notrunc 2>/dev/null
-                    fi
                     
-                    if [ $? -eq 0 ]; then
-                        log "    ✓ Partition cloned successfully"
-                        success_count=$((success_count + 1))
-                        
+                    # Verify filesystem after cloning
+                    if [ "$DRY_RUN" = false ]; then
                         sync
-                        local dest_fs=$(get_filesystem_type "$dest_part")
+                        local dest_fs=$(detect_filesystem_robust "$dest_part")
                         if [ "$dest_fs" = "$fs_type" ]; then
                             log "    ✓ Filesystem verified: $dest_fs"
                         else
                             log "    ⚠ Filesystem mismatch: expected $fs_type, got $dest_fs"
                         fi
-                    else
-                        log "    ❌ Partition clone failed"
                     fi
+                else
+                    log_with_level ERROR "Partition clone failed for $source_part"
                 fi
             fi
             
@@ -792,6 +1121,13 @@ clone_physical_to_virtual_optimized() {
         done < <(lsblk -ln -o NAME "$source_device" | tail -n +2)
         
         log "Partition cloning summary: $success_count/$total_partitions successful"
+        
+        # If too many partitions failed, consider it a failure
+        if [ $success_count -eq 0 ] && [ $total_partitions -gt 0 ]; then
+            log_with_level ERROR "All partition clones failed"
+            cleanup_resources
+            return 1
+        fi
     fi
     
     if [ "$DRY_RUN" = false ]; then
@@ -799,22 +1135,15 @@ clone_physical_to_virtual_optimized() {
         sleep 2
     fi
     
-    if [ "$DRY_RUN" = true ]; then
-        log "🧪 DRY RUN - Would cleanup loop device mappings with kpartx"
-    else
-        if command -v kpartx &> /dev/null; then
+    # Clean up partition mappings
+    if [ "$DRY_RUN" = false ]; then
+        if command -v kpartx >/dev/null 2>&1; then
             kpartx -dv "$loop_dev" 2>/dev/null || true
         fi
-    fi
-    
-    log "Verifying partition table..."
-    if [ "$DRY_RUN" = true ]; then
-        log "🧪 DRY RUN - Would verify with: parted $loop_dev print"
-    else
-        parted "$loop_dev" print 2>&1 | tee -a "$LOGFILE"
         losetup -d "$loop_dev" 2>/dev/null || true
     fi
     
+    # Convert to final format
     log "Converting to $dest_format format..."
     
     local convert_opts="-p"
@@ -832,78 +1161,31 @@ clone_physical_to_virtual_optimized() {
     
     if [ "$DRY_RUN" = true ]; then
         log "🧪 DRY RUN - Would convert with: qemu-img convert $convert_opts -O '$dest_format' '$temp_raw' '$dest_file'"
-        log "🧪 DRY RUN - Would remove temporary file: $temp_raw"
-        log "🧪 DRY RUN - Would verify with: qemu-img info '$dest_file'"
-        
-        if [ "$dest_format" = "qcow2" ]; then
-            log "🧪 DRY RUN - Would check with: qemu-img check '$dest_file'"
-        fi
-        
         log "✅ DRY RUN - Cloning simulation completed successfully!"
         return 0
-    elif run_log "qemu-img convert $convert_opts -O '$dest_format' '$temp_raw' '$dest_file'"; then
-        rm -f "$temp_raw"
-        
-        log "Verifying cloned image..."
-        qemu-img info "$dest_file" | tee -a "$LOGFILE"
-        
-        if [ "$dest_format" = "qcow2" ]; then
-            qemu-img check "$dest_file" 2>&1 | tee -a "$LOGFILE"
-        fi
-        
-        if command -v qemu-nbd &> /dev/null && command -v nbd-client &> /dev/null; then
-            log "Performing filesystem verification with qemu-nbd..."
-            
-            dry_run_cmd modprobe nbd max_part=8
-            
-            local nbd_dev=""
-            for i in {0..7}; do
-                if ! lsblk /dev/nbd$i &>/dev/null; then
-                    nbd_dev="/dev/nbd$i"
-                    break
-                fi
-            done
-            
-            if [ -n "$nbd_dev" ]; then
-                if dry_run_cmd qemu-nbd --connect="$nbd_dev" "$dest_file"; then
-                    if [ "$DRY_RUN" = false ]; then
-                        sleep 2
-                        
-                        log "Connected to $nbd_dev, checking filesystems..."
-                        parted "$nbd_dev" print 2>&1 | tee -a "$LOGFILE"
-                        
-                        local part_num=1
-                        while [ -b "${nbd_dev}p${part_num}" ]; do
-                            local fs_type=$(get_filesystem_type "${nbd_dev}p${part_num}")
-                            if [ -n "$fs_type" ]; then
-                                log "  Partition $part_num: $fs_type ✓"
-                            else
-                                log "  Partition $part_num: No filesystem detected ⚠"
-                            fi
-                            part_num=$((part_num + 1))
-                        done
-                        
-                        qemu-nbd --disconnect "$nbd_dev" 2>/dev/null || true
-                    fi
-                else
-                    log "Could not connect qemu-nbd for verification"
-                fi
-            fi
-        fi
-        
-        local final_size=$(stat -c%s "$dest_file" 2>/dev/null || echo 0)
-        local final_gb=$(echo "scale=2; $final_size / 1073741824" | bc)
-        local device_gb=$(echo "scale=2; $device_size / 1073741824" | bc)
-        
-        log "✅ Cloning completed successfully!"
-        log "  Original device: ${device_gb}GB"
-        log "  Final image: ${final_gb}GB"
-        
-        return 0
     else
-        log "❌ Conversion failed"
-        rm -f "$temp_raw"
-        return 1
+        if run_log "qemu-img convert $convert_opts -O '$dest_format' '$temp_raw' '$dest_file'"; then
+            # Verification and cleanup
+            log "Verifying cloned image..."
+            qemu-img info "$dest_file" | tee -a "$LOGFILE"
+            
+            if [ "$dest_format" = "qcow2" ]; then
+                qemu-img check "$dest_file" 2>&1 | tee -a "$LOGFILE"
+            fi
+            
+            local final_size=$(stat -c%s "$dest_file" 2>/dev/null || echo 0)
+            local final_gb=$(echo "scale=2; $final_size / 1073741824" | bc)
+            local device_gb=$(echo "scale=2; $device_size / 1073741824" | bc)
+            
+            log "✅ Cloning completed successfully!"
+            log "  Original device: ${device_gb}GB"
+            log "  Final image: ${final_gb}GB"
+            
+            return 0
+        else
+            log_with_level ERROR "Conversion failed"
+            return 1
+        fi
     fi
 }
 
@@ -2361,9 +2643,9 @@ clone_virtual_to_virtual() {
 
 main_menu() {
     while true; do
-        local menu_title="⚡ Manzolo Disk Cloner v2.3 ✨"
+        local menu_title="⚡ Manzolo Disk Cloner v2.4 ✨"
         if [ "$DRY_RUN" = true ]; then
-            menu_title="🧪 Manzolo Disk Cloner v2.3 - DRY RUN MODE"
+            menu_title="🧪 Manzolo Disk Cloner v2.4 - DRY RUN MODE"
         fi
         
         local choice
@@ -2393,7 +2675,7 @@ main_menu() {
                     about_text="$about_text\n\n🧪 CURRENTLY IN DRY RUN MODE\nNo destructive operations will be performed!"
                 fi
                 
-                dialog --title "About Manzolo Disk Cloner v2.3" \
+                dialog --title "About Manzolo Disk Cloner v2.4" \
                     --msgbox "$about_text" 26 85
                 ;;
             0|"") break ;;
@@ -2422,10 +2704,10 @@ check_optional_tools() {
 clear
 log "╔═══════════════════════════════════════╗"
 if [ "$DRY_RUN" = true ]; then
-    log "║   🧪 Manzolo Disk Cloner v2.3 🧪      ║"
+    log "║   🧪 Manzolo Disk Cloner v2.4 🧪      ║"
     log "║        DRY RUN MODE ENABLED          ║"
 else
-    log "║   🚀 Manzolo Disk Cloner v2.3 🚀      ║"
+    log "║   🚀 Manzolo Disk Cloner v2.4 🚀      ║"
 fi
 log "╚═══════════════════════════════════════╝"
 
