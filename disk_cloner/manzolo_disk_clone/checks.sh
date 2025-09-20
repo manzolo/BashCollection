@@ -13,6 +13,29 @@ validate_device_safety() {
         return 1
     fi
     
+    # Check for ZFS pool membership
+    if command -v zpool &>/dev/null; then
+        if zpool status 2>/dev/null | grep -q "$device"; then
+            log_with_level WARN "Device $device is part of a ZFS pool"
+            if [ "$operation" = "write" ]; then
+                log_with_level ERROR "Cannot write to device in active ZFS pool"
+                return 1
+            fi
+        fi
+    fi
+    
+    # Check for Btrfs filesystem
+    if command -v btrfs &>/dev/null; then
+        if btrfs filesystem show 2>/dev/null | grep -q "$device"; then
+            log_with_level WARN "Device $device contains Btrfs filesystem"
+            local btrfs_mounted=$(mount | grep "$device" | grep "type btrfs")
+            if [ -n "$btrfs_mounted" ] && [ "$operation" = "write" ]; then
+                log_with_level ERROR "Cannot write to mounted Btrfs filesystem"
+                return 1
+            fi
+        fi
+    fi
+    
     # For write operations, additional safety checks
     if [ "$operation" = "write" ]; then
         # Check if it's a system disk
@@ -55,6 +78,11 @@ check_partclone_tools() {
         fi
     done
     
+    # Check for Btrfs-specific partclone
+    if command -v partclone.btrfs &> /dev/null; then
+        log "  ✓ Btrfs partclone support available"
+    fi
+    
     if [ "$partclone_found" = false ]; then
         log "Warning: No partclone tools found!"
         log "For optimal cloning, install with: sudo apt-get install partclone"
@@ -74,15 +102,55 @@ check_uuid_tools() {
     command -v ntfsclone &> /dev/null || missing_uuid_tools+=("ntfs-3g")
     command -v tune2fs &> /dev/null || missing_uuid_tools+=("e2fsprogs")
     command -v xfs_admin &> /dev/null || missing_uuid_tools+=("xfsprogs")
+    command -v btrfstune &> /dev/null || missing_uuid_tools+=("btrfs-progs")
     
     if [ ${#missing_uuid_tools[@]} -gt 0 ]; then
         log "Optional UUID tools not found: ${missing_uuid_tools[*]}"
-        log "For complete UUID preservation, install: sudo apt-get install gdisk e2fsprogs ntfs-3g xfsprogs dosfstools mtools"
+        log "For complete UUID preservation, install: sudo apt-get install gdisk e2fsprogs ntfs-3g xfsprogs btrfs-progs dosfstools mtools"
         UUID_SUPPORT="partial"
     else
         log "✅ Full UUID preservation support available"
         UUID_SUPPORT="full"
     fi
+}
+
+# Check ZFS and Btrfs support
+check_advanced_filesystems() {
+    log "Checking advanced filesystem support..."
+    
+    local zfs_available=false
+    local btrfs_available=false
+    
+    # Check ZFS
+    if command -v zfs &> /dev/null && command -v zpool &> /dev/null; then
+        zfs_available=true
+        log "✓ ZFS support available"
+        
+        # Check ZFS kernel module
+        if ! lsmod | grep -q "^zfs"; then
+            log "  ⚠ ZFS kernel module not loaded (may load on demand)"
+        fi
+    else
+        log "⚠ ZFS not available (install with: apt-get install zfsutils-linux)"
+    fi
+    
+    # Check Btrfs
+    if command -v btrfs &> /dev/null && command -v btrfsck &> /dev/null; then
+        btrfs_available=true
+        log "✓ Btrfs support available"
+        
+        # Check for additional Btrfs tools
+        command -v btrfs-image &> /dev/null && log "  ✓ btrfs-image available (optimized cloning)"
+        command -v btrfstune &> /dev/null && log "  ✓ btrfstune available (UUID management)"
+    else
+        log "⚠ Btrfs tools not available (install with: apt-get install btrfs-progs)"
+    fi
+    
+    # Store availability globally
+    ZFS_SUPPORT=$zfs_available
+    BTRFS_SUPPORT=$btrfs_available
+    
+    return 0
 }
 
 check_device_safety() {
