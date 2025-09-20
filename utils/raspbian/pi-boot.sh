@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# boot_raspbian.sh - Boot Raspberry Pi images in QEMU (FIXED VERSION)
-# Usage: sudo ./boot_raspbian.sh image.qcow2 [options]
+# PiBoot - Boot Raspberry Pi images in QEMU
+# Usage: sudo ./pi-boot.sh image.qcow2 [options]
 # Requirements: qemu-nbd, kpartx, qemu-system-arm, qemu-system-aarch64, blockdev
 
-VERSION="1.5-fixed"
+VERSION="1.6"
 SCRIPT_NAME="$(basename "$0")"
 
 # Colors for output
@@ -355,7 +355,7 @@ find_boot_partition() {
     log_info "Searching for boot partition"
     
     # Create unique mount point
-    MOUNT_POINT="/mnt/boot_raspbian_$$"
+    MOUNT_POINT="/mnt/piboot_$$"
     mkdir -p "$MOUNT_POINT"
     
     # Look for partition mappings
@@ -571,7 +571,7 @@ copy_boot_files() {
     local dtb="$2"
     local initrd="$3"
     
-    TEMP_DIR="/tmp/raspbian_boot_$$"
+    TEMP_DIR="/tmp/piboot_$$"
     mkdir -p "$TEMP_DIR"
     
     if [[ -n "$kernel" && -f "$kernel" ]]; then
