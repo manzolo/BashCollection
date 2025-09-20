@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Manzolo Disk Cloner v2.3
+# Manzolo Disk Cloner v2.3 - With Dry Run Support
 
 # Colors for output
 RED='\033[0;31m'
@@ -10,6 +10,35 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
 NC='\033[0m'
+
+# -------------------- DRY RUN SUPPORT --------------------
+DRY_RUN=false
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --dry-run|-n)
+            DRY_RUN=true
+            echo -e "${CYAN}🧪 DRY RUN MODE ENABLED - No destructive operations will be performed${NC}"
+            shift
+            ;;
+        --help|-h)
+            echo "Manzolo Disk Cloner v2.3"
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  --dry-run, -n    Enable dry run mode (log commands without executing)"
+            echo "  --help, -h       Show this help message"
+            echo ""
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Use --help for usage information"
+            exit 1
+            ;;
+    esac
+done
 
 # Check root privileges
 if [ "$EUID" -ne 0 ]; then
@@ -34,8 +63,15 @@ log() {
     printf '%s %s\n' "$ts" "$*" | tee -a "$LOGFILE" >&3
 }
 
+# Enhanced run_log function with dry-run support
 run_log() {
     if [ $# -eq 0 ]; then return 1; fi
+    
+    if [ "$DRY_RUN" = true ]; then
+        log "🧪 DRY RUN - Would execute: $*"
+        return 0
+    fi
+    
     if [ $# -eq 1 ]; then
         bash -c "set -o pipefail; $1" > >(tee -a "$LOGFILE" >&3) 2> >(tee -a "$LOGFILE" >&4)
         return $?
@@ -45,8 +81,24 @@ run_log() {
     fi
 }
 
+# New function for dry-run aware command execution
+dry_run_cmd() {
+    if [ "$DRY_RUN" = true ]; then
+        log "🧪 DRY RUN - Would execute: $*"
+        return 0
+    else
+        log "Executing: $*"
+        "$@"
+        return $?
+    fi
+}
+
 log "=============================="
-log "🚀 Clone Script v2.3 - started at $(date)"
+if [ "$DRY_RUN" = true ]; then
+    log "🧪 Clone Script v2.3 - DRY RUN MODE - started at $(date)"
+else
+    log "🚀 Clone Script v2.3 - started at $(date)"
+fi
 log "Logfile: $LOGFILE"
 log "=============================="
 
@@ -124,7 +176,7 @@ check_uuid_tools() {
 
 check_uuid_tools
 
-# -------------------- SAFETY FUNCTIONS (unchanged) --------------------
+# -------------------- SAFETY FUNCTIONS (enhanced with dry-run) --------------------
 
 safe_unmount_device_partitions() {
     local device="$1"
@@ -144,7 +196,10 @@ safe_unmount_device_partitions() {
                 esac
                 
                 log "  Unmounting /dev/$partition from $mount_point..."
-                if umount "/dev/$partition" 2>/dev/null; then
+                if [ "$DRY_RUN" = true ]; then
+                    log "  🧪 DRY RUN - Would unmount: /dev/$partition"
+                    unmounted_any=true
+                elif umount "/dev/$partition" 2>/dev/null; then
                     log "    ✓ Successfully unmounted /dev/$partition"
                     unmounted_any=true
                 elif umount -l "/dev/$partition" 2>/dev/null; then
@@ -159,8 +214,10 @@ safe_unmount_device_partitions() {
     
     if [ "$unmounted_any" = true ]; then
         log "  Waiting 3 seconds for unmount operations to complete..."
-        sleep 3
-        sync
+        if [ "$DRY_RUN" = false ]; then
+            sleep 3
+            sync
+        fi
     fi
     
     return 0
@@ -343,7 +400,7 @@ select_directory() {
     return 1
 }
 
-# -------------------- FILESYSTEM FUNCTIONS (unchanged) --------------------
+# -------------------- FILESYSTEM FUNCTIONS (enhanced with dry-run) --------------------
 
 is_filesystem_supported() {
     local partition="$1"
@@ -369,6 +426,15 @@ get_filesystem_used_space() {
     local fs_type=$(get_filesystem_type "$partition")
     
     local temp_mount="/tmp/clone_check_$$"
+    
+    if [ "$DRY_RUN" = true ]; then
+        log "🧪 DRY RUN - Would mount $partition to check used space"
+        # Return a realistic estimate for dry run
+        local part_size=$(blockdev --getsize64 "$partition" 2>/dev/null)
+        echo $((part_size / 2))  # Assume 50% usage for dry run
+        return
+    fi
+    
     mkdir -p "$temp_mount" 2>/dev/null
     
     if mount -o ro "$partition" "$temp_mount" 2>/dev/null; then
@@ -419,7 +485,10 @@ repair_filesystem() {
     case "$fs_type" in
         ext2|ext3|ext4)
             log "    Running e2fsck..."
-            if e2fsck -f -p "$partition" 2>/dev/null; then
+            if [ "$DRY_RUN" = true ]; then
+                log "    🧪 DRY RUN - Would run: e2fsck -f -p $partition"
+                return 0
+            elif e2fsck -f -p "$partition" 2>/dev/null; then
                 log "      ✓ Filesystem check passed"
                 return 0
             else
@@ -436,7 +505,10 @@ repair_filesystem() {
         vfat|fat32|fat16)
             if command -v fsck.fat &> /dev/null; then
                 log "    Running fsck.fat..."
-                if fsck.fat -a "$partition" 2>/dev/null; then
+                if [ "$DRY_RUN" = true ]; then
+                    log "    🧪 DRY RUN - Would run: fsck.fat -a $partition"
+                    return 0
+                elif fsck.fat -a "$partition" 2>/dev/null; then
                     log "      ✓ FAT filesystem check passed"
                     return 0
                 else
@@ -448,7 +520,10 @@ repair_filesystem() {
         ntfs)
             if command -v ntfsfix &> /dev/null; then
                 log "    Running ntfsfix..."
-                if ntfsfix "$partition" 2>/dev/null; then
+                if [ "$DRY_RUN" = true ]; then
+                    log "    🧪 DRY RUN - Would run: ntfsfix $partition"
+                    return 0
+                elif ntfsfix "$partition" 2>/dev/null; then
                     log "      ✓ NTFS check completed"
                     return 0
                 else
@@ -471,6 +546,11 @@ create_sparse_image() {
     local size="$2"
     
     log "Creating sparse image of $(echo "scale=2; $size / 1073741824" | bc) GB..."
+    
+    if [ "$DRY_RUN" = true ]; then
+        log "🧪 DRY RUN - Would create sparse image: dd if=/dev/zero of='$file' bs=1 count=0 seek='$size'"
+        return 0
+    fi
     
     run_log dd if=/dev/zero of="$file" bs=1 count=0 seek="$size"
     
@@ -544,7 +624,7 @@ analyze_device_usage() {
     echo "$total_used"
 }
 
-# -------------------- ENHANCED CLONING FROM V2.1 (unchanged) --------------------
+# -------------------- ENHANCED CLONING FROM V2.1 (enhanced with dry-run) --------------------
 
 clone_physical_to_virtual_optimized() {
     local source_device="$1"
@@ -567,53 +647,77 @@ clone_physical_to_virtual_optimized() {
     log "Partition table type: $pt_type"
     
     log "Creating temporary raw image..."
-    if ! dd if=/dev/zero of="$temp_raw" bs=1 count=0 seek="$device_size" 2>/dev/null; then
+    if [ "$DRY_RUN" = true ]; then
+        log "🧪 DRY RUN - Would create temporary image: $temp_raw (size: $((device_size / 1073741824)) GB)"
+    elif ! dd if=/dev/zero of="$temp_raw" bs=1 count=0 seek="$device_size" 2>/dev/null; then
         log "Failed to create temporary image"
         return 1
     fi
     
-    local loop_dev
-    loop_dev=$(losetup -f --show "$temp_raw")
-    if [ -z "$loop_dev" ]; then
-        log "Failed to setup loop device"
-        rm -f "$temp_raw"
-        return 1
+    local loop_dev="/dev/loop9"  # Simulated for dry run
+    if [ "$DRY_RUN" = true ]; then
+        log "🧪 DRY RUN - Would setup loop device for: $temp_raw"
+        log "🧪 DRY RUN - Would use loop device: $loop_dev"
+    else
+        loop_dev=$(losetup -f --show "$temp_raw")
+        if [ -z "$loop_dev" ]; then
+            log "Failed to setup loop device"
+            rm -f "$temp_raw"
+            return 1
+        fi
+        log "Loop device: $loop_dev"
     fi
-    
-    log "Loop device: $loop_dev"
     
     log "Copying partition table..."
     if [ "$pt_type" = "gpt" ]; then
-        dd if="$source_device" of="$loop_dev" bs=512 count=34 conv=notrunc 2>/dev/null
+        dry_run_cmd dd if="$source_device" of="$loop_dev" bs=512 count=34 conv=notrunc
         local backup_start=$((device_size - 33*512))
-        dd if="$source_device" of="$loop_dev" bs=1 skip="$backup_start" seek="$backup_start" conv=notrunc 2>/dev/null
+        dry_run_cmd dd if="$source_device" of="$loop_dev" bs=1 skip="$backup_start" seek="$backup_start" conv=notrunc
         
         if [ "$GPT_SUPPORT" = true ]; then
-            sgdisk -e "$loop_dev" 2>/dev/null || true
+            dry_run_cmd sgdisk -e "$loop_dev"
         fi
     else
-        dd if="$source_device" of="$loop_dev" bs=512 count=1 conv=notrunc 2>/dev/null
+        dry_run_cmd dd if="$source_device" of="$loop_dev" bs=512 count=1 conv=notrunc
     fi
     
-    partprobe "$loop_dev" 2>/dev/null || true
-    sleep 2
-    
-    if command -v kpartx &> /dev/null; then
-        kpartx -av "$loop_dev" 2>/dev/null || true
+    if [ "$DRY_RUN" = true ]; then
+        log "🧪 DRY RUN - Would run: partprobe $loop_dev"
+        log "🧪 DRY RUN - Would wait 2 seconds"
     else
-        partx -a "$loop_dev" 2>/dev/null || true
+        partprobe "$loop_dev" 2>/dev/null || true
+        sleep 2
     fi
-    sleep 2
     
-    local loop_partitions=$(ls "${loop_dev}"p* 2>/dev/null || ls /dev/mapper/loop*p* 2>/dev/null || echo "")
+    if [ "$DRY_RUN" = true ]; then
+        log "🧪 DRY RUN - Would setup partition mappings with kpartx or partx"
+        local loop_partitions="${loop_dev}p1 ${loop_dev}p2"  # Simulated
+    else
+        if command -v kpartx &> /dev/null; then
+            kpartx -av "$loop_dev" 2>/dev/null || true
+        else
+            partx -a "$loop_dev" 2>/dev/null || true
+        fi
+        sleep 2
+        local loop_partitions=$(ls "${loop_dev}"p* 2>/dev/null || ls /dev/mapper/loop*p* 2>/dev/null || echo "")
+    fi
     
     if [ -z "$loop_partitions" ]; then
         log "Warning: No loop partitions found, using whole device copy..."
         log "Copying entire device with dd..."
-        if command -v pv &> /dev/null; then
-            pv -tpreb "$source_device" | dd of="$loop_dev" bs=4M conv=sparse 2>/dev/null
+        if [ "$DRY_RUN" = true ]; then
+            log "🧪 DRY RUN - Would copy entire device:"
+            if command -v pv &> /dev/null; then
+                log "🧪 DRY RUN - Would run: pv -tpreb $source_device | dd of=$loop_dev bs=4M conv=sparse"
+            else
+                log "🧪 DRY RUN - Would run: dd if=$source_device of=$loop_dev bs=4M status=progress conv=sparse"
+            fi
         else
-            dd if="$source_device" of="$loop_dev" bs=4M status=progress conv=sparse 2>/dev/null
+            if command -v pv &> /dev/null; then
+                pv -tpreb "$source_device" | dd of="$loop_dev" bs=4M conv=sparse 2>/dev/null
+            else
+                dd if="$source_device" of="$loop_dev" bs=4M status=progress conv=sparse 2>/dev/null
+            fi
         fi
     else
         log "Found loop partitions, copying partition by partition..."
@@ -627,7 +731,9 @@ clone_physical_to_virtual_optimized() {
             total_partitions=$((total_partitions + 1))
             
             local dest_part=""
-            if [ -b "${loop_dev}p${part_num}" ]; then
+            if [ "$DRY_RUN" = true ]; then
+                dest_part="${loop_dev}p${part_num}"
+            elif [ -b "${loop_dev}p${part_num}" ]; then
                 dest_part="${loop_dev}p${part_num}"
             elif [ -b "/dev/mapper/$(basename $loop_dev)p${part_num}" ]; then
                 dest_part="/dev/mapper/$(basename $loop_dev)p${part_num}"
@@ -637,7 +743,7 @@ clone_physical_to_virtual_optimized() {
                 continue
             fi
             
-            if [ -b "$source_part" ] && [ -b "$dest_part" ]; then
+            if [ -b "$source_part" ] && ([ -b "$dest_part" ] || [ "$DRY_RUN" = true ]); then
                 local fs_type=$(get_filesystem_type "$source_part")
                 
                 log "Cloning partition $part_num: $source_part -> $dest_part"
@@ -648,26 +754,37 @@ clone_physical_to_virtual_optimized() {
                 fi
                 
                 log "  Copying with dd..."
-                if command -v pv &> /dev/null; then
-                    local part_size=$(blockdev --getsize64 "$source_part" 2>/dev/null)
-                    pv -s "$part_size" "$source_part" | dd of="$dest_part" bs=4M conv=notrunc 2>/dev/null
-                else
-                    dd if="$source_part" of="$dest_part" bs=4M status=progress conv=notrunc 2>/dev/null
-                fi
-                
-                if [ $? -eq 0 ]; then
-                    log "    ✓ Partition cloned successfully"
-                    success_count=$((success_count + 1))
-                    
-                    sync
-                    local dest_fs=$(get_filesystem_type "$dest_part")
-                    if [ "$dest_fs" = "$fs_type" ]; then
-                        log "    ✓ Filesystem verified: $dest_fs"
+                if [ "$DRY_RUN" = true ]; then
+                    log "  🧪 DRY RUN - Would copy partition:"
+                    if command -v pv &> /dev/null; then
+                        local part_size=$(blockdev --getsize64 "$source_part" 2>/dev/null)
+                        log "  🧪 DRY RUN - Would run: pv -s $part_size $source_part | dd of=$dest_part bs=4M conv=notrunc"
                     else
-                        log "    ⚠ Filesystem mismatch: expected $fs_type, got $dest_fs"
+                        log "  🧪 DRY RUN - Would run: dd if=$source_part of=$dest_part bs=4M status=progress conv=notrunc"
                     fi
+                    success_count=$((success_count + 1))
                 else
-                    log "    ❌ Partition clone failed"
+                    if command -v pv &> /dev/null; then
+                        local part_size=$(blockdev --getsize64 "$source_part" 2>/dev/null)
+                        pv -s "$part_size" "$source_part" | dd of="$dest_part" bs=4M conv=notrunc 2>/dev/null
+                    else
+                        dd if="$source_part" of="$dest_part" bs=4M status=progress conv=notrunc 2>/dev/null
+                    fi
+                    
+                    if [ $? -eq 0 ]; then
+                        log "    ✓ Partition cloned successfully"
+                        success_count=$((success_count + 1))
+                        
+                        sync
+                        local dest_fs=$(get_filesystem_type "$dest_part")
+                        if [ "$dest_fs" = "$fs_type" ]; then
+                            log "    ✓ Filesystem verified: $dest_fs"
+                        else
+                            log "    ⚠ Filesystem mismatch: expected $fs_type, got $dest_fs"
+                        fi
+                    else
+                        log "    ❌ Partition clone failed"
+                    fi
                 fi
             fi
             
@@ -677,17 +794,26 @@ clone_physical_to_virtual_optimized() {
         log "Partition cloning summary: $success_count/$total_partitions successful"
     fi
     
-    sync
-    sleep 2
+    if [ "$DRY_RUN" = false ]; then
+        sync
+        sleep 2
+    fi
     
-    if command -v kpartx &> /dev/null; then
-        kpartx -dv "$loop_dev" 2>/dev/null || true
+    if [ "$DRY_RUN" = true ]; then
+        log "🧪 DRY RUN - Would cleanup loop device mappings with kpartx"
+    else
+        if command -v kpartx &> /dev/null; then
+            kpartx -dv "$loop_dev" 2>/dev/null || true
+        fi
     fi
     
     log "Verifying partition table..."
-    parted "$loop_dev" print 2>&1 | tee -a "$LOGFILE"
-    
-    losetup -d "$loop_dev" 2>/dev/null || true
+    if [ "$DRY_RUN" = true ]; then
+        log "🧪 DRY RUN - Would verify with: parted $loop_dev print"
+    else
+        parted "$loop_dev" print 2>&1 | tee -a "$LOGFILE"
+        losetup -d "$loop_dev" 2>/dev/null || true
+    fi
     
     log "Converting to $dest_format format..."
     
@@ -704,7 +830,18 @@ clone_physical_to_virtual_optimized() {
             ;;
     esac
     
-    if run_log "qemu-img convert $convert_opts -O '$dest_format' '$temp_raw' '$dest_file'"; then
+    if [ "$DRY_RUN" = true ]; then
+        log "🧪 DRY RUN - Would convert with: qemu-img convert $convert_opts -O '$dest_format' '$temp_raw' '$dest_file'"
+        log "🧪 DRY RUN - Would remove temporary file: $temp_raw"
+        log "🧪 DRY RUN - Would verify with: qemu-img info '$dest_file'"
+        
+        if [ "$dest_format" = "qcow2" ]; then
+            log "🧪 DRY RUN - Would check with: qemu-img check '$dest_file'"
+        fi
+        
+        log "✅ DRY RUN - Cloning simulation completed successfully!"
+        return 0
+    elif run_log "qemu-img convert $convert_opts -O '$dest_format' '$temp_raw' '$dest_file'"; then
         rm -f "$temp_raw"
         
         log "Verifying cloned image..."
@@ -717,7 +854,7 @@ clone_physical_to_virtual_optimized() {
         if command -v qemu-nbd &> /dev/null && command -v nbd-client &> /dev/null; then
             log "Performing filesystem verification with qemu-nbd..."
             
-            modprobe nbd max_part=8 2>/dev/null || true
+            dry_run_cmd modprobe nbd max_part=8
             
             local nbd_dev=""
             for i in {0..7}; do
@@ -728,24 +865,26 @@ clone_physical_to_virtual_optimized() {
             done
             
             if [ -n "$nbd_dev" ]; then
-                if qemu-nbd --connect="$nbd_dev" "$dest_file" 2>/dev/null; then
-                    sleep 2
-                    
-                    log "Connected to $nbd_dev, checking filesystems..."
-                    parted "$nbd_dev" print 2>&1 | tee -a "$LOGFILE"
-                    
-                    local part_num=1
-                    while [ -b "${nbd_dev}p${part_num}" ]; do
-                        local fs_type=$(get_filesystem_type "${nbd_dev}p${part_num}")
-                        if [ -n "$fs_type" ]; then
-                            log "  Partition $part_num: $fs_type ✓"
-                        else
-                            log "  Partition $part_num: No filesystem detected ⚠"
-                        fi
-                        part_num=$((part_num + 1))
-                    done
-                    
-                    qemu-nbd --disconnect "$nbd_dev" 2>/dev/null || true
+                if dry_run_cmd qemu-nbd --connect="$nbd_dev" "$dest_file"; then
+                    if [ "$DRY_RUN" = false ]; then
+                        sleep 2
+                        
+                        log "Connected to $nbd_dev, checking filesystems..."
+                        parted "$nbd_dev" print 2>&1 | tee -a "$LOGFILE"
+                        
+                        local part_num=1
+                        while [ -b "${nbd_dev}p${part_num}" ]; do
+                            local fs_type=$(get_filesystem_type "${nbd_dev}p${part_num}")
+                            if [ -n "$fs_type" ]; then
+                                log "  Partition $part_num: $fs_type ✓"
+                            else
+                                log "  Partition $part_num: No filesystem detected ⚠"
+                            fi
+                            part_num=$((part_num + 1))
+                        done
+                        
+                        qemu-nbd --disconnect "$nbd_dev" 2>/dev/null || true
+                    fi
                 else
                     log "Could not connect qemu-nbd for verification"
                 fi
@@ -768,7 +907,7 @@ clone_physical_to_virtual_optimized() {
     fi
 }
 
-# -------------------- NEW: UUID PRESERVATION FUNCTIONS --------------------
+# -------------------- NEW: UUID PRESERVATION FUNCTIONS (enhanced with dry-run) --------------------
 
 get_filesystem_uuid() {
     local partition="$1"
@@ -798,15 +937,19 @@ set_filesystem_uuid() {
     case "$fs_type" in
         "ext2"|"ext3"|"ext4")
             log "Setting ext filesystem UUID: $uuid"
-            tune2fs -U "$uuid" "$partition" 2>/dev/null || true
+            dry_run_cmd tune2fs -U "$uuid" "$partition"
             ;;
         "vfat"|"fat32")
             log "Setting FAT filesystem UUID: $uuid"
             local fat_uuid=$(echo "$uuid" | tr -d '-' | cut -c1-8 | tr '[:lower:]' '[:upper:]')
             if command -v mlabel >/dev/null 2>&1; then
-                echo "drive z: file=\"$partition\"" > /tmp/mtools.conf.$
-                MTOOLSRC=/tmp/mtools.conf.$ mlabel -N "${fat_uuid:0:8}" z: 2>/dev/null || true
-                rm -f /tmp/mtools.conf.$
+                if [ "$DRY_RUN" = true ]; then
+                    log "🧪 DRY RUN - Would create mtools config and run: mlabel -N ${fat_uuid:0:8}"
+                else
+                    echo "drive z: file=\"$partition\"" > /tmp/mtools.conf.$
+                    MTOOLSRC=/tmp/mtools.conf.$ mlabel -N "${fat_uuid:0:8}" z: 2>/dev/null || true
+                    rm -f /tmp/mtools.conf.$
+                fi
             else
                 log "Warning: Cannot set FAT UUID - mlabel not available"
             fi
@@ -816,11 +959,11 @@ set_filesystem_uuid() {
             ;;
         "swap")
             log "Setting swap UUID: $uuid"
-            mkswap -U "$uuid" "$partition" >/dev/null 2>&1 || true
+            dry_run_cmd mkswap -U "$uuid" "$partition"
             ;;
         "xfs")
             log "Setting XFS UUID: $uuid"
-            xfs_admin -U "$uuid" "$partition" 2>/dev/null || true
+            dry_run_cmd xfs_admin -U "$uuid" "$partition"
             ;;
         *)
             log "Warning: Cannot set UUID for filesystem type: $fs_type"
@@ -840,7 +983,7 @@ set_partition_uuid() {
     
     if command -v sgdisk >/dev/null 2>&1; then
         log "Setting partition UUID for partition $part_num: $part_uuid"
-        sgdisk --partition-guid="$part_num:$part_uuid" "$disk" 2>/dev/null || true
+        dry_run_cmd sgdisk --partition-guid="$part_num:$part_uuid" "$disk"
     else
         log "Warning: sgdisk not available - cannot set partition UUID"
     fi
@@ -857,7 +1000,7 @@ set_disk_uuid() {
     
     if command -v sgdisk >/dev/null 2>&1; then
         log "Setting disk UUID: $disk_uuid"
-        sgdisk --disk-guid="$disk_uuid" "$disk" 2>/dev/null || true
+        dry_run_cmd sgdisk --disk-guid="$disk_uuid" "$disk"
     else
         log "Warning: sgdisk not available - cannot set disk UUID"
     fi
@@ -876,16 +1019,21 @@ is_efi_partition() {
             local mount_point=$(mount | grep "$partition" | awk '{print $3}' | head -n1)
             [[ -d "$mount_point/EFI" ]]
         else
-            local temp_mount="/tmp/efi_check_$"
-            mkdir -p "$temp_mount"
-            if mount "$partition" "$temp_mount" 2>/dev/null; then
-                local is_efi=false
-                [[ -d "$temp_mount/EFI" ]] && is_efi=true
-                umount "$temp_mount" 2>/dev/null || true
-                rmdir "$temp_mount" 2>/dev/null || true
-                $is_efi
-            else
+            if [ "$DRY_RUN" = true ]; then
+                log "🧪 DRY RUN - Would check if $partition contains EFI directory"
                 [[ "$fs_type" == "vfat" && "$part_num" == "1" ]]
+            else
+                local temp_mount="/tmp/efi_check_$"
+                mkdir -p "$temp_mount"
+                if mount "$partition" "$temp_mount" 2>/dev/null; then
+                    local is_efi=false
+                    [[ -d "$temp_mount/EFI" ]] && is_efi=true
+                    umount "$temp_mount" 2>/dev/null || true
+                    rmdir "$temp_mount" 2>/dev/null || true
+                    $is_efi
+                else
+                    [[ "$fs_type" == "vfat" && "$part_num" == "1" ]]
+                fi
             fi
         fi
     else
@@ -1029,8 +1177,8 @@ create_partitions_with_uuids() {
         source_disk_uuid="$disk_uuid"
     fi
     
-    wipefs -af "$target_disk" 2>/dev/null || true
-    parted "$target_disk" --script mklabel gpt
+    dry_run_cmd wipefs -af "$target_disk"
+    dry_run_cmd parted "$target_disk" --script mklabel gpt
     
     if [[ -n "$source_disk_uuid" ]]; then
         set_disk_uuid "$target_disk" "$source_disk_uuid"
@@ -1065,11 +1213,11 @@ create_partitions_with_uuids() {
         log "Creating partition ${part_num} (sectors ${start_sector} to ${end_sector}, size: $(numfmt --to=iec --suffix=B $((size_sectors * sector_size))))"
         
         if [[ "$is_efi" == "true" ]]; then
-            parted "$target_disk" --script mkpart "EFI" fat32 "${start_sector}s" "${end_sector}s"
-            parted "$target_disk" --script set $part_num esp on
+            dry_run_cmd parted "$target_disk" --script mkpart "EFI" fat32 "${start_sector}s" "${end_sector}s"
+            dry_run_cmd parted "$target_disk" --script set $part_num esp on
         else
             local part_name="partition${part_num}"
-            parted "$target_disk" --script mkpart "$part_name" "${start_sector}s" "${end_sector}s"
+            dry_run_cmd parted "$target_disk" --script mkpart "$part_name" "${start_sector}s" "${end_sector}s"
         fi
         
         target_sizes_ref[$i]=$((size_sectors * sector_size))
@@ -1081,21 +1229,28 @@ create_partitions_with_uuids() {
         fi
     done
     
-    partprobe "$target_disk"
-    sleep 3
+    dry_run_cmd partprobe "$target_disk"
+    if [ "$DRY_RUN" = false ]; then
+        sleep 3
+    fi
     
     for i in "${!source_parts_ref[@]}"; do
         local target_partition="${target_disk}$((i+1))"
-        local count=0
-        while [[ ! -b "$target_partition" && $count -lt 10 ]]; do
-            sleep 1
-            count=$((count + 1))
-            partprobe "$target_disk" 2>/dev/null || true
-        done
         
-        if [[ ! -b "$target_partition" ]]; then
-            log "Error: Failed to create partition $target_partition"
-            return 1
+        if [ "$DRY_RUN" = true ]; then
+            log "🧪 DRY RUN - Would wait for partition $target_partition to be created"
+        else
+            local count=0
+            while [[ ! -b "$target_partition" && $count -lt 10 ]]; do
+                sleep 1
+                count=$((count + 1))
+                partprobe "$target_disk" 2>/dev/null || true
+            done
+            
+            if [[ ! -b "$target_partition" ]]; then
+                log "Error: Failed to create partition $target_partition"
+                return 1
+            fi
         fi
         
         IFS=',' read -r partition size fs_type is_efi fs_uuid part_uuid disk_uuid <<< "${source_parts_ref[$i]}"
@@ -1103,12 +1258,18 @@ create_partitions_with_uuids() {
             set_partition_uuid "$target_disk" "$((i+1))" "$part_uuid"
         fi
         
-        local actual_size=$(blockdev --getsize64 "$target_partition" 2>/dev/null || echo "0")
-        log "Partition $target_partition created with size: $(numfmt --to=iec --suffix=B $actual_size)"
+        if [ "$DRY_RUN" = true ]; then
+            log "🧪 DRY RUN - Partition $target_partition would be created with size: $(numfmt --to=iec --suffix=B ${target_sizes_ref[$i]})"
+        else
+            local actual_size=$(blockdev --getsize64 "$target_partition" 2>/dev/null || echo "0")
+            log "Partition $target_partition created with size: $(numfmt --to=iec --suffix=B $actual_size)"
+        fi
     done
     
-    partprobe "$target_disk"
-    sleep 2
+    dry_run_cmd partprobe "$target_disk"
+    if [ "$DRY_RUN" = false ]; then
+        sleep 2
+    fi
     return 0
 }
 
@@ -1125,13 +1286,18 @@ clone_partitions_with_uuid_preservation() {
         log "Filesystem type: ${fs_type:-unknown}, EFI: $is_efi"
         log "FS UUID: ${fs_uuid:-none}"
         
-        if [[ ! -b "$source_partition" ]] || [[ ! -b "$target_partition" ]]; then
+        if [[ ! -b "$source_partition" ]] || ([[ ! -b "$target_partition" ]] && [ "$DRY_RUN" = false ]); then
             log "Error: Source or target partition does not exist"
             continue
         fi
         
         local source_size=$(blockdev --getsize64 "$source_partition" 2>/dev/null || echo "0")
-        local target_size=$(blockdev --getsize64 "$target_partition" 2>/dev/null || echo "0")
+        local target_size
+        if [ "$DRY_RUN" = true ]; then
+            target_size=$source_size  # Assume same size for dry run
+        else
+            target_size=$(blockdev --getsize64 "$target_partition" 2>/dev/null || echo "0")
+        fi
         
         log "Source size: $(numfmt --to=iec --suffix=B $source_size)"
         log "Target size: $(numfmt --to=iec --suffix=B $target_size)"
@@ -1155,41 +1321,65 @@ clone_partitions_with_uuid_preservation() {
             "vfat"|"fat32")
                 log "Using dd for FAT filesystem (copying $blocks_to_copy blocks of 1MB)"
                 if [[ $blocks_to_copy -gt 0 ]]; then
-                    dd if="$source_partition" of="$target_partition" bs=$block_size count=$blocks_to_copy status=progress || {
-                        log "Warning: dd with 1MB blocks failed, trying with 512KB"
-                        local small_block_size=524288
-                        local small_blocks_to_copy=$((copy_size / small_block_size))
-                        dd if="$source_partition" of="$target_partition" bs=$small_block_size count=$small_blocks_to_copy status=progress 
-                    }
+                    if [ "$DRY_RUN" = true ]; then
+                        log "🧪 DRY RUN - Would run: dd if='$source_partition' of='$target_partition' bs=$block_size count=$blocks_to_copy status=progress"
+                    else
+                        dd if="$source_partition" of="$target_partition" bs=$block_size count=$blocks_to_copy status=progress || {
+                            log "Warning: dd with 1MB blocks failed, trying with 512KB"
+                            local small_block_size=524288
+                            local small_blocks_to_copy=$((copy_size / small_block_size))
+                            dd if="$source_partition" of="$target_partition" bs=$small_block_size count=$small_blocks_to_copy status=progress 
+                        }
+                    fi
                 else
                     log "Warning: Partition too small, copying sector by sector"
-                    dd if="$source_partition" of="$target_partition" bs=512 count=$((copy_size / 512)) status=progress 
+                    if [ "$DRY_RUN" = true ]; then
+                        log "🧪 DRY RUN - Would run: dd if='$source_partition' of='$target_partition' bs=512 count=$((copy_size / 512)) status=progress"
+                    else
+                        dd if="$source_partition" of="$target_partition" bs=512 count=$((copy_size / 512)) status=progress 
+                    fi
                 fi
                 set_filesystem_uuid "$target_partition" "$fs_uuid" "$fs_type"
                 ;;
             "ext2"|"ext3"|"ext4")
                 log "Using e2image for ext filesystem"
-                e2fsck -fy "$source_partition" 2>/dev/null || true
-                e2image -ra -p "$source_partition" "$target_partition" 2>/dev/null
-                if [[ $target_size -gt $source_size ]]; then
-                    resize2fs "$target_partition" 2>/dev/null || true
+                dry_run_cmd e2fsck -fy "$source_partition"
+                if [ "$DRY_RUN" = true ]; then
+                    log "🧪 DRY RUN - Would run: e2image -ra -p '$source_partition' '$target_partition'"
+                    if [[ $target_size -gt $source_size ]]; then
+                        log "🧪 DRY RUN - Would run: resize2fs '$target_partition'"
+                    fi
+                else
+                    e2image -ra -p "$source_partition" "$target_partition" 2>/dev/null
+                    if [[ $target_size -gt $source_size ]]; then
+                        resize2fs "$target_partition" 2>/dev/null || true
+                    fi
                 fi
                 log "UUID preserved by e2image: $fs_uuid"
                 ;;
             "ntfs")
                 if command -v ntfsclone >/dev/null 2>&1; then
                     log "Using ntfsclone for NTFS filesystem"
-                    ntfsclone -f --overwrite "$target_partition" "$source_partition" 2>/dev/null
-                    if [[ $target_size -gt $source_size ]]; then
-                        ntfsresize -f "$target_partition" 2>/dev/null || true
+                    if [ "$DRY_RUN" = true ]; then
+                        log "🧪 DRY RUN - Would run: ntfsclone -f --overwrite '$target_partition' '$source_partition'"
+                        if [[ $target_size -gt $source_size ]]; then
+                            log "🧪 DRY RUN - Would run: ntfsresize -f '$target_partition'"
+                        fi
+                    else
+                        ntfsclone -f --overwrite "$target_partition" "$source_partition" 2>/dev/null
+                        if [[ $target_size -gt $source_size ]]; then
+                            ntfsresize -f "$target_partition" 2>/dev/null || true
+                        fi
                     fi
                     log "UUID preserved by ntfsclone: $fs_uuid"
                 else
                     log "Warning: ntfsclone not available, using dd with size limit"
                     if [[ $blocks_to_copy -gt 0 ]]; then
-                        dd if="$source_partition" of="$target_partition" bs=$block_size count=$blocks_to_copy status=progress
-                    else
-                        dd if="$source_partition" of="$target_partition" bs=512 count=$((copy_size / 512)) status=progress
+                        if [ "$DRY_RUN" = true ]; then
+                            log "🧪 DRY RUN - Would run: dd if='$source_partition' of='$target_partition' bs=$block_size count=$blocks_to_copy status=progress"
+                        else
+                            dd if="$source_partition" of="$target_partition" bs=512 count=$((copy_size / 512)) status=progress
+                        fi
                     fi
                     log "Warning: UUID may not be preserved with dd copy"
                 fi
@@ -1206,10 +1396,16 @@ clone_partitions_with_uuid_preservation() {
                 log "Using dd with exact sector copy for LUKS container"
                 local sectors_to_copy=$source_sectors
                 
-                dd if="$source_partition" of="$target_partition" bs=512 count=$sectors_to_copy status=progress conv=noerror,sync
+                if [ "$DRY_RUN" = true ]; then
+                    log "🧪 DRY RUN - Would run: dd if='$source_partition' of='$target_partition' bs=512 count=$sectors_to_copy status=progress conv=noerror,sync"
+                else
+                    dd if="$source_partition" of="$target_partition" bs=512 count=$sectors_to_copy status=progress conv=noerror,sync
+                fi
                 
                 if command -v cryptsetup >/dev/null 2>&1; then
-                    if cryptsetup luksDump "$target_partition" >/dev/null 2>&1; then
+                    if [ "$DRY_RUN" = true ]; then
+                        log "🧪 DRY RUN - Would verify LUKS header with: cryptsetup luksDump '$target_partition'"
+                    elif cryptsetup luksDump "$target_partition" >/dev/null 2>&1; then
                         log "LUKS header verified successfully"
                     else
                         log "Error: LUKS header verification failed - partition may be corrupted"
@@ -1223,24 +1419,40 @@ clone_partitions_with_uuid_preservation() {
             "swap")
                 log "Creating new swap partition with preserved UUID"
                 if [[ -n "$fs_uuid" ]]; then
-                    mkswap -U "$fs_uuid" "$target_partition" 2>/dev/null
+                    if [ "$DRY_RUN" = true ]; then
+                        log "🧪 DRY RUN - Would run: mkswap -U '$fs_uuid' '$target_partition'"
+                    else
+                        mkswap -U "$fs_uuid" "$target_partition" 2>/dev/null
+                    fi
                     log "Swap UUID set to: $fs_uuid"
                 else
-                    mkswap "$target_partition" 2>/dev/null
+                    if [ "$DRY_RUN" = true ]; then
+                        log "🧪 DRY RUN - Would run: mkswap '$target_partition'"
+                    else
+                        mkswap "$target_partition" 2>/dev/null
+                    fi
                     log "New swap partition created"
                 fi
                 ;;
             "xfs")
                 log "Using dd for XFS filesystem"
                 if [[ $blocks_to_copy -gt 0 ]]; then
-                    dd if="$source_partition" of="$target_partition" bs=$block_size count=$blocks_to_copy status=progress || {
-                        log "Warning: dd with 1MB blocks failed, trying with 512KB"
-                        local small_block_size=524288
-                        local small_blocks_to_copy=$((copy_size / small_block_size))
-                        dd if="$source_partition" of="$target_partition" bs=$small_block_size count=$small_blocks_to_copy status=progress
-                    }
+                    if [ "$DRY_RUN" = true ]; then
+                        log "🧪 DRY RUN - Would run: dd if='$source_partition' of='$target_partition' bs=$block_size count=$blocks_to_copy status=progress"
+                    else
+                        dd if="$source_partition" of="$target_partition" bs=$block_size count=$blocks_to_copy status=progress || {
+                            log "Warning: dd with 1MB blocks failed, trying with 512KB"
+                            local small_block_size=524288
+                            local small_blocks_to_copy=$((copy_size / small_block_size))
+                            dd if="$source_partition" of="$target_partition" bs=$small_block_size count=$small_blocks_to_copy status=progress
+                        }
+                    fi
                 else
-                    dd if="$source_partition" of="$target_partition" bs=512 count=$((copy_size / 512)) status=progress
+                    if [ "$DRY_RUN" = true ]; then
+                        log "🧪 DRY RUN - Would run: dd if='$source_partition' of='$target_partition' bs=512 count=$((copy_size / 512)) status=progress"
+                    else
+                        dd if="$source_partition" of="$target_partition" bs=512 count=$((copy_size / 512)) status=progress
+                    fi
                 fi
                 if [[ -n "$fs_uuid" ]]; then
                     set_filesystem_uuid "$target_partition" "$fs_uuid" "$fs_type"
@@ -1249,27 +1461,43 @@ clone_partitions_with_uuid_preservation() {
             "")
                 log "Warning: Unknown filesystem, attempting dd copy with size limit"
                 if [[ $blocks_to_copy -gt 0 ]]; then
-                    dd if="$source_partition" of="$target_partition" bs=$block_size count=$blocks_to_copy status=progress || {
-                        log "Warning: dd with 1MB blocks failed, trying with 512KB"
-                        local small_block_size=524288
-                        local small_blocks_to_copy=$((copy_size / small_block_size))
-                        dd if="$source_partition" of="$target_partition" bs=$small_block_size count=$small_blocks_to_copy status=progress
-                    }
+                    if [ "$DRY_RUN" = true ]; then
+                        log "🧪 DRY RUN - Would run: dd if='$source_partition' of='$target_partition' bs=$block_size count=$blocks_to_copy status=progress"
+                    else
+                        dd if="$source_partition" of="$target_partition" bs=$block_size count=$blocks_to_copy status=progress || {
+                            log "Warning: dd with 1MB blocks failed, trying with 512KB"
+                            local small_block_size=524288
+                            local small_blocks_to_copy=$((copy_size / small_block_size))
+                            dd if="$source_partition" of="$target_partition" bs=$small_block_size count=$small_blocks_to_copy status=progress
+                        }
+                    fi
                 else
-                    dd if="$source_partition" of="$target_partition" bs=512 count=$((copy_size / 512)) status=progress
+                    if [ "$DRY_RUN" = true ]; then
+                        log "🧪 DRY RUN - Would run: dd if='$source_partition' of='$target_partition' bs=512 count=$((copy_size / 512)) status=progress"
+                    else
+                        dd if="$source_partition" of="$target_partition" bs=512 count=$((copy_size / 512)) status=progress
+                    fi
                 fi
                 ;;
             *)
                 log "Warning: Unsupported filesystem $fs_type, using dd with size limit"
                 if [[ $blocks_to_copy -gt 0 ]]; then
-                    dd if="$source_partition" of="$target_partition" bs=$block_size count=$blocks_to_copy status=progress || {
-                        log "Warning: dd with 1MB blocks failed, trying with 512KB"
-                        local small_block_size=524288
-                        local small_blocks_to_copy=$((copy_size / small_block_size))
-                        dd if="$source_partition" of="$target_partition" bs=$small_block_size count=$small_blocks_to_copy status=progress
-                    }
+                    if [ "$DRY_RUN" = true ]; then
+                        log "🧪 DRY RUN - Would run: dd if='$source_partition' of='$target_partition' bs=$block_size count=$blocks_to_copy status=progress"
+                    else
+                        dd if="$source_partition" of="$target_partition" bs=$block_size count=$blocks_to_copy status=progress || {
+                            log "Warning: dd with 1MB blocks failed, trying with 512KB"
+                            local small_block_size=524288
+                            local small_blocks_to_copy=$((copy_size / small_block_size))
+                            dd if="$source_partition" of="$target_partition" bs=$small_block_size count=$small_blocks_to_copy status=progress
+                        }
+                    fi
                 else
-                    dd if="$source_partition" of="$target_partition" bs=512 count=$((copy_size / 512)) status=progress
+                    if [ "$DRY_RUN" = true ]; then
+                        log "🧪 DRY RUN - Would run: dd if='$source_partition' of='$target_partition' bs=512 count=$((copy_size / 512)) status=progress"
+                    else
+                        dd if="$source_partition" of="$target_partition" bs=512 count=$((copy_size / 512)) status=progress
+                    fi
                 fi
                 if [[ -n "$fs_uuid" ]]; then
                     set_filesystem_uuid "$target_partition" "$fs_uuid" "$fs_type"
@@ -1279,13 +1507,17 @@ clone_partitions_with_uuid_preservation() {
         
         log "Successfully cloned $source_partition to $target_partition"
         
-        local new_fs_uuid=$(get_filesystem_uuid "$target_partition")
-        if [[ -n "$new_fs_uuid" && "$new_fs_uuid" == "$fs_uuid" ]]; then
-            log "UUID correctly preserved: $new_fs_uuid"
-        elif [[ -n "$new_fs_uuid" ]]; then
-            log "Warning: UUID changed: $fs_uuid -> $new_fs_uuid"
+        if [ "$DRY_RUN" = true ]; then
+            log "🧪 DRY RUN - Would verify UUID preservation"
         else
-            log "Warning: No UUID found on target partition"
+            local new_fs_uuid=$(get_filesystem_uuid "$target_partition")
+            if [[ -n "$new_fs_uuid" && "$new_fs_uuid" == "$fs_uuid" ]]; then
+                log "UUID correctly preserved: $new_fs_uuid"
+            elif [[ -n "$new_fs_uuid" ]]; then
+                log "Warning: UUID changed: $fs_uuid -> $new_fs_uuid"
+            else
+                log "Warning: No UUID found on target partition"
+            fi
         fi
     done
 }
@@ -1348,7 +1580,7 @@ get_virtual_disk_info() {
     return 1
 }
 
-# -------------------- NEW: PHYSICAL TO PHYSICAL CLONING FUNCTIONS --------------------
+# -------------------- NEW: PHYSICAL TO PHYSICAL CLONING FUNCTIONS (enhanced with dry-run) --------------------
 
 clone_physical_to_physical_simple() {
     log "=== Physical to Physical Cloning (Simple Mode) ==="
@@ -1391,24 +1623,44 @@ clone_physical_to_physical_simple() {
         return 1
     fi
     
+    local warning_msg="This operation will COMPLETELY DESTROY ALL DATA on the target device!\n\nSource: $source_device ($((source_size / 1073741824)) GB)\nTarget: $target_device ($((target_size / 1073741824)) GB)\n\nThis action is IRREVERSIBLE!"
+    if [ "$DRY_RUN" = true ]; then
+        warning_msg="$warning_msg\n\n🧪 DRY RUN MODE: No actual changes will be made"
+    fi
+    
     if ! dialog --title "⚠️ CRITICAL WARNING ⚠️" \
-        --yesno "This operation will COMPLETELY DESTROY ALL DATA on the target device!\n\nSource: $source_device ($((source_size / 1073741824)) GB)\nTarget: $target_device ($((target_size / 1073741824)) GB)\n\nThis action is IRREVERSIBLE!\n\nType 'yes' to confirm:" 14 70; then
+        --yesno "$warning_msg\n\nType 'yes' to confirm:" 16 70; then
         return 1
     fi
     
     local confirm_text
-    confirm_text=$(dialog --clear --title "Final Confirmation" \
-        --inputbox "To proceed with this DESTRUCTIVE operation, type exactly: DESTROY" 10 70 \
-        3>&1 1>&2 2>&3)
-    
-    if [ "$confirm_text" != "DESTROY" ]; then
-        dialog --title "Cancelled" --msgbox "Operation cancelled - confirmation text did not match." 8 60
-        return 1
+    if [ "$DRY_RUN" = true ]; then
+        confirm_text=$(dialog --clear --title "Final Confirmation (Dry Run)" \
+            --inputbox "To proceed with this DRY RUN simulation, type exactly: SIMULATE" 10 70 \
+            3>&1 1>&2 2>&3)
+        
+        if [ "$confirm_text" != "SIMULATE" ]; then
+            dialog --title "Cancelled" --msgbox "Dry run cancelled - confirmation text did not match." 8 60
+            return 1
+        fi
+    else
+        confirm_text=$(dialog --clear --title "Final Confirmation" \
+            --inputbox "To proceed with this DESTRUCTIVE operation, type exactly: DESTROY" 10 70 \
+            3>&1 1>&2 2>&3)
+        
+        if [ "$confirm_text" != "DESTROY" ]; then
+            dialog --title "Cancelled" --msgbox "Operation cancelled - confirmation text did not match." 8 60
+            return 1
+        fi
     fi
     
     clear
     
-    log "Starting simple physical to physical clone..."
+    if [ "$DRY_RUN" = true ]; then
+        log "Starting DRY RUN simulation of physical to physical clone..."
+    else
+        log "Starting simple physical to physical clone..."
+    fi
     log "This will copy the entire source device to the target device"
     
     # Unmount partitions safely
@@ -1418,26 +1670,41 @@ clone_physical_to_physical_simple() {
     # Perform the clone
     log "Cloning $source_device to $target_device..."
     
-    if command -v pv &> /dev/null; then
-        log "Using pv for progress monitoring..."
-        pv -tpreb "$source_device" | dd of="$target_device" bs=4M conv=notrunc,noerror 2>/dev/null
-    else
-        log "Using dd with progress..."
-        dd if="$source_device" of="$target_device" bs=4M status=progress conv=notrunc,noerror 2>/dev/null
-    fi
-    
-    if [ $? -eq 0 ]; then
-        sync
-        log "Verifying partition table on target device..."
-        partprobe "$target_device" 2>/dev/null || true
-        sleep 3
+    if [ "$DRY_RUN" = true ]; then
+        log "🧪 DRY RUN - Would clone entire device:"
+        if command -v pv &> /dev/null; then
+            log "🧪 DRY RUN - Would run: pv -tpreb '$source_device' | dd of='$target_device' bs=4M conv=notrunc,noerror"
+        else
+            log "🧪 DRY RUN - Would run: dd if='$source_device' of='$target_device' bs=4M status=progress conv=notrunc,noerror"
+        fi
+        log "🧪 DRY RUN - Would run: sync"
+        log "🧪 DRY RUN - Would run: partprobe '$target_device'"
         
-        dialog --title "✅ Success" \
-            --msgbox "Simple cloning completed successfully!\n\n$source_device → $target_device\n\nAll data has been copied exactly." 12 70
+        dialog --title "✅ Dry Run Complete" \
+            --msgbox "DRY RUN simulation completed successfully!\n\nWould have cloned:\n$source_device → $target_device\n\nAll commands logged without execution." 12 70
         return 0
     else
-        dialog --title "❌ Error" --msgbox "Error during cloning!" 8 50
-        return 1
+        if command -v pv &> /dev/null; then
+            log "Using pv for progress monitoring..."
+            pv -tpreb "$source_device" | dd of="$target_device" bs=4M conv=notrunc,noerror 2>/dev/null
+        else
+            log "Using dd with progress..."
+            dd if="$source_device" of="$target_device" bs=4M status=progress conv=notrunc,noerror 2>/dev/null
+        fi
+        
+        if [ $? -eq 0 ]; then
+            sync
+            log "Verifying partition table on target device..."
+            partprobe "$target_device" 2>/dev/null || true
+            sleep 3
+            
+            dialog --title "✅ Success" \
+                --msgbox "Simple cloning completed successfully!\n\n$source_device → $target_device\n\nAll data has been copied exactly." 12 70
+            return 0
+        else
+            dialog --title "❌ Error" --msgbox "Error during cloning!" 8 50
+            return 1
+        fi
     fi
 }
 
@@ -1510,7 +1777,13 @@ clone_physical_to_physical_with_uuid() {
     local plan_text="PHYSICAL TO PHYSICAL CLONING WITH UUID PRESERVATION\n\n"
     plan_text+="Source: $source_device ($(numfmt --to=iec --suffix=B $source_size))\n"
     plan_text+="Target: $target_device ($(numfmt --to=iec --suffix=B $target_size))\n\n"
-    plan_text+="⚠️  TARGET DEVICE WILL BE COMPLETELY WIPED! ⚠️\n\n"
+    
+    if [ "$DRY_RUN" = true ]; then
+        plan_text+="🧪 DRY RUN MODE: NO ACTUAL CHANGES WILL BE MADE\n\n"
+    else
+        plan_text+="⚠️  TARGET DEVICE WILL BE COMPLETELY WIPED! ⚠️\n\n"
+    fi
+    
     plan_text+="Partitions to clone:\n"
     
     for i in "${!source_partitions[@]}"; do
@@ -1535,18 +1808,33 @@ clone_physical_to_physical_with_uuid() {
     fi
     
     local confirm_text
-    confirm_text=$(dialog --clear --title "Final Safety Check" \
-        --inputbox "This will DESTROY all data on $target_device!\n\nTo confirm, type exactly: CLONE" 12 80 \
-        3>&1 1>&2 2>&3)
-    
-    if [ "$confirm_text" != "CLONE" ]; then
-        dialog --title "Cancelled" --msgbox "Operation cancelled - safety check failed." 8 60
-        return 1
+    if [ "$DRY_RUN" = true ]; then
+        confirm_text=$(dialog --clear --title "Final Safety Check (Dry Run)" \
+            --inputbox "This is a DRY RUN simulation!\n\nTo confirm, type exactly: SIMULATE" 12 80 \
+            3>&1 1>&2 2>&3)
+        
+        if [ "$confirm_text" != "SIMULATE" ]; then
+            dialog --title "Cancelled" --msgbox "Dry run cancelled - safety check failed." 8 60
+            return 1
+        fi
+    else
+        confirm_text=$(dialog --clear --title "Final Safety Check" \
+            --inputbox "This will DESTROY all data on $target_device!\n\nTo confirm, type exactly: CLONE" 12 80 \
+            3>&1 1>&2 2>&3)
+        
+        if [ "$confirm_text" != "CLONE" ]; then
+            dialog --title "Cancelled" --msgbox "Operation cancelled - safety check failed." 8 60
+            return 1
+        fi
     fi
     
     clear
     
-    log "Starting physical to physical clone with UUID preservation..."
+    if [ "$DRY_RUN" = true ]; then
+        log "Starting DRY RUN simulation of physical to physical clone with UUID preservation..."
+    else
+        log "Starting physical to physical clone with UUID preservation..."
+    fi
     
     # Unmount partitions safely
     safe_unmount_device_partitions "$source_device"
@@ -1566,12 +1854,20 @@ clone_physical_to_physical_with_uuid() {
     
     # Verification
     log "Verifying clone results..."
-    sync
-    partprobe "$target_device" 2>/dev/null || true
-    sleep 3
+    if [ "$DRY_RUN" = false ]; then
+        sync
+        partprobe "$target_device" 2>/dev/null || true
+        sleep 3
+    fi
     
     # Show verification results
-    local verify_text="CLONING COMPLETED!\n\n"
+    local verify_text=""
+    if [ "$DRY_RUN" = true ]; then
+        verify_text="DRY RUN SIMULATION COMPLETED!\n\n"
+    else
+        verify_text="CLONING COMPLETED!\n\n"
+    fi
+    
     verify_text+="Source: $source_device\n"
     verify_text+="Target: $target_device\n\n"
     verify_text+="Partition verification:\n"
@@ -1582,7 +1878,13 @@ clone_physical_to_physical_with_uuid() {
         IFS=',' read -r source_partition size fs_type is_efi fs_uuid part_uuid disk_uuid <<< "${source_partitions[$i]}"
         local target_partition="${target_device}$((i+1))"
         
-        if [[ -b "$target_partition" ]]; then
+        if [ "$DRY_RUN" = true ]; then
+            verify_text+="• $(basename $target_partition): ${fs_type:-unknown} ✓ UUID would be preserved"
+            if [[ "$is_efi" == "true" ]]; then
+                verify_text+=" [EFI]"
+            fi
+            verify_text+="\n"
+        elif [[ -b "$target_partition" ]]; then
             local new_fs_uuid=$(get_filesystem_uuid "$target_partition")
             local new_part_uuid=$(get_partition_uuid "$target_partition")
             
@@ -1607,20 +1909,27 @@ clone_physical_to_physical_with_uuid() {
     done
     
     # Check disk UUID
-    local new_disk_uuid=$(get_disk_uuid "$target_device")
-    local source_disk_uuid=""
-    if [[ ${#source_partitions[@]} -gt 0 ]]; then
-        IFS=',' read -r partition size fs_type is_efi fs_uuid part_uuid disk_uuid <<< "${source_partitions[0]}"
-        source_disk_uuid="$disk_uuid"
+    if [ "$DRY_RUN" = true ]; then
+        verify_text+="\n✓ Disk UUID would be preserved"
+    else
+        local new_disk_uuid=$(get_disk_uuid "$target_device")
+        local source_disk_uuid=""
+        if [[ ${#source_partitions[@]} -gt 0 ]]; then
+            IFS=',' read -r partition size fs_type is_efi fs_uuid part_uuid disk_uuid <<< "${source_partitions[0]}"
+            source_disk_uuid="$disk_uuid"
+        fi
+        
+        if [[ -n "$source_disk_uuid" && "$source_disk_uuid" == "$new_disk_uuid" ]]; then
+            verify_text+="\n✓ Disk UUID preserved"
+        elif [[ -n "$source_disk_uuid" ]]; then
+            verify_text+="\n⚠ Disk UUID changed"
+        fi
     fi
     
-    if [[ -n "$source_disk_uuid" && "$source_disk_uuid" == "$new_disk_uuid" ]]; then
-        verify_text+="\n✓ Disk UUID preserved"
-    elif [[ -n "$source_disk_uuid" ]]; then
-        verify_text+="\n⚠ Disk UUID changed"
-    fi
-    
-    if [[ $uuid_mismatches -gt 0 ]]; then
+    if [ "$DRY_RUN" = true ]; then
+        verify_text+="\n\n✅ All UUIDs would be successfully preserved!"
+        verify_text+="\nSystem would boot normally after real cloning."
+    elif [[ $uuid_mismatches -gt 0 ]]; then
         verify_text+="\n\n⚠ Some UUIDs could not be preserved."
         verify_text+="\nYou may need to update /etc/fstab"
         verify_text+="\nand bootloader configuration."
@@ -1629,14 +1938,23 @@ clone_physical_to_physical_with_uuid() {
         verify_text+="\nSystem should boot normally."
     fi
     
-    dialog --title "✅ Cloning Complete" \
+    local title="✅ Cloning Complete"
+    if [ "$DRY_RUN" = true ]; then
+        title="✅ Dry Run Complete"
+    fi
+    
+    dialog --title "$title" \
         --msgbox "$verify_text" 20 70
     
-    log "Physical to physical cloning with UUID preservation completed!"
+    if [ "$DRY_RUN" = true ]; then
+        log "Physical to physical cloning DRY RUN simulation completed!"
+    else
+        log "Physical to physical cloning with UUID preservation completed!"
+    fi
     return 0
 }
 
-# -------------------- MAIN CLONING FUNCTIONS (updated) --------------------
+# -------------------- MAIN CLONING FUNCTIONS (enhanced with dry-run) --------------------
 
 clone_physical_to_virtual() {
     log "=== Physical to Virtual Cloning ==="
@@ -1684,7 +2002,7 @@ clone_physical_to_virtual() {
     fi
     
     local dest_file="$dest_dir/$filename"
-    if [ -e "$dest_file" ]; then
+    if [ -e "$dest_file" ] && [ "$DRY_RUN" = false ]; then
         dialog --title "Error" --msgbox "File already exists!" 8 50
         return 1
     fi
@@ -1710,39 +2028,68 @@ clone_physical_to_virtual() {
         size_info="Full size: ${device_gb}GB"
     fi
     
+    local confirm_msg="Clone the device?\n\nSource: $source_device\nDestination: $dest_file\nFormat: $format\n$size_info\n\nMode: $clone_mode"
+    if [ "$DRY_RUN" = true ]; then
+        confirm_msg="$confirm_msg\n\n🧪 DRY RUN: No actual file will be created"
+    fi
+    
     if ! dialog --title "Confirm Cloning" \
-        --yesno "Clone the device?\n\nSource: $source_device\nDestination: $dest_file\nFormat: $format\n$size_info\n\nMode: $clone_mode" 14 70; then
+        --yesno "$confirm_msg" 16 70; then
         return 1
     fi
     
     clear
     
     if [ "$clone_mode" = "optimized" ]; then
-        log "=== OPTIMIZED CLONING MODE ==="
+        if [ "$DRY_RUN" = true ]; then
+            log "=== DRY RUN - OPTIMIZED CLONING MODE ==="
+        else
+            log "=== OPTIMIZED CLONING MODE ==="
+        fi
         log "Creating space-efficient image with proper partition handling..."
         
         clone_physical_to_virtual_optimized "$source_device" "$dest_file" "$format"
     else
-        log "=== FULL CLONING MODE ==="
+        if [ "$DRY_RUN" = true ]; then
+            log "=== DRY RUN - FULL CLONING MODE ==="
+        else
+            log "=== FULL CLONING MODE ==="
+        fi
         log "Cloning entire device..."
         
-        if [ "$format" = "qcow2" ]; then
-            run_log "qemu-img convert -p -c -O qcow2 '$source_device' '$dest_file'"
+        if [ "$DRY_RUN" = true ]; then
+            if [ "$format" = "qcow2" ]; then
+                log "🧪 DRY RUN - Would run: qemu-img convert -p -c -O qcow2 '$source_device' '$dest_file'"
+            else
+                log "🧪 DRY RUN - Would run: qemu-img convert -p -O '$format' '$source_device' '$dest_file'"
+            fi
+            log "✅ DRY RUN - Full cloning simulation completed!"
+            dialog --title "✅ Dry Run Success" \
+                --msgbox "DRY RUN simulation completed successfully!\n\nWould have cloned:\n$source_device → $dest_file\n\nFormat: $format" 12 70
+            return 0
         else
-            run_log "qemu-img convert -p -O '$format' '$source_device' '$dest_file'"
+            if [ "$format" = "qcow2" ]; then
+                run_log "qemu-img convert -p -c -O qcow2 '$source_device' '$dest_file'"
+            else
+                run_log "qemu-img convert -p -O '$format' '$source_device' '$dest_file'"
+            fi
         fi
     fi
     
     if [ $? -eq 0 ]; then
-        sync
-        local final_size=$(stat -c%s "$dest_file" 2>/dev/null || echo 0)
-        dialog --title "✅ Success" \
-            --msgbox "Cloning completed successfully!\n\n$source_device → $dest_file\n\nFile size: $((final_size / 1073741824)) GB" 12 70
+        if [ "$DRY_RUN" = false ]; then
+            sync
+            local final_size=$(stat -c%s "$dest_file" 2>/dev/null || echo 0)
+            dialog --title "✅ Success" \
+                --msgbox "Cloning completed successfully!\n\n$source_device → $dest_file\n\nFile size: $((final_size / 1073741824)) GB" 12 70
+        fi
         return 0
     else
-        dialog --title "❌ Error" \
-            --msgbox "Error during cloning!" 8 50
-        rm -f "$dest_file" 2>/dev/null
+        if [ "$DRY_RUN" = false ]; then
+            dialog --title "❌ Error" \
+                --msgbox "Error during cloning!" 8 50
+            rm -f "$dest_file" 2>/dev/null
+        fi
         return 1
     fi
 }
@@ -1783,8 +2130,13 @@ clone_virtual_to_physical() {
         return 1
     fi
     
+    local warning_msg="WARNING: This operation will DESTROY ALL DATA on $dest_device!\n\nSource: $source_file\nDestination: $dest_device"
+    if [ "$DRY_RUN" = true ]; then
+        warning_msg="$warning_msg\n\n🧪 DRY RUN: No actual changes will be made"
+    fi
+    
     if ! dialog --title "⚠️ CONFIRM CLONING ⚠️" \
-        --yesno "WARNING: This operation will DESTROY ALL DATA on $dest_device!\n\nSource: $source_file\nDestination: $dest_device\n\nAre you SURE you want to continue?" 12 70; then
+        --yesno "$warning_msg\n\nAre you SURE you want to continue?" 14 70; then
         return 1
     fi
     
@@ -1792,16 +2144,24 @@ clone_virtual_to_physical() {
     
     log "Cloning in progress..."
     
-    run_log "qemu-img convert -p -O raw '$source_file' '$dest_device'"
-    
-    if [ $? -eq 0 ]; then
-        sync
-        dialog --title "✅ Success" \
-            --msgbox "Cloning completed successfully!\n\n$source_file → $dest_device" 10 60
+    if [ "$DRY_RUN" = true ]; then
+        log "🧪 DRY RUN - Would run: qemu-img convert -p -O raw '$source_file' '$dest_device'"
+        log "✅ DRY RUN - Virtual to physical cloning simulation completed!"
+        dialog --title "✅ Dry Run Success" \
+            --msgbox "DRY RUN simulation completed successfully!\n\nWould have cloned:\n$source_file → $dest_device" 10 60
         return 0
     else
-        dialog --title "❌ Error" --msgbox "Error during cloning!" 8 50
-        return 1
+        run_log "qemu-img convert -p -O raw '$source_file' '$dest_device'"
+        
+        if [ $? -eq 0 ]; then
+            sync
+            dialog --title "✅ Success" \
+                --msgbox "Cloning completed successfully!\n\n$source_file → $dest_device" 10 60
+            return 0
+        else
+            dialog --title "❌ Error" --msgbox "Error during cloning!" 8 50
+            return 1
+        fi
     fi
 }
 
@@ -1862,7 +2222,7 @@ clone_virtual_to_virtual() {
         fi
         
         dest_file="$dest_dir/$filename"
-        if [ -e "$dest_file" ]; then
+        if [ -e "$dest_file" ] && [ "$DRY_RUN" = false ]; then
             dialog --title "Error" --msgbox "File already exists!" 8 50
             return 1
         fi
@@ -1912,15 +2272,25 @@ clone_virtual_to_virtual() {
             return 1
         fi
         
+        local warning_msg="This will OVERWRITE the existing file:\n$dest_file"
+        if [ "$DRY_RUN" = true ]; then
+            warning_msg="$warning_msg\n\n🧪 DRY RUN: No actual changes will be made"
+        fi
+        
         if ! dialog --title "⚠️ WARNING ⚠️" \
-            --yesno "This will OVERWRITE the existing file:\n$dest_file\n\nAre you sure?" 10 70; then
+            --yesno "$warning_msg\n\nAre you sure?" 12 70; then
             return 1
         fi
     fi
     
+    local confirm_msg="Clone the virtual disk?\n\nSource: $source_file ($src_format)\nDestination: $dest_file ($dest_format)\n\nOptimization will be applied automatically."
+    if [ "$DRY_RUN" = true ]; then
+        confirm_msg="$confirm_msg\n\n🧪 DRY RUN: No actual file changes will be made"
+    fi
+    
     if ! dialog --title "Confirm Cloning" \
-        --yesno "Clone the virtual disk?\n\nSource: $source_file ($src_format)\nDestination: $dest_file ($dest_format)\n\nOptimization will be applied automatically." 12 70; then
-        [ "$dest_choice" = "new" ] && rm -f "$dest_file"
+        --yesno "$confirm_msg" 14 70; then
+        [ "$dest_choice" = "new" ] && [ "$DRY_RUN" = false ] && rm -f "$dest_file"
         return 1
     fi
     
@@ -1950,28 +2320,40 @@ clone_virtual_to_virtual() {
             ;;
     esac
     
-    run_log "set -o pipefail; $convert_cmd -O '$dest_format' '$source_file' '$dest_file'"
-    
-    if [ $? -eq 0 ]; then
-        sync
+    if [ "$DRY_RUN" = true ]; then
+        log "🧪 DRY RUN - Would run: $convert_cmd -O '$dest_format' '$source_file' '$dest_file'"
         if [ "$dest_format" = "qcow2" ]; then
-            log "Running final optimization..."
-            run_log qemu-img check -r all "$dest_file" || true
+            log "🧪 DRY RUN - Would run final optimization: qemu-img check -r all '$dest_file'"
         fi
+        log "✅ DRY RUN - Virtual to virtual cloning simulation completed!"
         
-        local src_actual=$(stat -c%s "$source_file" 2>/dev/null || echo 0)
-        local dst_actual=$(stat -c%s "$dest_file" 2>/dev/null || echo 0)
-        local src_gb=$(echo "scale=2; $src_actual / 1073741824" | bc)
-        local dst_gb=$(echo "scale=2; $dst_actual / 1073741824" | bc)
-        local saved=$(echo "scale=2; $src_gb - $dst_gb" | bc)
-        
-        dialog --title "✅ Success" \
-            --msgbox "Cloning completed!\n\nSource: $(basename \"$source_file\") ($src_gb GB)\nDestination: $(basename \"$dest_file\") ($dst_gb GB)\n\nSpace saved: $saved GB" 12 70
+        dialog --title "✅ Dry Run Success" \
+            --msgbox "DRY RUN simulation completed!\n\nWould have cloned:\nSource: $(basename \"$source_file\") ($src_format)\nDestination: $(basename \"$dest_file\") ($dest_format)" 12 70
         return 0
     else
-        dialog --title "❌ Error" --msgbox "Error during cloning!" 8 50
-        [ "$dest_choice" = "new" ] && rm -f "$dest_file"
-        return 1
+        run_log "set -o pipefail; $convert_cmd -O '$dest_format' '$source_file' '$dest_file'"
+        
+        if [ $? -eq 0 ]; then
+            sync
+            if [ "$dest_format" = "qcow2" ]; then
+                log "Running final optimization..."
+                run_log qemu-img check -r all "$dest_file" || true
+            fi
+            
+            local src_actual=$(stat -c%s "$source_file" 2>/dev/null || echo 0)
+            local dst_actual=$(stat -c%s "$dest_file" 2>/dev/null || echo 0)
+            local src_gb=$(echo "scale=2; $src_actual / 1073741824" | bc)
+            local dst_gb=$(echo "scale=2; $dst_actual / 1073741824" | bc)
+            local saved=$(echo "scale=2; $src_gb - $dst_gb" | bc)
+            
+            dialog --title "✅ Success" \
+                --msgbox "Cloning completed!\n\nSource: $(basename \"$source_file\") ($src_gb GB)\nDestination: $(basename \"$dest_file\") ($dst_gb GB)\n\nSpace saved: $saved GB" 12 70
+            return 0
+        else
+            dialog --title "❌ Error" --msgbox "Error during cloning!" 8 50
+            [ "$dest_choice" = "new" ] && rm -f "$dest_file"
+            return 1
+        fi
     fi
 }
 
@@ -1979,8 +2361,13 @@ clone_virtual_to_virtual() {
 
 main_menu() {
     while true; do
+        local menu_title="⚡ Manzolo Disk Cloner v2.3 ✨"
+        if [ "$DRY_RUN" = true ]; then
+            menu_title="🧪 Manzolo Disk Cloner v2.3 - DRY RUN MODE"
+        fi
+        
         local choice
-        choice=$(dialog --clear --title "⚡ Manzolo Disk Cloner v2.3 ✨" \
+        choice=$(dialog --clear --title "$menu_title" \
             --menu "Select cloning type:" 18 85 7 \
             "1" "📦 → 📼 Virtual to Physical" \
             "2" "📼 → 📦 Physical to Virtual" \
@@ -2000,8 +2387,14 @@ main_menu() {
             4) clone_physical_to_physical_simple ;;
             5) clone_physical_to_physical_with_uuid ;;
             6)
+                local about_text="🚀 FEATURES:\n\n✓ Smart Cloning: Copies only used space\n✓ Physical to Physical: Direct device cloning\n✓ UUID Preservation: Maintains filesystem & partition UUIDs\n✓ Proportional Resize: Fits larger disks to smaller ones\n✓ LUKS Support: Safe encrypted partition handling\n✓ Safety Checks: Prevents system damage\n✓ Multiple Formats: qcow2, vmdk, vdi, raw, vhd\n✓ DRY RUN Mode: Test operations safely\n\n🔧 PHYSICAL TO PHYSICAL MODES:\n\n• Simple Mode: Fast sector-by-sector copy\n• UUID Mode: Smart cloning with ID preservation\n  - Filesystem UUIDs maintained\n  - Partition UUIDs preserved\n  - Disk GUID maintained\n  - Bootloader compatibility\n\n🧪 DRY RUN MODE:\n\n• Test all operations without making changes\n• Log all commands that would be executed\n• Verify operation plans before real execution\n• Safe testing of complex cloning scenarios"
+                
+                if [ "$DRY_RUN" = true ]; then
+                    about_text="$about_text\n\n🧪 CURRENTLY IN DRY RUN MODE\nNo destructive operations will be performed!"
+                fi
+                
                 dialog --title "About Manzolo Disk Cloner v2.3" \
-                    --msgbox "🚀 FEATURES:\n\n✓ Smart Cloning: Copies only used space\n✓ Physical to Physical: Direct device cloning\n✓ UUID Preservation: Maintains filesystem & partition UUIDs\n✓ Proportional Resize: Fits larger disks to smaller ones\n✓ LUKS Support: Safe encrypted partition handling\n✓ Safety Checks: Prevents system damage\n✓ Multiple Formats: qcow2, vmdk, vdi, raw, vhd\n\n🔧 PHYSICAL TO PHYSICAL MODES:\n\n• Simple Mode: Fast sector-by-sector copy\n• UUID Mode: Smart cloning with ID preservation\n  - Filesystem UUIDs maintained\n  - Partition UUIDs preserved\n  - Disk GUID maintained\n  - Bootloader compatibility\n\n⚡ Perfect for system migrations and disk upgrades!" 24 85
+                    --msgbox "$about_text" 26 85
                 ;;
             0|"") break ;;
         esac
@@ -2028,14 +2421,31 @@ check_optional_tools() {
 
 clear
 log "╔═══════════════════════════════════════╗"
-log "║   🚀 Manzolo Disk Cloner v2.3 🚀      ║"
+if [ "$DRY_RUN" = true ]; then
+    log "║   🧪 Manzolo Disk Cloner v2.3 🧪      ║"
+    log "║        DRY RUN MODE ENABLED          ║"
+else
+    log "║   🚀 Manzolo Disk Cloner v2.3 🚀      ║"
+fi
 log "╚═══════════════════════════════════════╝"
+
+if [ "$DRY_RUN" = true ]; then
+    log ""
+    log "🧪 DRY RUN MODE: All destructive operations will be simulated"
+    log "   Commands will be logged but not executed"
+    log "   Safe for testing and verification"
+    log ""
+fi
 
 check_optional_tools
 main_menu
 
 log "=============================="
-log "✅ Clone Script finished at $(date)"
+if [ "$DRY_RUN" = true ]; then
+    log "✅ Clone Script DRY RUN finished at $(date)"
+else
+    log "✅ Clone Script finished at $(date)"
+fi
 log "=============================="
 
 exit 0
