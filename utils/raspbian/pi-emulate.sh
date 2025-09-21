@@ -1,463 +1,935 @@
 #!/bin/bash
 
-# Script to setup and run Raspberry Pi OS in QEMU
-# Enhanced version with multiple OS versions support, .xz support, and DTB fixes
-
-set -euo pipefail  # Exit on error, undefined variables, and pipe failures
+set -e
 
 # ==============================================================================
-# CONFIGURATION
+# GLOBAL CONFIGURATION
 # ==============================================================================
 
-# Color codes for output
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly NC='\033[0m' # No Color
+readonly SCRIPT_NAME="$(basename "$0")"
+readonly WORK_DIR="${HOME}/.qemu-rpi-manager"
+readonly IMAGES_DIR="${WORK_DIR}/images"
+readonly KERNELS_DIR="${WORK_DIR}/kernels"
+readonly DTBS_DIR="${WORK_DIR}/dtbs"
+readonly SNAPSHOTS_DIR="${WORK_DIR}/snapshots"
+readonly CONFIGS_DIR="${WORK_DIR}/configs"
+readonly LOGS_DIR="${WORK_DIR}/logs"
+readonly TEMP_DIR="${WORK_DIR}/temp"
+readonly CACHE_DIR="${WORK_DIR}/cache"
+readonly MOUNT_DIR="${WORK_DIR}/mount"
 
-# Working directories
-readonly WORK_DIR="$(pwd)"
-readonly DEST_DIR="qemu_vms"
-readonly CACHE_DIR=".qemu_cache"
+# Configuration files
+readonly CONFIG_FILE="${CONFIGS_DIR}/qemu-rpi.conf"
+readonly INSTANCES_DB="${CONFIGS_DIR}/instances.db"
 
-# QEMU Configuration
-readonly DEFAULT_MEMORY="256"  # MB (aumentato per Bullseye)
-readonly SSH_PORT="5022"
+# Logging
+readonly LOG_FILE="${LOGS_DIR}/qemu-rpi-$(date +%Y%m%d-%H%M%S).log"
 
-# OS Versions configuration - Aggiunto DTB compatibile con versatilepb
-declare -A OS_VERSIONS=(
-    ["1"]="jessie|2017-04-10|kernel-qemu-4.4.34-jessie|versatile-pb.dtb|http://downloads.raspberrypi.org/raspbian/images/raspbian-2017-04-10/2017-04-10-raspbian-jessie.zip"
-    ["2"]="stretch|2018-11-13|kernel-qemu-4.14.79-stretch|versatile-pb.dtb|http://downloads.raspberrypi.org/raspbian_lite/images/raspbian_lite-2018-11-15/2018-11-13-raspbian-stretch-lite.zip"
-    ["3"]="buster|2020-02-13|kernel-qemu-4.19.50-buster|versatile-pb-buster.dtb|http://downloads.raspberrypi.org/raspbian_lite/images/raspbian_lite-2020-02-14/2020-02-13-raspbian-buster-lite.zip"
-    ["4"]="bullseye|2022-04-04|kernel-qemu-5.10.63-bullseye|versatile-pb.dtb|https://downloads.raspberrypi.org/raspios_oldstable_lite_armhf/images/raspios_oldstable_lite_armhf-2022-04-07/2022-04-04-raspios-bullseye-armhf-lite.img.xz"
+# QEMU defaults
+readonly DEFAULT_MEMORY="256"
+readonly DEFAULT_SSH_PORT="5022"
+
+# OS Catalog
+declare -A OS_CATALOG=(
+    ["jessie_2017_full"]="jessie|2017-04-10|4.4.34|full|http://downloads.raspberrypi.org/raspbian/images/raspbian-2017-04-10/2017-04-10-raspbian-jessie.zip"
+    ["jessie_2017_lite"]="jessie|2017-04-10|4.4.34|lite|http://downloads.raspberrypi.org/raspbian_lite/images/raspbian_lite-2017-04-10/2017-04-10-raspbian-jessie-lite.zip"
+    ["stretch_2018_full"]="stretch|2018-11-13|4.4.34|full|http://downloads.raspberrypi.org/raspbian/images/raspbian-2018-11-15/2018-11-13-raspbian-stretch.zip"
+    ["stretch_2018_lite"]="stretch|2018-11-13|4.4.34|lite|http://downloads.raspberrypi.org/raspbian_lite/images/raspbian_lite-2018-11-15/2018-11-13-raspbian-stretch-lite.zip"
+    ["buster_2020_full"]="buster|2020-02-13|4.4.34|full|http://downloads.raspberrypi.org/raspbian/images/raspbian-2020-02-14/2020-02-13-raspbian-buster.zip"
+    ["buster_2020_lite"]="buster|2020-02-13|4.4.34|lite|http://downloads.raspberrypi.org/raspbian_lite/images/raspbian_lite-2020-02-14/2020-02-13-raspbian-buster-lite.zip"
+    ["bullseye_2022_full"]="bullseye|2022-04-04|4.4.34|full|https://downloads.raspberrypi.org/raspios_armhf/images/raspios_armhf-2022-04-07/2022-04-04-raspios-bullseye-armhf.img.xz"
+    ["bullseye_2022_lite"]="bullseye|2022-04-04|4.4.34|lite|https://downloads.raspberrypi.org/raspios_lite_armhf/images/raspios_lite_armhf-2022-04-07/2022-04-04-raspios-bullseye-armhf-lite.img.xz"
 )
 
-# Kernel and DTB repository base URL
+# Kernel repository
 readonly KERNEL_REPO="https://github.com/dhruvvyas90/qemu-rpi-kernel/raw/master"
 
 # ==============================================================================
-# UTILITY FUNCTIONS
+# LOGGING SYSTEM
 # ==============================================================================
 
-# Logging functions
-log_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
+log_init() {
+    mkdir -p "$(dirname "$LOG_FILE")"
+    echo "=== QEMU RPi Manager Started: $(date) ===" >> "$LOG_FILE"
 }
 
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1" >&2
-}
-
-log_debug() {
-    echo -e "${BLUE}[DEBUG]${NC} $1"
-}
-
-# Function to check required commands
-check_requirements() {
-    local missing_deps=()
+log() {
+    local level=$1
+    shift
+    local message="$*"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$timestamp] [$level] $message" >> "$LOG_FILE" 2>/dev/null || true
     
-    for cmd in wget unzip xz fdisk awk qemu-img qemu-system-arm; do
-        if ! command -v "$cmd" &> /dev/null; then
-            missing_deps+=("$cmd")
-        fi
-    done
-    
-    if [ ${#missing_deps[@]} -ne 0 ]; then
-        log_error "Missing dependencies: ${missing_deps[*]}"
-        log_info "Install them with: sudo apt-get install ${missing_deps[*]}"
-        return 1
-    fi
-}
-
-# Cleanup function for error handling
-cleanup() {
-    local exit_code=$?
-    if [ $exit_code -ne 0 ]; then
-        log_warn "Script terminated with error. Cleaning up..."
-        
-        # Unmount if mounted
-        if mountpoint -q "$DEST_DIR" 2>/dev/null; then
-            log_info "Unmounting $DEST_DIR..."
-            sudo umount "$DEST_DIR" 2>/dev/null || true
-        fi
-    fi
-    
-    exit $exit_code
-}
-
-# Function to download with retry
-download_with_retry() {
-    local url=$1
-    local output=$2
-    local max_attempts=3
-    local attempt=1
-    
-    while [ $attempt -le $max_attempts ]; do
-        log_info "Downloading $output (attempt $attempt/$max_attempts)..."
-        
-        if wget --progress=bar:force -O "$output" "$url"; then
-            log_info "Download completed: $output"
-            return 0
-        else
-            log_warn "Download failed, attempt $attempt of $max_attempts"
-            attempt=$((attempt + 1))
-            [ $attempt -le $max_attempts ] && sleep 5
-        fi
-    done
-    
-    log_error "Download failed after $max_attempts attempts"
-    return 1
-}
-
-# Function to verify image integrity
-verify_image() {
-    local img_file=$1
-    
-    if [ ! -f "$img_file" ]; then
-        log_error "Image file not found: $img_file"
-        return 1
-    fi
-    
-    # Check that image has at least 2 partitions
-    local partitions=$(fdisk -l "$img_file" 2>/dev/null | grep -c "^${img_file}[0-9]" || true)
-    
-    if [ "$partitions" -lt 2 ]; then
-        log_error "Invalid or corrupted image (partitions found: $partitions)"
-        return 1
-    fi
-    
-    log_info "Image verified: $partitions partitions found"
+    case $level in
+        ERROR) echo -e "\033[0;31m[ERROR]\033[0m $message" >&2 ;;
+        WARNING) echo -e "\033[1;33m[WARNING]\033[0m $message" >&2 ;;
+        INFO) [ "${VERBOSE}" = "1" ] && echo -e "\033[0;32m[INFO]\033[0m $message" ;;
+        DEBUG) [ "${DEBUG}" = "1" ] && echo -e "\033[0;34m[DEBUG]\033[0m $message" ;;
+    esac
     return 0
 }
 
-# Function to resize image to power of 2
-resize_image_to_power_of_2() {
-    local img_file=$1
-    local current_size=$(stat -c%s "$img_file")
-    local size_gb=$((current_size / 1073741824))
-    local new_size=4
-    
-    # Find next power of 2
-    if [ $size_gb -lt 4 ]; then
-        new_size=4
-    elif [ $size_gb -lt 8 ]; then
-        new_size=8
-    elif [ $size_gb -lt 16 ]; then
-        new_size=16
-    else
-        new_size=32
+# ==============================================================================
+# DIALOG UI FUNCTIONS
+# ==============================================================================
+
+check_dialog() {
+    if ! command -v dialog &> /dev/null; then
+        echo "Installing dialog..."
+        ${SUDO_CMD} apt-get update && ${SUDO_CMD} apt-get install -y dialog
     fi
-    
-    log_info "Resizing image to ${new_size}G (power of 2 requirement for QEMU SD card emulation)..."
-    
-    # Backup original image
-    cp "$img_file" "${img_file}.backup"
-    
-    # Resize image
-    if qemu-img resize "$img_file" "${new_size}G"; then
-        log_info "Image resized successfully to ${new_size}G"
-        rm -f "${img_file}.backup"
-        return 0
-    else
-        log_error "Failed to resize image"
-        mv "${img_file}.backup" "$img_file"
-        return 1
-    fi
+    return 0
 }
 
-# Function to select OS version
-select_os_version() {
-    echo
-    log_info "=== Available Raspberry Pi OS Versions ==="
-    echo
+show_main_menu() {
+    dialog --clear --backtitle "QEMU Raspberry Pi Manager v3.0 - Fixed Edition" \
+        --title "[ Main Menu ]" \
+        --menu "Select an option:" 18 65 11 \
+        "1" "Quick Start (Jessie 2017)" \
+        "2" "Create New Instance" \
+        "3" "Manage Instances" \
+        "4" "Download OS Images" \
+        "5" "System Diagnostics" \
+        "6" "View Logs" \
+        "7" "Performance Tips" \
+        "8" "Clean Workspace" \
+        "0" "Exit" \
+        2>&1 >/dev/tty
+}
+
+# ==============================================================================
+# SYSTEM INITIALIZATION
+# ==============================================================================
+
+init_workspace() {
+    local dirs=("$WORK_DIR" "$IMAGES_DIR" "$KERNELS_DIR" "$DTBS_DIR" "$SNAPSHOTS_DIR" 
+                "$CONFIGS_DIR" "$LOGS_DIR" "$TEMP_DIR" "$CACHE_DIR" "$MOUNT_DIR")
     
-    for key in "${!OS_VERSIONS[@]}"; do
-        IFS='|' read -r version date kernel dtb url <<< "${OS_VERSIONS[$key]}"
-        echo -e "  ${BLUE}[$key]${NC} Raspbian ${GREEN}$version${NC} ($date)"
+    for dir in "${dirs[@]}"; do
+        mkdir -p "$dir" || {
+            log ERROR "Failed to create directory: $dir"
+            return 1
+        }
     done
     
-    echo
-    read -p "Select version [1-${#OS_VERSIONS[@]}] (default: 1): " selection
-    selection=${selection:-1}
-    
-    if [[ ! "${OS_VERSIONS[$selection]+isset}" ]]; then
-        log_error "Invalid selection. Using default (jessie)"
-        selection="1"
+    if [ ! -f "$INSTANCES_DB" ]; then
+        cat > "$INSTANCES_DB" <<EOF
+# Instance Database
+# Format: ID|Name|Image|Kernel|Memory|SSH_Port|Status|Created
+EOF
     fi
     
-    # Parse selected version
-    IFS='|' read -r VERSION DATE KERNEL DTB URL <<< "${OS_VERSIONS[$selection]}"
-    
-    # Set global variables
-    IMG_FILE="${DATE}-raspbian-${VERSION}"
-    COMPRESSED_FILE="${IMG_FILE}.zip"
-    if [[ "$VERSION" == "bullseye" ]]; then
-        IMG_FILE="${DATE}-raspios-${VERSION}-armhf-lite"
-        if [[ "$URL" == *.xz ]]; then
-            COMPRESSED_FILE="${IMG_FILE}.img.xz"
-        else
-            COMPRESSED_FILE="${IMG_FILE}.zip"
-        fi
-    elif [[ "$VERSION" == "stretch" || "$VERSION" == "buster" ]]; then
-        IMG_FILE="${DATE}-raspbian-${VERSION}-lite"
-    fi
-    
-    RASPBIAN_URL="$URL"
-    KERNEL_FILE="$KERNEL"
-    KERNEL_URL="${KERNEL_REPO}/${KERNEL}"
-    DTB_FILE="$DTB"
-    DTB_URL="${KERNEL_REPO}/${DTB}"
-    
-    log_info "Selected: Raspbian $VERSION ($DATE)"
-    echo
+    return 0
 }
 
-# Function to download DTB with fallback
-download_dtb() {
-    if [ -f "$DTB_FILE" ]; then
-        log_info "DTB $DTB_FILE already present"
+check_requirements() {
+    local missing=()
+    local required_cmds=(qemu-system-arm qemu-img wget unzip xz fdisk dialog)
+    
+    for cmd in "${required_cmds[@]}"; do
+        if ! command -v "$cmd" &> /dev/null; then
+            missing+=("$cmd")
+        fi
+    done
+    
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo "Installing missing dependencies: ${missing[*]}"
+        install_dependencies "${missing[@]}"
+    fi
+    
+    return 0
+}
+
+install_dependencies() {
+    local deps=("$@")
+    local apt_packages=""
+    
+    for dep in "${deps[@]}"; do
+        case $dep in
+            qemu-system-arm) apt_packages+=" qemu-system qemu-utils" ;;
+            xz) apt_packages+=" xz-utils" ;;
+            *) apt_packages+=" $dep" ;;
+        esac
+    done
+    
+    echo "Installing: $apt_packages"
+    ${SUDO_CMD} apt-get update
+    ${SUDO_CMD} apt-get install -y $apt_packages
+}
+
+# ==============================================================================
+# IMAGE MANAGEMENT
+# ==============================================================================
+
+download_os_image() {
+    local choice
+    choice=$(dialog --title "Download OS Image" --menu "Select OS to download:" 15 70 9 \
+        "1" "Download All Images" \
+        "2" "Jessie 2017 Full (Best compatibility)" \
+        "3" "Jessie 2017 Lite" \
+        "4" "Stretch 2018 Full" \
+        "5" "Stretch 2018 Lite" \
+        "6" "Buster 2020 Full" \
+        "7" "Buster 2020 Lite" \
+        "8" "Bullseye 2022 Full" \
+        "9" "Bullseye 2022 Lite" \
+        2>&1 >/dev/tty)
+    
+    [ -z "$choice" ] && return
+    
+    case $choice in
+        1) download_all_images ;;
+        2) download_single_image "jessie_2017_full" ;;
+        3) download_single_image "jessie_2017_lite" ;;
+        4) download_single_image "stretch_2018_full" ;;
+        5) download_single_image "stretch_2018_lite" ;;
+        6) download_single_image "buster_2020_full" ;;
+        7) download_single_image "buster_2020_lite" ;;
+        8) download_single_image "bullseye_2022_full" ;;
+        9) download_single_image "bullseye_2022_lite" ;;
+    esac
+}
+
+download_all_images() {
+    dialog --title "Download All Images" --infobox "Downloading all OS images...\nThis will take some time!" 8 50
+    sleep 2
+    
+    for key in "${!OS_CATALOG[@]}"; do
+        IFS='|' read -r version date kernel type url <<< "${OS_CATALOG[$key]}"
+        echo "Downloading: $key"
+        download_and_prepare_image "$key" "$url" "$kernel" "$version"
+    done
+    
+    dialog --msgbox "All images downloaded!" 8 40
+}
+
+download_single_image() {
+    local os_key=$1
+    IFS='|' read -r version date kernel type url <<< "${OS_CATALOG[$os_key]}"
+    download_and_prepare_image "$os_key" "$url" "$kernel" "$version"
+}
+
+download_and_prepare_image() {
+    local os_key=$1
+    local url=$2
+    local kernel_version=$3
+    local os_version=$4
+    
+    local filename=$(basename "$url")
+    local dest_file="${CACHE_DIR}/${filename}"
+    local final_image="${IMAGES_DIR}/${os_key}.img"
+    
+    if [ -f "$final_image" ]; then
+        dialog --msgbox "Image already exists: $final_image" 8 50
         return 0
     fi
     
-    if download_with_retry "$DTB_URL" "$DTB_FILE"; then
-        return 0
-    else
-        log_warn "Failed to download specific DTB $DTB_FILE, trying fallback to versatile-pb.dtb..."
-        DTB_FILE="versatile-pb.dtb"
-        DTB_URL="${KERNEL_REPO}/${DTB_FILE}"
-        if download_with_retry "$DTB_URL" "$DTB_FILE"; then
-            return 0
+    if [ -f "$dest_file" ]; then
+        if dialog --yesno "Archive already downloaded. Re-download?" 8 40; then
+            rm -f "$dest_file"
         else
-            log_error "Failed to download fallback DTB"
+            extract_and_prepare_image "$dest_file" "$os_key" "$kernel_version" "$os_version"
+            return
+        fi
+    fi
+    
+    clear
+    echo "=========================================="
+    echo " Downloading OS Image"
+    echo "=========================================="
+    echo "File: $filename"
+    echo "This may take several minutes..."
+    echo ""
+    
+    if command -v curl &> /dev/null; then
+        curl -L --progress-bar -o "$dest_file" "$url"
+    else
+        wget --progress=bar:force -O "$dest_file" "$url"
+    fi
+    
+    if [ $? -ne 0 ] || [ ! -f "$dest_file" ] || [ ! -s "$dest_file" ]; then
+        dialog --msgbox "Download failed!" 8 50
+        return 1
+    fi
+    
+    extract_and_prepare_image "$dest_file" "$os_key" "$kernel_version" "$os_version"
+}
+
+extract_and_prepare_image() {
+    local archive=$1
+    local os_key=$2
+    local kernel_version=$3
+    local os_version=$4
+    
+    echo "Extracting image..."
+    
+    local extracted_img=""
+    
+    if [[ "$archive" == *.xz ]]; then
+        echo "Extracting XZ archive..."
+        xz -dk "$archive"
+        extracted_img="${archive%.xz}"
+    elif [[ "$archive" == *.zip ]]; then
+        echo "Extracting ZIP archive..."
+        unzip -o "$archive" -d "$TEMP_DIR/"
+        extracted_img=$(find "$TEMP_DIR" -name "*.img" | head -1)
+    fi
+    
+    if [ -z "$extracted_img" ] || [ ! -f "$extracted_img" ]; then
+        dialog --msgbox "Failed to extract image!" 8 40
+        return 1
+    fi
+    
+    local final_image="${IMAGES_DIR}/${os_key}.img"
+    
+    echo "Preparing final image..."
+    cp "$extracted_img" "$final_image"
+    
+    # Download kernel
+    download_kernel "$kernel_version" "$os_version"
+    
+    mkdir -p "${CONFIGS_DIR}"
+    if [ ! -f "${CONFIGS_DIR}/images.db" ]; then
+        echo "# Images Database" > "${CONFIGS_DIR}/images.db"
+        echo "# Format: OS_KEY|IMAGE_PATH|KERNEL_NAME|TIMESTAMP" >> "${CONFIGS_DIR}/images.db"
+    fi
+    
+    echo "${os_key}|${final_image}|kernel-qemu-4.4.34-jessie|$(date +%s)" >> "${CONFIGS_DIR}/images.db"
+    
+    echo "Image prepared: $final_image"
+    sleep 2
+    
+    rm -f "$extracted_img"
+    [ -d "$TEMP_DIR" ] && find "$TEMP_DIR" -name "*.img" -delete
+}
+
+download_kernel() {
+    local kernel_version=$1
+    local os_version=$2
+    
+    # Always use the same kernel for all versions
+    local kernel_file="${KERNELS_DIR}/kernel-qemu-4.4.34-jessie"
+    
+    if [ ! -f "$kernel_file" ]; then
+        echo "Downloading kernel..."
+        wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.4.34-jessie" || \
+        wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.4.34"
+        
+        if [ ! -f "$kernel_file" ] || [ ! -s "$kernel_file" ]; then
+            echo "Failed to download kernel!"
             return 1
         fi
     fi
-}
-
-# Function to mount image for modifications
-mount_image_for_modifications() {
-    local img_file=$1
-    local offset=$2
     
-    log_info "Mounting image to $DEST_DIR for modifications..."
-    sudo mount -v -o offset="$offset" -t ext4 "$img_file" "$DEST_DIR" || {
-        log_error "Mount failed"
-        return 1
-    }
-    
-    # Common modifications
-    log_info "Applying common modifications..."
-    
-    # Enable SSH (if the directory exists)
-    if [ -d "$DEST_DIR/boot" ]; then
-        sudo touch "$DEST_DIR/boot/ssh" 2>/dev/null || true
-    fi
-    
-    log_info "Image mounted. You can make additional modifications in $DEST_DIR"
-    log_info "Press ENTER when done with modifications..."
-    read -r
-    
-    log_info "Unmounting image..."
-    sudo umount "$DEST_DIR"
-    sleep 2
+    echo "Kernel ready: $kernel_file"
 }
 
 # ==============================================================================
-# MAIN FUNCTION
+# INSTANCE MANAGEMENT
+# ==============================================================================
+
+create_instance() {
+    local name
+    name=$(dialog --inputbox "Instance name:" 8 40 "rpi-$(date +%Y%m%d)" 2>&1 >/dev/tty)
+    [ -z "$name" ] && return
+    
+    local images=$(ls -1 "$IMAGES_DIR"/*.img 2>/dev/null)
+    if [ -z "$images" ]; then
+        dialog --msgbox "No images available! Download an OS image first." 8 50
+        return
+    fi
+    
+    local img_list=""
+    local counter=1
+    while IFS= read -r img; do
+        local basename=$(basename "$img")
+        img_list+="$counter \"$basename\" "
+        ((counter++))
+    done <<< "$images"
+    
+    local img_choice
+    img_choice=$(eval dialog --title \"Select Image\" --menu \"Choose base image:\" 15 60 8 $img_list 2>&1 >/dev/tty)
+    [ -z "$img_choice" ] && return
+    
+    local selected_image=$(echo "$images" | sed -n "${img_choice}p")
+    
+    local memory
+    memory=$(dialog --inputbox "Memory (MB):" 8 40 "$DEFAULT_MEMORY" 2>&1 >/dev/tty)
+    [ -z "$memory" ] && memory="$DEFAULT_MEMORY"
+    
+    local ssh_port
+    ssh_port=$(dialog --inputbox "SSH Port:" 8 40 "$DEFAULT_SSH_PORT" 2>&1 >/dev/tty)
+    [ -z "$ssh_port" ] && ssh_port="$DEFAULT_SSH_PORT"
+    
+    local instance_img="${IMAGES_DIR}/${name}.img"
+    echo "Creating instance image..."
+    cp "$selected_image" "$instance_img"
+    
+    local kernel_name="kernel-qemu-4.4.34-jessie"
+    local instance_id=$(date +%s)
+    
+    echo "${instance_id}|${name}|${instance_img}|${kernel_name}|${memory}|${ssh_port}|created|$(date +%s)" >> "$INSTANCES_DB"
+    
+    dialog --msgbox "Instance '$name' created!\n\nID: $instance_id" 10 50
+    
+    if dialog --yesno "Start instance now?" 8 30; then
+        launch_instance "$instance_id"
+    fi
+}
+
+list_instances() {
+    local instances=""
+    local counter=1
+    local instance_ids=()
+    
+    while IFS='|' read -r id name image kernel memory ssh_port status created; do
+        [[ "$id" =~ ^# ]] && continue
+        [[ -z "$id" ]] && continue
+        instances+="$counter \"$name [$status] (Port: $ssh_port)\" "
+        instance_ids+=("$id")
+        ((counter++))
+    done < "$INSTANCES_DB"
+    
+    if [ -z "$instances" ]; then
+        dialog --msgbox "No instances found!" 8 30
+        return
+    fi
+    
+    local choice
+    choice=$(eval dialog --title \"Instances\" --menu \"Select instance:\" 15 70 8 $instances 2>&1 >/dev/tty)
+    [ -z "$choice" ] && return
+    
+    local selected_id="${instance_ids[$((choice-1))]}"
+    manage_instance_by_id "$selected_id"
+}
+
+manage_instance_by_id() {
+    local instance_id=$1
+    local instance_data=$(grep "^$instance_id|" "$INSTANCES_DB")
+    
+    if [ -z "$instance_data" ]; then
+        dialog --msgbox "Instance not found!" 8 30
+        return
+    fi
+    
+    IFS='|' read -r id name image kernel memory ssh_port status created <<< "$instance_data"
+    
+    local action
+    action=$(dialog --title "Instance: $name" --menu "Select action:" 15 50 6 \
+        "1" "Start" \
+        "2" "Stop" \
+        "3" "SSH Connect" \
+        "4" "Clone" \
+        "5" "Delete" \
+        "6" "Properties" \
+        2>&1 >/dev/tty)
+    
+    case $action in
+        1) launch_instance "$id" ;;
+        2) stop_instance "$id" ;;
+        3) connect_ssh "$ssh_port" ;;
+        4) clone_instance "$id" ;;
+        5) delete_instance "$id" ;;
+        6) show_properties "$id" ;;
+    esac
+}
+
+# ==============================================================================
+# QEMU LAUNCHER - FIXED WITH CORRECT NETWORK CONFIG
+# ==============================================================================
+
+launch_instance() {
+    local instance_id=$1
+    local instance_data=$(grep "^$instance_id|" "$INSTANCES_DB")
+    
+    if [ -z "$instance_data" ]; then
+        dialog --msgbox "Instance not found!" 8 30
+        return 1
+    fi
+    
+    IFS='|' read -r id name image kernel_name memory ssh_port status created <<< "$instance_data"
+    
+    if pgrep -f "$image" > /dev/null; then
+        dialog --msgbox "Instance already running!" 8 30
+        return
+    fi
+    
+    local kernel_file="${KERNELS_DIR}/${kernel_name}"
+    if [ ! -f "$kernel_file" ]; then
+        kernel_file="${KERNELS_DIR}/kernel-qemu-4.4.34-jessie"
+    fi
+    
+    if [ ! -f "$kernel_file" ]; then
+        dialog --msgbox "Kernel not found!" 8 30
+        return 1
+    fi
+    
+    clear
+    echo "=========================================="
+    echo " Starting Instance: $name"
+    echo "=========================================="
+    echo "Image: $(basename "$image")"
+    echo "Kernel: $(basename "$kernel_file")"
+    echo "Memory: ${memory}MB"
+    echo "SSH Port: ${ssh_port}"
+    echo ""
+    echo "IMPORTANT: Boot may take 2-3 minutes!"
+    echo "Default login: pi / raspberry"
+    echo ""
+    echo "To connect via SSH (after boot):"
+    echo "ssh -p ${ssh_port} pi@localhost"
+    echo ""
+    echo "To exit QEMU: Press Ctrl+A, then X"
+    echo "=========================================="
+    echo ""
+    
+    # Determine OS type from image name
+    local os_type="jessie"
+    if [[ "$image" == *"stretch"* ]]; then
+        os_type="stretch"
+    elif [[ "$image" == *"buster"* ]]; then
+        os_type="buster"
+    elif [[ "$image" == *"bullseye"* ]]; then
+        os_type="bullseye"
+    fi
+    
+    # Show warnings for newer versions
+    case $os_type in
+        stretch)
+            echo "Note: Stretch running with Jessie kernel"
+            ;;
+        buster)
+            echo "WARNING: Buster with Jessie kernel - limited features"
+            sleep 1
+            ;;
+        bullseye)
+            echo "WARNING: Bullseye with Jessie kernel - experimental!"
+            sleep 2
+            ;;
+    esac
+    
+    echo "Starting QEMU..."
+    sleep 2
+    
+    # QEMU command with YOUR network configuration
+    qemu-system-arm \
+        -kernel "$kernel_file" \
+        -cpu arm1176 \
+        -m "$memory" \
+        -M versatilepb \
+        -serial stdio \
+        -append "root=/dev/sda2 rootfstype=ext4 rw" \
+        -drive format=raw,file="$image" \
+        -nic user,hostfwd=tcp::"${ssh_port}"-:22 \
+        -no-reboot
+    
+    echo ""
+    read -p "Press ENTER to return to menu..."
+}
+
+stop_instance() {
+    local instance_id=$1
+    
+    local instance_data=$(grep "^$instance_id|" "$INSTANCES_DB")
+    if [ -z "$instance_data" ]; then
+        dialog --msgbox "Instance not found!" 8 30
+        return
+    fi
+    
+    IFS='|' read -r id name image kernel memory ssh_port status created <<< "$instance_data"
+    
+    local qemu_pids=$(pgrep -f "qemu-system-arm.*$(basename "$image")" || true)
+    
+    if [ -n "$qemu_pids" ]; then
+        echo "$qemu_pids" | xargs kill -TERM 2>/dev/null || true
+        dialog --msgbox "Instance stopped." 8 30
+    else
+        dialog --msgbox "Instance not running!" 8 30
+    fi
+}
+
+connect_ssh() {
+    local port=$1
+    dialog --msgbox "Connecting to SSH on port $port...\n\nPress OK to continue" 10 50
+    clear
+    echo "Attempting SSH connection..."
+    echo "Default credentials: pi / raspberry"
+    echo ""
+    ssh -p "$port" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null pi@localhost
+    read -p "Press ENTER to return to menu..."
+}
+
+clone_instance() {
+    local instance_id=$1
+    local instance_data=$(grep "^$instance_id|" "$INSTANCES_DB")
+    IFS='|' read -r id name image kernel memory ssh_port status created <<< "$instance_data"
+    
+    local new_name
+    new_name=$(dialog --inputbox "Clone name:" 8 40 "${name}-clone" 2>&1 >/dev/tty)
+    [ -z "$new_name" ] && return
+    
+    local new_image="${IMAGES_DIR}/${new_name}.img"
+    echo "Cloning instance..."
+    cp "$image" "$new_image"
+    
+    local new_id=$(date +%s)
+    echo "${new_id}|${new_name}|${new_image}|${kernel}|${memory}|$((ssh_port + 1))|created|$(date +%s)" >> "$INSTANCES_DB"
+    
+    dialog --msgbox "Instance cloned successfully!" 8 40
+}
+
+delete_instance() {
+    local instance_id=$1
+    local instance_data=$(grep "^$instance_id|" "$INSTANCES_DB")
+    IFS='|' read -r id name image kernel memory ssh_port status created <<< "$instance_data"
+    
+    if dialog --yesno "Delete instance '$name'?\n\nThis will remove the image file!" 10 50; then
+        rm -f "$image"
+        sed -i "/^$instance_id|/d" "$INSTANCES_DB"
+        dialog --msgbox "Instance deleted!" 8 30
+    fi
+}
+
+show_properties() {
+    local instance_id=$1
+    local instance_data=$(grep "^$instance_id|" "$INSTANCES_DB")
+    IFS='|' read -r id name image kernel_name memory ssh_port status created <<< "$instance_data"
+    
+    local props=""
+    props+="Instance Properties:\n\n"
+    props+="Name: $name\n"
+    props+="ID: $id\n"
+    props+="Image: $(basename "$image")\n"
+    props+="Kernel: $kernel_name\n"
+    props+="Memory: ${memory}MB\n"
+    props+="SSH Port: $ssh_port\n"
+    props+="Status: $status\n"
+    props+="Created: $(date -d "@$created" 2>/dev/null || echo "$created")\n"
+    
+    if [ -f "$image" ]; then
+        local size=$(du -h "$image" | cut -f1)
+        props+="Image Size: $size\n"
+    fi
+    
+    dialog --title "Properties" --msgbox "$props" 15 50
+}
+
+# ==============================================================================
+# QUICK START
+# ==============================================================================
+
+quick_start() {
+    dialog --title "Quick Start" --infobox "Preparing quick start..." 5 40
+    
+    local jessie_image="${IMAGES_DIR}/jessie_2017_full.img"
+    local jessie_kernel="${KERNELS_DIR}/kernel-qemu-4.4.34-jessie"
+    
+    if [ ! -f "$jessie_image" ]; then
+        dialog --msgbox "Jessie image not found. Downloading..." 8 50
+        download_jessie_default
+    fi
+    
+    if [ ! -f "$jessie_image" ]; then
+        dialog --msgbox "Failed to prepare Jessie image!" 8 40
+        return
+    fi
+    
+    if [ ! -f "$jessie_kernel" ]; then
+        echo "Downloading Jessie kernel..."
+        download_kernel "4.4.34" "jessie"
+    fi
+    
+    if [ ! -f "$jessie_kernel" ]; then
+        dialog --msgbox "Kernel not found!" 8 30
+        return
+    fi
+    
+    clear
+    echo "=========================================="
+    echo " Quick Start - Raspbian Jessie 2017"
+    echo "=========================================="
+    echo "Memory: ${DEFAULT_MEMORY}MB"
+    echo "SSH Port: ${DEFAULT_SSH_PORT}"
+    echo ""
+    echo "Default credentials:"
+    echo "Username: pi"
+    echo "Password: raspberry"
+    echo ""
+    echo "To connect via SSH (after boot):"
+    echo "ssh -p ${DEFAULT_SSH_PORT} pi@localhost"
+    echo ""
+    echo "IMPORTANT: Boot may take 2-3 minutes!"
+    echo "To exit QEMU: Press Ctrl+A, then X"
+    echo "=========================================="
+    echo ""
+    echo "Starting QEMU..."
+    sleep 3
+    
+    # Quick start with YOUR network config
+    qemu-system-arm \
+        -kernel "$jessie_kernel" \
+        -cpu arm1176 \
+        -m "$DEFAULT_MEMORY" \
+        -M versatilepb \
+        -serial stdio \
+        -append "root=/dev/sda2 rootfstype=ext4 rw" \
+        -drive format=raw,file="$jessie_image" \
+        -nic user,hostfwd=tcp::"${DEFAULT_SSH_PORT}"-:22 \
+        -no-reboot
+    
+    echo ""
+    read -p "Press ENTER to return to menu..."
+}
+
+download_jessie_default() {
+    local url="http://downloads.raspberrypi.org/raspbian/images/raspbian-2017-04-10/2017-04-10-raspbian-jessie.zip"
+    download_and_prepare_image "jessie_2017_full" "$url" "4.4.34" "jessie"
+}
+
+# ==============================================================================
+# PERFORMANCE TIPS
+# ==============================================================================
+
+show_performance_tips() {
+    local tips=""
+    tips+="QEMU Raspberry Pi Performance & Compatibility:\n\n"
+    tips+="OS Compatibility:\n"
+    tips+="✅ Jessie 2017 - FULL SUPPORT\n"
+    tips+="✅ Stretch 2018 - WORKS (with Jessie kernel)\n"
+    tips+="⚠️  Buster 2020 - PARTIAL (with Jessie kernel)\n"
+    tips+="⚠️  Bullseye 2022 - EXPERIMENTAL (with Jessie kernel)\n\n"
+    tips+="Performance Notes:\n"
+    tips+="- ARM emulation is single-core only\n"
+    tips+="- No KVM acceleration on x86 hosts\n"
+    tips+="- Optimal memory: 256-512MB\n"
+    tips+="- SSD storage recommended\n\n"
+    tips+="Network Configuration:\n"
+    tips+="- Using: -nic user,hostfwd=tcp::PORT-:22\n"
+    tips+="- SSH available after boot (~2-3 min)\n\n"
+    tips+="Known Limitations:\n"
+    tips+="- Newer OS versions have reduced features\n"
+    tips+="- No GPU acceleration\n"
+    tips+="- USB passthrough limited\n\n"
+    tips+="Best practice: Use Jessie or Stretch\n"
+    
+    dialog --title "Performance Tips" --msgbox "$tips" 22 70
+}
+
+# ==============================================================================
+# WORKSPACE MANAGEMENT
+# ==============================================================================
+
+clean_workspace() {
+    if dialog --yesno "This will remove ALL data including:\n- Images\n- Instances\n- Cache\n- Logs\n\nAre you sure?" 12 50; then
+        echo "Cleaning workspace..."
+        
+        # Stop any running instances
+        pkill -f qemu-system-arm 2>/dev/null || true
+        
+        # Remove workspace directory
+        rm -rf "$WORK_DIR"
+        
+        dialog --msgbox "Workspace cleaned!\nExiting..." 8 40
+        exit 0
+    fi
+}
+
+# ==============================================================================
+# UTILITIES
+# ==============================================================================
+
+system_diagnostics() {
+    local diag_info=""
+    
+    diag_info+="QEMU Version:\n$(qemu-system-arm --version | head -1)\n\n"
+    diag_info+="Host CPU: $(lscpu | grep "Model name" | cut -d: -f2 | xargs)\n"
+    diag_info+="Host RAM: $(free -h | grep "Mem:" | awk '{print $2}')\n\n"
+    diag_info+="Running Instances: $(pgrep -c qemu-system-arm 2>/dev/null || echo 0)\n\n"
+    diag_info+="Disk Usage:\n"
+    diag_info+="Images: $(du -sh "$IMAGES_DIR" 2>/dev/null | awk '{print $1}')\n"
+    diag_info+="Kernels: $(du -sh "$KERNELS_DIR" 2>/dev/null | awk '{print $1}')\n"
+    diag_info+="Cache: $(du -sh "$CACHE_DIR" 2>/dev/null | awk '{print $1}')\n\n"
+    diag_info+="Available Images: $(ls -1 "$IMAGES_DIR"/*.img 2>/dev/null | wc -l)\n"
+    diag_info+="Available Kernels: $(ls -1 "$KERNELS_DIR"/kernel-* 2>/dev/null | wc -l)\n\n"
+    
+    # Check KVM availability
+    if [ -r /dev/kvm ]; then
+        diag_info+="KVM: Available (but not usable for ARM on x86)\n"
+    else
+        diag_info+="KVM: Not available\n"
+    fi
+    
+    # Check disk space
+    local free_space=$(df -h "$WORK_DIR" 2>/dev/null | tail -1 | awk '{print $4}')
+    diag_info+="Free space: $free_space\n\n"
+    
+    # List kernels
+    diag_info+="Available Kernels:\n"
+    for kernel in "$KERNELS_DIR"/kernel-*; do
+        if [ -f "$kernel" ]; then
+            diag_info+="- $(basename "$kernel")\n"
+        fi
+    done
+    
+    dialog --title "System Diagnostics" --msgbox "$diag_info" 20 70
+}
+
+view_logs() {
+    local log_files=$(ls -t "$LOGS_DIR"/*.log 2>/dev/null | head -10)
+    
+    if [ -z "$log_files" ]; then
+        dialog --msgbox "No logs found!" 8 30
+        return
+    fi
+    
+    local log_menu=""
+    local counter=1
+    while IFS= read -r log; do
+        local basename=$(basename "$log")
+        log_menu+="$counter \"$basename\" "
+        ((counter++))
+    done <<< "$log_files"
+    
+    local log_choice
+    log_choice=$(eval dialog --title \"Select Log\" --menu \"Choose log file:\" 15 70 10 $log_menu 2>&1 >/dev/tty)
+    [ -z "$log_choice" ] && return
+    
+    local selected_log=$(echo "$log_files" | sed -n "${log_choice}p")
+    
+    dialog --title "Log: $(basename "$selected_log")" --textbox "$selected_log" 20 80
+}
+
+cleanup_and_exit() {
+    #clear
+    log INFO "QEMU RPi Manager terminated"
+    echo "Thank you for using QEMU Raspberry Pi Manager!"
+    exit 0
+}
+
+# ==============================================================================
+# ERROR HANDLING
+# ==============================================================================
+
+handle_error() {
+    local exit_code=$?
+    local line_num=${1:-0}
+    
+    if [ $exit_code -eq 0 ] || [ $exit_code -eq 130 ]; then
+        return
+    fi
+    
+    log ERROR "Error occurred at line $line_num with exit code $exit_code"
+    
+    if command -v dialog &> /dev/null; then
+        dialog --msgbox "An error occurred!\n\nLine: $line_num\nCode: $exit_code\n\nCheck logs for details." 10 50
+    else
+        echo "Error at line $line_num (exit code: $exit_code)"
+    fi
+}
+
+trap 'handle_error $LINENO' ERR
+trap 'cleanup_and_exit' EXIT INT TERM
+
+# ==============================================================================
+# MAIN EXECUTION
 # ==============================================================================
 
 main() {
-    log_info "=== QEMU Raspberry Pi OS Emulator ==="
-    log_info "Working Directory: $WORK_DIR"
-    
-    # Setup trap for cleanup
-    trap cleanup EXIT
-    
-    # Check system requirements
-    log_info "Checking system requirements..."
-    check_requirements || exit 1
-    
-    # Install QEMU if needed
-    if ! command -v qemu-system-arm &> /dev/null; then
-        log_info "Installing QEMU..."
-        sudo apt-get update
-        sudo apt-get install -y qemu-system-arm qemu-utils || {
-            log_error "QEMU installation failed"
-            exit 1
-        }
-    else
-        log_info "QEMU already installed ($(qemu-system-arm --version | head -n1))"
-    fi
-    
-    # Create cache directory
-    mkdir -p "$CACHE_DIR"
-    
-    # Select OS version
-    select_os_version
-    
-    # Download and extract Raspberry Pi OS image
-    if [ -f "${IMG_FILE}.img" ]; then
-        log_info "Image ${IMG_FILE}.img already present"
-        verify_image "${IMG_FILE}.img" || {
-            log_warn "Existing image invalid, re-downloading..."
-            rm -f "${IMG_FILE}.img"
-            rm -f "$COMPRESSED_FILE"
-        }
-    fi
-    
-    if [ ! -f "${IMG_FILE}.img" ]; then
-        if [ ! -f "$COMPRESSED_FILE" ]; then
-            download_with_retry "$RASPBIAN_URL" "$COMPRESSED_FILE" || exit 1
-        fi
-        
-        log_info "Extracting image..."
-        if [[ "$COMPRESSED_FILE" == *.xz ]]; then
-            unxz -v "$COMPRESSED_FILE" || {
-                log_error "Extraction failed"
-                rm -f "$COMPRESSED_FILE"
-                exit 1
-            }
-        else
-            unzip -o "$COMPRESSED_FILE" || {
-                log_error "Extraction failed"
-                rm -f "$COMPRESSED_FILE"
-                exit 1
-            }
-        fi
-        
-        # Handle different extracted filenames
-        if [ ! -f "${IMG_FILE}.img" ]; then
-            local found_img=$(ls *.img 2>/dev/null | head -n1)
-            if [ -n "$found_img" ]; then
-                log_info "Found image: $found_img, renaming to ${IMG_FILE}.img"
-                mv "$found_img" "${IMG_FILE}.img"
-            else
-                log_error "No .img file found after extraction"
-                exit 1
-            fi
-        fi
-        
-        verify_image "${IMG_FILE}.img" || exit 1
-        
-        log_info "Removing compressed file to save space..."
-        rm -f "$COMPRESSED_FILE"
-    fi
-    
-    # Check and resize image if needed
-    local img_size=$(stat -c%s "${IMG_FILE}.img")
-    local size_gb=$((img_size / 1073741824))
-    
-    if ! [[ $size_gb =~ ^(1|2|4|8|16|32)$ ]]; then
-        resize_image_to_power_of_2 "${IMG_FILE}.img" || {
-            log_warn "Failed to resize image, trying alternative method..."
-        }
-    fi
-    
-    # Download kernel
-    if [ -f "$KERNEL_FILE" ]; then
-        log_info "Kernel $KERNEL_FILE already present"
-    else
-        download_with_retry "$KERNEL_URL" "$KERNEL_FILE" || {
-            log_warn "Failed to download specific kernel, trying alternative..."
-            KERNEL_FILE="kernel-qemu-4.4.34-jessie"
-            KERNEL_URL="${KERNEL_REPO}/${KERNEL_FILE}"
-            download_with_retry "$KERNEL_URL" "$KERNEL_FILE" || exit 1
-        }
-    fi
-    
-    # Download DTB with fallback
-    download_dtb || exit 1
-    
-    # Analyze image partitions
-    log_info "Analyzing image partitions..."
-    fdisk -l "${IMG_FILE}.img"
-    
-    local start_sector
-    start_sector=$(fdisk -l "${IMG_FILE}.img" | grep "${IMG_FILE}.img2" | awk '{print $2}')
-    
-    if [ -z "$start_sector" ]; then
-        log_error "Could not find second partition in image"
+    if ! init_workspace; then
+        echo "Failed to initialize workspace"
         exit 1
     fi
     
-    local offset=$((start_sector * 512))
-    log_info "Calculated offset: $offset (sector $start_sector)"
+    log_init
     
-    # Create mount directory if it doesn't exist
-    mkdir -p "$DEST_DIR"
-    
-    # Unmount if already mounted
-    if mountpoint -q "$DEST_DIR" 2>/dev/null; then
-        log_info "Unmounting existing directory..."
-        sudo umount "$DEST_DIR" || {
-            log_error "Failed to unmount $DEST_DIR"
-            exit 1
-        }
-        sleep 2
+    if ! check_dialog; then
+        echo "Dialog is required but not available"
+        exit 1
     fi
     
-    # Optional: Mount image for modifications
-    read -p "Do you want to mount the image for modifications before starting? (y/N) " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        mount_image_for_modifications "${IMG_FILE}.img" "$offset"
+    if ! check_requirements; then
+        echo "Failed to check/install requirements"
+        exit 1
     fi
     
-    # Display pre-launch information
-    echo
-    log_info "=== QEMU Configuration ==="
-    log_info "OS Version: Raspbian $VERSION"
-    log_info "Machine Type: versatilepb"
-    log_info "Memory: ${DEFAULT_MEMORY}MB"
-    log_info "SSH Port Forward: localhost:${SSH_PORT} -> guest:22"
-    log_info "To connect via SSH: ssh -p ${SSH_PORT} pi@localhost"
-    log_info "Default password: raspberry"
-    echo
-    log_warn "Press CTRL+C to terminate the emulator"
-    echo
-    sleep 2
+    while true; do
+        choice=$(show_main_menu)
+        
+        case $choice in
+            1) quick_start ;;
+            2) create_instance ;;
+            3) list_instances ;;
+            4) download_os_image ;;
+            5) system_diagnostics ;;
+            6) view_logs ;;
+            7) show_performance_tips ;;
+            8) clean_workspace ;;
+            0|"") break ;;
+            *) dialog --msgbox "Invalid option!" 8 30 ;;
+        esac
+    done
     
-    # Start QEMU with versatilepb configuration
-    log_info "Starting QEMU emulator..."
-    qemu-system-arm \
-        -M versatilepb \
-        -cpu arm1176 \
-        -m "$DEFAULT_MEMORY" \
-        -kernel "$KERNEL_FILE" \
-        -dtb "$DTB_FILE" \
-        -append "root=/dev/sda2 rootfstype=ext4 rw console=ttyAMA0" \
-        -drive "file=${IMG_FILE}.img,format=raw" \
-        -netdev "user,id=net0,hostfwd=tcp::${SSH_PORT}-:22" \
-        -device "rtl8139,netdev=net0" \
-        -serial stdio \
-        -no-reboot \
-        2>/dev/null || {
-            log_warn "QEMU terminated - trying fallback configuration without DTB..."
-            
-            # Fallback without DTB
-            qemu-system-arm \
-                -M versatilepb \
-                -cpu arm1176 \
-                -m "$DEFAULT_MEMORY" \
-                -kernel "$KERNEL_FILE" \
-                -append "root=/dev/sda2 rootfstype=ext4 rw console=ttyAMA0" \
-                -drive "file=${IMG_FILE}.img,format=raw" \
-                -netdev "user,id=net0,hostfwd=tcp::${SSH_PORT}-:22" \
-                -device "rtl8139,netdev=net0" \
-                -serial stdio \
-                -no-reboot || {
-                    log_error "QEMU terminated with error"
-                    exit 1
-                }
-        }
-    
-    log_info "Emulator terminated successfully"
+    cleanup_and_exit
 }
 
-# Execute main function
+# ==============================================================================
+# ENTRY POINT
+# ==============================================================================
+
+SUDO_CMD=""
+if [ "$EUID" -ne 0 ]; then
+    SUDO_CMD="sudo"
+fi
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -h|--help)
+            echo "QEMU Raspberry Pi Manager v3.0 - Fixed Edition"
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  -h, --help      Show this help"
+            echo "  -v, --verbose   Enable verbose output"
+            echo "  -d, --debug     Enable debug mode"
+            echo ""
+            echo "Features:"
+            echo "  - Support for Jessie, Stretch, Buster, and Bullseye"
+            echo "  - All versions use Jessie kernel for compatibility"
+            echo "  - Network: -nic user,hostfwd=tcp::PORT-:22"
+            echo "  - Optimized for best compatibility"
+            exit 0
+            ;;
+        -v|--verbose)
+            export VERBOSE=1
+            shift
+            ;;
+        -d|--debug)
+            export DEBUG=1
+            export VERBOSE=1
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Use -h for help"
+            exit 1
+            ;;
+    esac
+done
+
+if [ "$EUID" -ne 0 ]; then
+    if ! sudo -n true 2>/dev/null; then
+        echo "=================================================="
+        echo " QEMU Raspberry Pi Manager v3.0"
+        echo " Fixed Edition"
+        echo "=================================================="
+        echo ""
+        echo "Sudo privileges are required for:"
+        echo "  - Package installation"
+        echo "  - Some file operations"
+        echo ""
+        echo "Press ENTER to continue or Ctrl+C to exit..."
+        read -r
+    fi
+fi
+
 main "$@"
