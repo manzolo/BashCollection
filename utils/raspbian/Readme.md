@@ -2,6 +2,9 @@
 
 A Bash script (`pi-emulate`) to manage QEMU-based Raspberry Pi emulations, supporting Raspbian/Raspberry Pi OS images (Jessie, Stretch, Buster, Bullseye) with a focus on ease of use and compatibility.
 
+<img width="1287" height="1032" alt="image" src="https://github.com/user-attachments/assets/7614012f-708f-44fd-8868-1c6d0afcb05e" />
+
+
 ## Features
 - **Quick Start**: Launch a pre-configured Raspbian Jessie 2017 instance.
 - **Instance Management**: Create, start, stop, clone, and delete emulated Raspberry Pi instances.
