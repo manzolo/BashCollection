@@ -57,7 +57,7 @@ The script provides an interactive `dialog`-based menu to:
   - `cache/`, `temp/`, `mount/`: Temporary directories.
 
 ## License
-MIT License. See [LICENSE](LICENSE) for details.
+MIT License. See [LICENSE](https://mit-license.org/) for details.
 
 ## Contributing
 Pull requests and issues are welcome! Please test changes thoroughly and ensure compatibility with supported OS versions.
