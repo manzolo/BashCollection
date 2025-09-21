@@ -1,126 +1,237 @@
 #!/bin/bash
 
-# A script to launch a QEMU virtual machine with a virtual disk and an optional bootable ISO.
-# It supports MBR and UEFI boot modes, automatically detects disk formats, and prioritizes
-# booting from ISO if present, otherwise from the hard disk.
+# QEMU Virtual Machine Launcher with Dialog Interface
+# Supports MBR/UEFI boot modes, automatic disk format detection, and ISO boot
+
+# --- Default Configuration (customize here) ---
+DEFAULT_BOOT_MODE="uefi"        # Default boot mode: mbr or uefi
+DEFAULT_BOOT_PRIORITY="auto"    # Default priority: auto, hd, iso
+DEFAULT_VM_RAM="4G"              # Default RAM
+DEFAULT_VM_CPUS=2                # Default CPU cores
+DEFAULT_SHOW_HIDDEN=false        # Show hidden files by default
 
 # --- Script Configuration ---
-VM_RAM="4G"                # Default RAM for the VM
-VM_CPUS=2                  # Number of CPU cores
-QEMU_ACCEL_OPTS="-enable-kvm"  # Enable KVM hardware acceleration
-OVMF_CODE="/usr/share/ovmf/OVMF.fd"  # UEFI firmware
-OVMF_VARS="/tmp/OVMF_VARS.fd"  # Persistent NVRAM for UEFI boot entries
+VM_RAM="${DEFAULT_VM_RAM}"
+VM_CPUS="${DEFAULT_VM_CPUS}"
+QEMU_ACCEL_OPTS="-enable-kvm"
+OVMF_CODE="/usr/share/ovmf/OVMF.fd"
+OVMF_VARS="/tmp/OVMF_VARS.fd"
 
-# --- Variable Initialization ---
+# --- Color codes ---
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# --- Variables ---
 DISK=""
-ISO=""                     # Optional ISO file
-BOOT_MODE="mbr"            # Default boot mode is MBR
-BOOT_PRIORITY="auto"       # auto, hd, iso
+ISO=""
+BOOT_MODE="${DEFAULT_BOOT_MODE}"
+BOOT_PRIORITY="${DEFAULT_BOOT_PRIORITY}"
+SELECTED_FILE=""
+SHOW_HIDDEN="${DEFAULT_SHOW_HIDDEN}"
 
-# --- Functions ---
+# --- File Browser Functions ---
 
-# Displays usage instructions.
-show_help() {
-    echo "Usage: $0 --hd <disk_path> [--iso <iso_path>] [--mbr|--uefi] [--boot-priority auto|hd|iso]"
-    echo ""
-    echo "  --hd <path>             Path to the virtual disk (e.g., /home/manzolo/Scrivania/Deb.vhd)"
-    echo "  --iso <path>            Path to the ISO file to boot from (optional)"
-    echo "  --mbr                   Configure for MBR boot mode (default)"
-    echo "  --uefi                  Configure for UEFI boot mode"
-    echo "  --boot-priority <mode>  Boot priority: auto (ISO first if present), hd, iso"
-    echo "  --help                  Show this help message"
-    echo ""
-    echo "Examples:"
-    echo "  $0 --hd /home/manzolo/Scrivania/Deb.vhd --uefi"
-    echo "  $0 --hd /home/manzolo/Scrivania/Deb.vhd --iso /path/to/debian.iso --uefi"
-    exit 0
+get_directory_content() {
+    local dir="$1"
+    local items=()
+    
+    # Add parent directory if not at root
+    [[ "$dir" != "/" ]] && items+=("..")
+    
+    local ls_opts="-1"
+    $SHOW_HIDDEN && ls_opts="${ls_opts}a"
+    
+    while IFS= read -r item; do
+        [[ "$item" = "." || "$item" = ".." ]] && continue
+        local full_path="$dir/$item"
+        if [[ -d "$full_path" ]]; then
+            # Directory - add trailing slash
+            items+=("$item/")
+        elif [[ -f "$full_path" ]]; then
+            # Regular file
+            items+=("$item")
+        elif [[ -L "$full_path" ]]; then
+            # Symbolic link - add @ suffix
+            items+=("$item@")
+        else
+            # Special file
+            items+=("$item?")
+        fi
+    done < <(ls $ls_opts "$dir" 2>/dev/null)
+    
+    printf '%s\n' "${items[@]}"
 }
 
-# Checks if a command is installed.
+get_item_description() {
+    local dir="$1"
+    local item="$2"
+    local clean_name="${item%/}"
+    clean_name="${clean_name%@}"
+    clean_name="${clean_name%\?}"
+    
+    if [[ "$item" == ".." ]]; then
+        echo "[Parent Directory]"
+        return
+    fi
+    
+    local full_path="$dir/$clean_name"
+    
+    if [[ "$item" =~ /$ ]]; then
+        # Directory
+        local count=$(ls -1 "$full_path" 2>/dev/null | wc -l)
+        echo "📁 Dir ($count items)"
+    elif [[ "$item" =~ @$ ]]; then
+        # Symbolic link
+        local target=$(readlink "$full_path" 2>/dev/null || echo "???")
+        echo "🔗 Link → $target"
+    elif [[ "$item" =~ \?$ ]]; then
+        # Special file
+        echo "❓ Special"
+    elif [[ -f "$full_path" ]]; then
+        # Regular file
+        local size=$(du -h "$full_path" 2>/dev/null | cut -f1)
+        local icon="📄"
+        case "${clean_name##*.}" in
+            txt|md|log) icon="📝" ;;
+            pdf) icon="📕" ;;
+            jpg|jpeg|png|gif|bmp) icon="🖼️" ;;
+            mp3|wav|ogg|flac) icon="🎵" ;;
+            mp4|avi|mkv|mov) icon="🎬" ;;
+            zip|tar|gz|7z|rar) icon="📦" ;;
+            sh|bash) icon="⚙️" ;;
+            py) icon="🐍" ;;
+            js|ts) icon="📜" ;;
+            html|htm) icon="🌐" ;;
+            img|vhd|vhdx|qcow2|vmdk|raw|vpc|vdi|qed) icon="💾" ;;
+            iso|ISO) icon="💿" ;;
+        esac
+        echo "$icon $size"
+    else
+        echo "❓ Unknown"
+    fi
+}
+
+show_file_browser() {
+    local current="$1"
+    local select_type="${2:-file}"
+    local file_filter="${3:-}"
+    
+    current=$(realpath "$current" 2>/dev/null || echo "$current")
+    
+    local content=$(get_directory_content "$current")
+    [[ -z "$content" ]] && { 
+        dialog --title "Error" --msgbox "Directory empty or not accessible: $current" 8 60
+        return 2
+    }
+
+    local menu_items=()
+    local temp_items=()
+    
+    # Collect all items first
+    while IFS= read -r item; do
+        if [[ -n "$item" ]]; then
+            local clean_name="${item%/}"
+            clean_name="${clean_name%@}"
+            clean_name="${clean_name%\?}"
+            
+            # Apply filter if specified
+            if [[ -n "$file_filter" ]]; then
+                # Always include directories and parent
+                if [[ "$item" =~ /$ ]] || [[ "$item" == ".." ]]; then
+                    temp_items+=("$item")
+                # Include files matching filter
+                elif [[ "$clean_name" =~ \.($file_filter)$ ]]; then
+                    temp_items+=("$item")
+                fi
+            else
+                temp_items+=("$item")
+            fi
+        fi
+    done <<< "$content"
+    
+    # Build menu with descriptions
+    for item in "${temp_items[@]}"; do
+        local desc=$(get_item_description "$current" "$item")
+        menu_items+=("$item" "$desc")
+    done
+
+    # Add "Select this directory" option if in directory mode
+    if [ "$select_type" = "dir" ] && [ "$current" != "/" ]; then
+        menu_items+=("." "📍 [Select this directory]")
+    fi
+
+    local height=22
+    local width=75
+    local menu_height=14
+    local display_path="$current"
+    [ ${#display_path} -gt 55 ] && display_path="...${display_path: -52}"
+
+    local instruction_msg=""
+    if [ "$select_type" = "dir" ]; then
+        instruction_msg="Select a directory or navigate with folders"
+    else
+        if [[ -n "$file_filter" ]]; then
+            instruction_msg="Select a file (.$file_filter) or navigate directories"
+        else
+            instruction_msg="Select a file or navigate directories"
+        fi
+    fi
+
+    local selected
+    selected=$(dialog --title "📂 File Browser" \
+        --menu "$instruction_msg\n\n📍 $display_path" \
+        $height $width $menu_height \
+        "${menu_items[@]}" 2>&1 >/dev/tty)
+    
+    local exit_status=$?
+
+    if [ $exit_status -eq 0 ] && [ -n "$selected" ]; then
+        local clean_name="${selected%/}"
+        clean_name="${clean_name%@}"
+        clean_name="${clean_name%\?}"
+        
+        if [ "$selected" = ".." ]; then
+            show_file_browser "$(dirname "$current")" "$select_type" "$file_filter"
+            return $?
+        elif [ "$selected" = "." ]; then
+            SELECTED_FILE="$current"
+            return 0
+        elif [[ "$selected" =~ /$ ]]; then
+            show_file_browser "$current/$clean_name" "$select_type" "$file_filter"
+            return $?
+        else
+            if [ "$select_type" = "dir" ]; then
+                dialog --title "Warning" --msgbox "Please select a directory, not a file!" 8 50
+                show_file_browser "$current" "$select_type" "$file_filter"
+                return $?
+            else
+                SELECTED_FILE="$current/$clean_name"
+                return 0
+            fi
+        fi
+    else
+        return 1
+    fi
+}
+
+# --- Utility Functions ---
+
 check_dependency() {
     if ! command -v "$1" &> /dev/null; then
-        echo "Error: Required command '$1' is not installed." >&2
+        dialog --title "Error" --msgbox "Required command '$1' is not installed." 8 50
         exit 1
     fi
 }
 
-# Checks if a file exists.
-check_file_exists() {
-    local file=$1
-    if [ ! -f "$file" ]; then
-        echo "Error: File not found at '$file'." >&2
-        exit 1
-    fi
-}
-
-# Prompts the user for a file path.
-prompt_for_file() {
-    local prompt_text="$1"
-    local is_optional="$2"
-    local file_path=""
-
-    while true; do
-        read -p "$prompt_text " file_path
-        if [ -f "$file_path" ]; then
-            echo "$file_path"
-            return
-        elif [ -z "$file_path" ] && [ "$is_optional" = "optional" ]; then
-            echo ""
-            return
-        else
-            echo "Error: File not found. Please try again."
-        fi
-    done
-}
-
-# Detects the disk format based on file extension and qemu-img info.
 detect_disk_format() {
     local disk_file=$1
     local format=""
     
     local formats_to_test=("qcow2" "vmdk" "vdi" "vpc" "vhdx" "qed" "parallels")
     
-    if command -v qemu-img &> /dev/null; then
-        format=$(qemu-img info "$disk_file" 2>/dev/null | grep "file format:" | awk '{print $3}')
-        if [ -n "$format" ] && [ "$format" != "raw" ]; then
-            echo "$format"
-            return 0
-        fi
-        
-        for test_format in "${formats_to_test[@]}"; do
-            if qemu-img info -f "$test_format" "$disk_file" &>/dev/null; then
-                detected=$(qemu-img info -f "$test_format" "$disk_file" 2>/dev/null | grep "file format:" | awk '{print $3}')
-                if [ "$detected" = "$test_format" ]; then
-                    echo "$test_format"
-                    return 0
-                fi
-            fi
-        done
-    fi
-    
-    if [ -r "$disk_file" ]; then
-        if head -c 8 "$disk_file" 2>/dev/null | grep -q "vhdxfile"; then
-            echo "vhdx"
-            return 0
-        fi
-        if tail -c 512 "$disk_file" 2>/dev/null | grep -q "conectix"; then
-            echo "vpc"
-            return 0
-        fi
-        if head -c 4 "$disk_file" 2>/dev/null | xxd -p | grep -q "^514649fb"; then
-            echo "qcow2"
-            return 0
-        fi
-        if head -c 4 "$disk_file" 2>/dev/null | grep -q "KDMV"; then
-            echo "vmdk"
-            return 0
-        fi
-        if head -c 64 "$disk_file" 2>/dev/null | grep -q "Oracle VM VirtualBox Disk Image"; then
-            echo "vdi"
-            return 0
-        fi
-    fi
-
     if command -v qemu-img &> /dev/null; then
         format=$(qemu-img info "$disk_file" 2>/dev/null | grep "file format:" | awk '{print $3}')
         if [ -n "$format" ] && [ "$format" != "raw" ]; then
@@ -136,136 +247,297 @@ detect_disk_format() {
         vdi)   echo "vdi"   ;;
         vhd)   echo "vpc"   ;;
         vhdx)  echo "vhdx"  ;;
-        raw|img|iso) echo "raw" ;;
+        raw|img) echo "raw" ;;
         *) echo "raw" ;;
     esac
 }
 
-# Validates that the disk format is supported.
-validate_disk_format() {
-    local format=$1
-    case "$format" in
-        qcow2|raw|vmdk|vdi|vpc|qed|vhdx)
-            return 0
-            ;;
-        *)
-            echo "Warning: Disk format '$format' may not be fully supported." >&2
-            echo "Proceeding anyway..." >&2
-            return 0
-            ;;
-    esac
+# --- Main Menu Functions ---
+
+show_main_menu() {
+    local menu_text="Current Configuration:\n"
+    menu_text+="\n💾 Disk: ${DISK:-Not selected}"
+    if [ -n "$DISK" ]; then
+        local disk_format=$(detect_disk_format "$DISK")
+        menu_text+=" (Format: $disk_format)"
+    fi
+    menu_text+="\n💿 ISO: ${ISO:-None}"
+    menu_text+="\n🖥️  Boot Mode: $BOOT_MODE"
+    menu_text+="\n🔄 Boot Priority: $BOOT_PRIORITY"
+    menu_text+="\n💻 RAM: $VM_RAM | CPUs: $VM_CPUS"
+    
+    local choice
+    choice=$(dialog --title "🚀 QEMU VM Launcher" \
+        --menu "$menu_text" \
+        22 70 12 \
+        "1" "💾 Select Virtual Disk" \
+        "2" "💿 Select ISO Image (Optional)" \
+        "3" "🖥️  Change Boot Mode (MBR/UEFI)" \
+        "4" "🔄 Change Boot Priority" \
+        "5" "💻 VM Resources (RAM/CPU)" \
+        "6" "🗑️  Clear ISO Selection" \
+        "7" "👁️  Toggle Hidden Files" \
+        "8" "▶️  Launch VM" \
+        "9" "🚀 Launch VM with Boot Menu (F12)" \
+        "0" "❌ Exit" \
+        2>&1 >/dev/tty)
+    
+    echo "$choice"
 }
 
-# Determines the effective boot priority.
-determine_boot_priority() {
-    local priority="$1"
-    local has_iso="$2"
+select_disk() {
+    local start_dir="${1:-$PWD}"
+    SELECTED_FILE=""
     
-    case "$priority" in
-        "auto")
-            if [ "$has_iso" = "true" ]; then
-                echo "iso"
-            else
-                echo "hd"
-            fi
-            ;;
-        "hd"|"iso")
-            echo "$priority"
-            ;;
-        *)
-            echo "hd"  # Safe fallback
-            ;;
-    esac
-}
-
-# Configures storage and boot devices.
-configure_storage_and_boot() {
-    local disk="$1"
-    local disk_format="$2"
-    local iso="$3"
-    local boot_mode="$4"
-    local boot_priority="$5"
+    show_file_browser "$start_dir" "file" "vhd|vhdx|qcow2|vmdk|vdi|raw|img|vpc|qed"
     
-    local has_iso="false"
-    if [ -n "$iso" ]; then
-        has_iso="true"
-    fi
-    
-    local effective_priority
-    effective_priority=$(determine_boot_priority "$boot_priority" "$has_iso")
-    
-    local storage_opts=()
-    local boot_opts=()
-    
-    # Configure disk with virtio interface (aligned with working command)
-    storage_opts+=("-drive" "file=$disk,format=$disk_format,if=virtio,cache=writeback")
-    
-    # Configure ISO if provided
-    if [ -n "$iso" ]; then
-        storage_opts+=("-drive" "file=$iso,format=raw,media=cdrom,readonly=on")
-    fi
-    
-    # Configure boot priority
-    if [ "$effective_priority" = "iso" ] && [ -n "$iso" ]; then
-        boot_opts+=("-boot" "order=dc,menu=on")  # Prioritize ISO, then disk
-    else
-        boot_opts+=("-boot" "order=c,menu=on")   # Boot from disk only
-    fi
-    
-    printf '%s\n' "${storage_opts[@]}" "${boot_opts[@]}"
-}
-
-# Shows a summary of the boot configuration
-show_boot_summary() {
-    local disk="$1"
-    local iso="$2"
-    local boot_priority="$3"
-    local boot_mode="$4"
-    
-    local has_iso="false"
-    if [ -n "$iso" ]; then
-        has_iso="true"
-    fi
-    
-    local effective_priority
-    effective_priority=$(determine_boot_priority "$boot_priority" "$has_iso")
-    
-    echo "=== BOOT CONFIGURATION ==="
-    echo "Mode: $boot_mode"
-    echo "Requested priority: $boot_priority"
-    echo "Effective priority: $effective_priority"
-    echo ""
-    
-    if [ "$effective_priority" = "iso" ] && [ -n "$iso" ]; then
-        echo "✓ PRIMARY DEVICE: ISO ($iso)"
-        echo "✓ SECONDARY DEVICE: Hard disk ($disk)"
-        echo ""
-        echo "The VM will boot from the ISO. If the ISO is not bootable, it will try the hard disk."
-    else
-        echo "✓ PRIMARY DEVICE: Hard disk ($disk)"
-        if [ -n "$iso" ]; then
-            echo "✓ SECONDARY DEVICE: ISO ($iso)"
-            echo ""
-            echo "The VM will boot from the hard disk. The ISO is available for installation or recovery."
+    if [ $? -eq 0 ] && [ -n "$SELECTED_FILE" ]; then
+        if [ -f "$SELECTED_FILE" ]; then
+            DISK="$SELECTED_FILE"
+            dialog --title "Success" --msgbox "Virtual disk selected:\n$DISK" 8 60
         else
-            echo ""
-            echo "The VM will boot from the hard disk exclusively."
+            dialog --title "Error" --msgbox "Selected file does not exist!" 8 50
+        fi
+    fi
+}
+
+select_iso() {
+    local start_dir="${1:-$PWD}"
+    SELECTED_FILE=""
+    
+    show_file_browser "$start_dir" "file" "iso|ISO"
+    
+    if [ $? -eq 0 ] && [ -n "$SELECTED_FILE" ]; then
+        if [ -f "$SELECTED_FILE" ]; then
+            ISO="$SELECTED_FILE"
+            dialog --title "Success" --msgbox "ISO image selected:\n$ISO" 8 60
+        else
+            dialog --title "Error" --msgbox "Selected file does not exist!" 8 50
+        fi
+    fi
+}
+
+select_boot_mode() {
+    local choice
+    choice=$(dialog --title "Boot Mode" \
+        --radiolist "Select boot mode:" \
+        10 50 2 \
+        "mbr" "MBR/Legacy Boot" $([ "$BOOT_MODE" = "mbr" ] && echo "on" || echo "off") \
+        "uefi" "UEFI Boot" $([ "$BOOT_MODE" = "uefi" ] && echo "on" || echo "off") \
+        2>&1 >/dev/tty)
+    
+    if [ $? -eq 0 ] && [ -n "$choice" ]; then
+        BOOT_MODE="$choice"
+        dialog --title "Success" --msgbox "Boot mode set to: $BOOT_MODE" 6 40
+    fi
+}
+
+select_boot_priority() {
+    local choice
+    choice=$(dialog --title "Boot Priority" \
+        --radiolist "Select boot priority:" \
+        12 60 3 \
+        "auto" "Auto (ISO first if present)" $([ "$BOOT_PRIORITY" = "auto" ] && echo "on" || echo "off") \
+        "hd" "Hard Disk First" $([ "$BOOT_PRIORITY" = "hd" ] && echo "on" || echo "off") \
+        "iso" "ISO First" $([ "$BOOT_PRIORITY" = "iso" ] && echo "on" || echo "off") \
+        2>&1 >/dev/tty)
+    
+    if [ $? -eq 0 ] && [ -n "$choice" ]; then
+        BOOT_PRIORITY="$choice"
+        dialog --title "Success" --msgbox "Boot priority set to: $BOOT_PRIORITY" 6 40
+    fi
+}
+
+configure_resources() {
+    local temp_ram temp_cpus
+    
+    # RAM configuration
+    temp_ram=$(dialog --title "VM Resources" \
+        --inputbox "Enter RAM amount (e.g., 2G, 4G, 8G):" \
+        8 50 "$VM_RAM" \
+        2>&1 >/dev/tty)
+    
+    if [ $? -eq 0 ] && [ -n "$temp_ram" ]; then
+        if [[ "$temp_ram" =~ ^[0-9]+[GMK]?$ ]]; then
+            VM_RAM="$temp_ram"
+        else
+            dialog --title "Error" --msgbox "Invalid RAM format! Use format like: 2G, 4G, 512M" 8 50
+            return
         fi
     fi
     
-    if [ "$boot_mode" = "uefi" ]; then
-        echo ""
-        echo "ℹ  In UEFI mode, press F12 during startup to access the boot menu."
+    # CPU configuration
+    temp_cpus=$(dialog --title "VM Resources" \
+        --inputbox "Enter number of CPU cores:" \
+        8 50 "$VM_CPUS" \
+        2>&1 >/dev/tty)
+    
+    if [ $? -eq 0 ] && [ -n "$temp_cpus" ]; then
+        if [[ "$temp_cpus" =~ ^[0-9]+$ ]] && [ "$temp_cpus" -ge 1 ] && [ "$temp_cpus" -le 16 ]; then
+            VM_CPUS="$temp_cpus"
+            dialog --title "Success" --msgbox "Resources configured:\nRAM: $VM_RAM\nCPUs: $VM_CPUS" 8 40
+        else
+            dialog --title "Error" --msgbox "Invalid CPU count! Must be between 1 and 16" 8 50
+        fi
     fi
-    echo "================================"
 }
 
-# --- Main Script Logic ---
+launch_vm() {
+    if [ -z "$DISK" ]; then
+        dialog --title "Error" --msgbox "No virtual disk selected!" 8 40
+        return 1
+    fi
+    
+    if [ ! -f "$DISK" ]; then
+        dialog --title "Error" --msgbox "Virtual disk not found:\n$DISK" 8 60
+        return 1
+    fi
+    
+    if [ -n "$ISO" ] && [ ! -f "$ISO" ]; then
+        dialog --title "Error" --msgbox "ISO file not found:\n$ISO" 8 60
+        return 1
+    fi
+    
+    # Detect disk format
+    local disk_format=$(detect_disk_format "$DISK")
+    
+    # Configure UEFI if needed
+    if [ "$BOOT_MODE" = "uefi" ]; then
+        if [ ! -f "$OVMF_CODE" ]; then
+            dialog --title "Error" --msgbox "UEFI firmware not found at:\n$OVMF_CODE" 8 60
+            return 1
+        fi
+        rm -f "$OVMF_VARS" # Reset UEFI variables
+        cp "$OVMF_CODE" "$OVMF_VARS"
+    fi
+    
+    # Show launch summary with effective boot priority
+    local summary="VM Configuration:\n\n"
+    summary+="💾 Disk: $(basename "$DISK")\n"
+    summary+="   Format: $disk_format\n"
+    if [ -n "$ISO" ]; then
+        summary+="💿 ISO: $(basename "$ISO")\n"
+    fi
+    summary+="🖥️  Boot Mode: $BOOT_MODE\n"
+    summary+="🔄 Boot Priority: $BOOT_PRIORITY"
+    
+    local has_iso="false"
+    [ -n "$ISO" ] && has_iso="true"
+    local effective_priority="$BOOT_PRIORITY"
+    if [ "$BOOT_PRIORITY" = "auto" ]; then
+        if [ "$has_iso" = "true" ]; then
+            effective_priority="iso"
+        else
+            effective_priority="hd"
+        fi
+    fi
+    
+    if [ "$effective_priority" != "$BOOT_PRIORITY" ]; then
+        summary+=" → $effective_priority"
+    fi
+    summary+="\n"
+    
+    if [ "$effective_priority" = "iso" ] && [ -n "$ISO" ]; then
+        summary+="   ⚡ Will boot from ISO first\n"
+    elif [ "$effective_priority" = "hd" ]; then
+        summary+="   ⚡ Will boot from Hard Disk first\n"
+    fi
+    
+    summary+="💻 RAM: $VM_RAM | CPUs: $VM_CPUS\n"
+    summary+="\nPress OK to launch the VM"
+    
+    dialog --title "Launch Confirmation" --yesno "$summary" 14 60
+    
+    if [ $? -ne 0 ]; then
+        return 1
+    fi
+    
+    # Assemble QEMU command
+    local QEMU_CMD="qemu-system-x86_64"
+    QEMU_CMD+=" -m $VM_RAM"
+    QEMU_CMD+=" -smp $VM_CPUS"
+    QEMU_CMD+=" $QEMU_ACCEL_OPTS"
+    QEMU_CMD+=" -machine q35"
+    QEMU_CMD+=" -cpu host"
+    QEMU_CMD+=" -vga virtio"
+    QEMU_CMD+=" -display gtk,show-cursor=on"
+    QEMU_CMD+=" -monitor vc"
+    QEMU_CMD+=" -serial file:/tmp/qemu-serial.log"
+    QEMU_CMD+=" -usb"
+    QEMU_CMD+=" -device usb-tablet"
+    
+    # Add UEFI firmware if needed
+    if [ "$BOOT_MODE" = "uefi" ]; then
+        QEMU_CMD+=" -drive if=pflash,format=raw,unit=0,file=$OVMF_CODE,readonly=on"
+        QEMU_CMD+=" -drive if=pflash,format=raw,unit=1,file=$OVMF_VARS"
+    fi
+    
+    # Add disk
+    QEMU_CMD+=" -drive file=$DISK,format=$disk_format,if=virtio,cache=writeback"
+    
+    # Add ISO if present
+    if [ -n "$ISO" ]; then
+        QEMU_CMD+=" -drive file=$ISO,format=raw,media=cdrom,readonly=on"
+    fi
+    
+    # Configure boot priority
+    if [ "$effective_priority" = "iso" ] && [ -n "$ISO" ]; then
+        QEMU_CMD+=" -boot once=d,menu=on,splash-time=5000,strict=on"
+    elif [ "$effective_priority" = "hd" ] && [ -n "$ISO" ]; then
+        QEMU_CMD+=" -boot once=c,menu=on,splash-time=5000,strict=on"
+    else
+        QEMU_CMD+=" -boot order=c,menu=on"
+    fi
+    
+    # Clear dialog screen
+    clear
+    
+    # Show launch info with boot priority details
+    echo -e "${GREEN}=== Launching QEMU VM ===${NC}"
+    echo -e "${BLUE}Disk:${NC} $DISK"
+    [ -n "$ISO" ] && echo -e "${BLUE}ISO:${NC} $ISO"
+    echo -e "${BLUE}Boot Mode:${NC} $BOOT_MODE"
+    echo -e "${BLUE}Boot Priority:${NC} $effective_priority"
+    if [ "$effective_priority" = "iso" ] && [ -n "$ISO" ]; then
+        echo -e "${YELLOW}→ Booting from ISO first${NC}"
+    elif [ "$effective_priority" = "hd" ]; then
+        echo -e "${YELLOW}→ Booting from Hard Disk first${NC}"
+    fi
+    echo -e "${BLUE}Resources:${NC} RAM=$VM_RAM, CPUs=$VM_CPUS"
+    echo ""
+    echo -e "${YELLOW}Starting VM...${NC}"
+    echo -e "${YELLOW}Tip: Press F12 during boot for boot menu${NC}"
+    echo ""
+    
+    # Debug: Show the actual command being run
+    echo -e "${BLUE}Debug - QEMU Command:${NC}"
+    echo "$QEMU_CMD"
+    echo ""
+    
+    # Launch QEMU
+    eval $QEMU_CMD
+    
+    if [ $? -ne 0 ]; then
+        echo ""
+        echo -e "${RED}Error: Failed to launch QEMU${NC}"
+        echo "Press Enter to return to menu..."
+        read -r
+        return 1
+    fi
+    
+    echo ""
+    echo -e "${GREEN}QEMU session ended.${NC}"
+    echo "Press Enter to return to menu..."
+    read -r
+}
 
-# Check for required dependencies
+# --- Main Script ---
+
+# Check dependencies
+check_dependency dialog
 check_dependency qemu-system-x86_64
 
-# Parse command-line arguments
+# Parse command line arguments if provided
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --hd)
@@ -286,126 +558,62 @@ while [[ $# -gt 0 ]]; do
             ;;
         --boot-priority)
             BOOT_PRIORITY="$2"
-            case "$2" in
-                auto|hd|iso)
-                    shift 2
-                    ;;
-                *)
-                    echo "Error: Invalid value for --boot-priority: '$2'" >&2
-                    echo "Accepted values: auto, hd, iso" >&2
-                    show_help
-                    ;;
-            esac
+            shift 2
             ;;
         --help)
-            show_help
+            clear
+            echo "QEMU VM Launcher with Dialog Interface"
+            echo ""
+            echo "Usage: $0 [options]"
+            echo ""
+            echo "Options:"
+            echo "  --hd <path>             Path to virtual disk"
+            echo "  --iso <path>            Path to ISO file (optional)"
+            echo "  --mbr                   Use MBR boot mode"
+            echo "  --uefi                  Use UEFI boot mode"
+            echo "  --boot-priority <mode>  Boot priority: auto|hd|iso"
+            echo "  --help                  Show this help"
+            echo ""
+            echo "If no options are provided, interactive mode will start."
+            exit 0
             ;;
         *)
-            echo "Error: Invalid option '$1'." >&2
-            show_help
+            echo "Unknown option: $1"
+            echo "Use --help for usage information"
+            exit 1
             ;;
     esac
 done
 
-# If no disk path was provided, start interactive mode
-if [ -z "$DISK" ]; then
-    echo "=== VM Setup (Interactive Mode) ==="
-    echo "Please provide the paths for your virtual disk and optional ISO."
-    echo ""
-    DISK=$(prompt_for_file "Enter the path for the VIRTUAL DISK (e.g., /home/manzolo/Scrivania/Deb.vhd):")
+# Main loop
+while true; do
+    choice=$(show_main_menu)
     
-    read -p "Do you want to add a bootable ISO? (y/N): " add_iso_choice
-    if [[ "$add_iso_choice" =~ ^[Yy]$ ]]; then
-        ISO=$(prompt_for_file "Enter the path for the BOOTABLE ISO (e.g., /home/user/debian.iso):" "optional")
-    fi
-
-    read -p "Choose boot mode (MBR/UEFI) - [M]BR or [U]EFI: " boot_mode_choice
-    case "$boot_mode_choice" in
-        [Uu]*)
-            BOOT_MODE="uefi"
+    case "$choice" in
+        1) select_disk ;;
+        2) select_iso ;;
+        3) select_boot_mode ;;
+        4) select_boot_priority ;;
+        5) configure_resources ;;
+        6) 
+            ISO=""
+            dialog --title "Success" --msgbox "ISO selection cleared" 6 40
             ;;
-        *)
-            BOOT_MODE="mbr"
+        7)
+            if $SHOW_HIDDEN; then
+                SHOW_HIDDEN=false
+                dialog --title "File Browser" --msgbox "Hidden files: OFF" 6 40
+            else
+                SHOW_HIDDEN=true
+                dialog --title "File Browser" --msgbox "Hidden files: ON" 6 40
+            fi
+            ;;
+        8) launch_vm "false" ;;
+        9) launch_vm "true" ;;
+        0|"") 
+            clear
+            echo -e "${GREEN}Goodbye!${NC}"
+            exit 0
             ;;
     esac
-fi
-
-# Validate that the provided files exist
-check_file_exists "$DISK"
-if [ -n "$ISO" ]; then
-    check_file_exists "$ISO"
-fi
-
-# Detect the disk format
-DISK_FORMAT=$(detect_disk_format "$DISK")
-validate_disk_format "$DISK_FORMAT"
-
-# Configure UEFI with persistent NVRAM if needed
-if [ "$BOOT_MODE" = "uefi" ]; then
-    check_file_exists "$OVMF_CODE"
-    if [ ! -f "$OVMF_VARS" ]; then
-        cp "$OVMF_CODE" "$OVMF_VARS"
-    fi
-fi
-
-# Show boot configuration summary
-show_boot_summary "$DISK" "$ISO" "$BOOT_PRIORITY" "$BOOT_MODE"
-echo ""
-
-# Assemble QEMU options
-QEMU_OPTS=(
-    "-m" "$VM_RAM"
-    "-smp" "$VM_CPUS"
-    "$QEMU_ACCEL_OPTS"
-    "-machine" "q35"
-    "-cpu" "host"
-    "-vga" "virtio"
-    "-display" "gtk,show-cursor=on"
-    "-monitor" "vc"
-    "-serial" "file:/tmp/qemu-serial.log"
-    "-usb"
-    "-device" "usb-tablet"
-)
-
-# Add UEFI firmware configuration
-if [ "$BOOT_MODE" = "uefi" ]; then
-    QEMU_OPTS+=("-drive" "if=pflash,format=raw,unit=0,file=$OVMF_CODE,readonly=on")
-    QEMU_OPTS+=("-drive" "if=pflash,format=raw,unit=1,file=$OVMF_VARS")
-else
-    QEMU_OPTS+=("-bios" "$OVMF_CODE")
-fi
-
-# Configure storage and boot
-mapfile -t STORAGE_BOOT_OPTS < <(configure_storage_and_boot "$DISK" "$DISK_FORMAT" "$ISO" "$BOOT_MODE" "$BOOT_PRIORITY")
-QEMU_OPTS+=("${STORAGE_BOOT_OPTS[@]}")
-
-# Show launch information
-echo "Launching QEMU VM with the following configuration:"
-echo "  RAM: $VM_RAM"
-echo "  CPU: $VM_CPUS"
-echo "  Boot mode: $BOOT_MODE"
-echo "  Hard disk: $DISK (format: $DISK_FORMAT)"
-if [ -n "$ISO" ]; then
-    echo "  ISO: $ISO"
-fi
-if [ "$BOOT_MODE" = "uefi" ]; then
-    echo "  UEFI firmware: $OVMF_CODE"
-    echo "  UEFI NVRAM: $OVMF_VARS"
-fi
-echo ""
-
-echo "Press ENTER to launch the VM, or Ctrl+C to cancel..."
-read -r
-
-# Launch QEMU
-echo "Starting QEMU..."
-qemu-system-x86_64 "${QEMU_OPTS[@]}"
-
-# Check for QEMU launch errors
-if [ $? -ne 0 ]; then
-    echo "Error: Failed to launch QEMU." >&2
-    exit 1
-fi
-
-echo "QEMU session ended."
-exit 0
+done
