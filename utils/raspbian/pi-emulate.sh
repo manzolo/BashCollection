@@ -32,8 +32,8 @@ readonly DEFAULT_SSH_PORT="5022"
 declare -A OS_CATALOG=(
     ["jessie_2017_full"]="jessie|2017-04-10|4.4.34|full|http://downloads.raspberrypi.org/raspbian/images/raspbian-2017-04-10/2017-04-10-raspbian-jessie.zip"
     ["jessie_2017_lite"]="jessie|2017-04-10|4.4.34|lite|http://downloads.raspberrypi.org/raspbian_lite/images/raspbian_lite-2017-04-10/2017-04-10-raspbian-jessie-lite.zip"
-    ["stretch_2018_full"]="stretch|2018-11-13|4.14.79|full|http://downloads.raspberrypi.org/raspbian/images/raspbian-2018-11-15/2018-11-13-raspbian-stretch.zip"
-    ["stretch_2018_lite"]="stretch|2018-11-13|4.14.79|lite|http://downloads.raspberrypi.org/raspbian_lite/images/raspbian_lite-2018-11-15/2018-11-13-raspbian-stretch-lite.zip"
+    ["stretch_2018_full"]="stretch|2018-11-13|4.9.80|full|http://downloads.raspberrypi.org/raspbian/images/raspbian-2018-11-15/2018-11-13-raspbian-stretch.zip"
+    ["stretch_2018_lite"]="stretch|2018-11-13|4.9.80|lite|http://downloads.raspberrypi.org/raspbian_lite/images/raspbian_lite-2018-11-15/2018-11-13-raspbian-stretch-lite.zip"
     ["buster_2020_full"]="buster|2020-02-13|4.19.118|full|http://downloads.raspberrypi.org/raspbian/images/raspbian-2020-02-14/2020-02-13-raspbian-buster.zip"
     ["buster_2020_lite"]="buster|2020-02-13|4.19.118|lite|http://downloads.raspberrypi.org/raspbian_lite/images/raspbian_lite-2020-02-14/2020-02-13-raspbian-buster-lite.zip"
     ["bullseye_2022_full"]="bullseye|2022-04-04|5.10.103|full|https://downloads.raspberrypi.org/raspios_armhf/images/raspios_armhf-2022-04-07/2022-04-04-raspios-bullseye-armhf.img.xz"
@@ -112,8 +112,11 @@ init_workspace() {
     if [ ! -f "$INSTANCES_DB" ]; then
         cat > "$INSTANCES_DB" <<EOF
 # Instance Database
-# Format: ID|Name|Image|Kernel|Memory|Status|Created|LastRun
+# Format: ID|Name|Image|Kernel|Memory|SSH_Port|Status|Created
 EOF
+    else
+        # Ripara il database se necessario
+        repair_instances_db
     fi
     
     return 0
@@ -267,15 +270,48 @@ download_kernel() {
     local kernel_file="${KERNELS_DIR}/kernel-qemu-${kernel_version}-${os_version}"
     
     if [ ! -f "$kernel_file" ]; then
-        echo "Downloading kernel..."
+        echo "Downloading kernel for $os_version ($kernel_version)..."
         
-        wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-${kernel_version}-${os_version}" || \
-        wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-${kernel_version}" || \
-        wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.4.34-jessie"
+        # Prova diversi kernel in ordine di compatibilità
+        case $os_version in
+            jessie)
+                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.4.34-jessie" || \
+                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.4.34"
+                ;;
+            stretch)
+                # Per Stretch usa il kernel 4.9.80 che è più compatibile
+                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.9.80-stretch" || \
+                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.9.80" || \
+                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.4.34-jessie"
+                ;;
+            buster)
+                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.19.50-buster" || \
+                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.19.118" || \
+                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.4.34-jessie"
+                ;;
+            bullseye)
+                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-5.10.63-bullseye" || \
+                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-5.10.103" || \
+                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.19.50-buster" || \
+                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.4.34-jessie"
+                ;;
+            *)
+                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-${kernel_version}-${os_version}" || \
+                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-${kernel_version}" || \
+                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.4.34-jessie"
+                ;;
+        esac
         
         if [ ! -f "$kernel_file" ] || [ ! -s "$kernel_file" ]; then
-            echo "Failed to download kernel!"
-            return 1
+            echo "Failed to download kernel! Using fallback..."
+            # Usa il kernel jessie come fallback
+            local fallback_kernel="${KERNELS_DIR}/kernel-qemu-4.4.34-jessie"
+            if [ -f "$fallback_kernel" ]; then
+                cp "$fallback_kernel" "$kernel_file"
+            else
+                echo "No fallback kernel available!"
+                return 1
+            fi
         fi
     fi
     
@@ -377,10 +413,13 @@ create_instance() {
 list_instances() {
     local instances=""
     local counter=1
+    local instance_ids=()  # Array per memorizzare gli ID delle istanze
     
     while IFS='|' read -r id name image kernel memory ssh_port status created; do
         [[ "$id" =~ ^# ]] && continue
+        [[ -z "$id" ]] && continue  # Salta righe vuote
         instances+="$counter \"$name [$status] (Port: $ssh_port)\" "
+        instance_ids+=("$id")  # Memorizza l'ID effettivo
         ((counter++))
     done < "$INSTANCES_DB"
     
@@ -393,7 +432,40 @@ list_instances() {
     choice=$(eval dialog --title \"Instances\" --menu \"Select instance:\" 15 70 8 $instances 2>&1 >/dev/tty)
     [ -z "$choice" ] && return
     
-    manage_instance "$choice"
+    # Usa l'ID effettivo invece del numero di riga
+    local selected_id="${instance_ids[$((choice-1))]}"
+    manage_instance_by_id "$selected_id"
+}
+
+manage_instance_by_id() {
+    local instance_id=$1
+    local instance_data=$(grep "^$instance_id|" "$INSTANCES_DB")
+    
+    if [ -z "$instance_data" ]; then
+        dialog --msgbox "Instance not found!" 8 30
+        return
+    fi
+    
+    IFS='|' read -r id name image kernel memory ssh_port status created <<< "$instance_data"
+    
+    local action
+    action=$(dialog --title "Instance: $name" --menu "Select action:" 15 50 6 \
+        "1" "Start" \
+        "2" "Stop" \
+        "3" "SSH Connect" \
+        "4" "Clone" \
+        "5" "Delete" \
+        "6" "Properties" \
+        2>&1 >/dev/tty)
+    
+    case $action in
+        1) launch_instance "$id" ;;
+        2) stop_instance "$id" ;;
+        3) connect_ssh "$ssh_port" ;;
+        4) clone_instance "$id" ;;
+        5) delete_instance "$id" ;;
+        6) show_properties "$id" ;;
+    esac
 }
 
 manage_instance() {
@@ -427,7 +499,7 @@ manage_instance() {
 
 launch_instance() {
     local instance_id=$1
-    local instance_data=$(grep "^$instance_id" "$INSTANCES_DB")
+    local instance_data=$(grep "^$instance_id|" "$INSTANCES_DB")
     
     if [ -z "$instance_data" ]; then
         dialog --msgbox "Instance not found!" 8 30
@@ -477,15 +549,28 @@ launch_instance() {
     echo "Starting QEMU..."
     sleep 3
     
+    # Determina i parametri QEMU appropriati per la versione
+    local qemu_machine="versatilepb"
+    local qemu_cpu="arm1176"
+    local kernel_cmdline="root=/dev/sda2 rootfstype=ext4 rw"
+    
+    # Aggiusta i parametri per versioni più recenti
+    if [[ "$kernel_name" == *"bullseye"* ]] || [[ "$kernel_name" == *"5.10"* ]]; then
+        kernel_cmdline="dwc_otg.lpm_enable=0 console=ttyAMA0,115200 console=tty1 root=/dev/sda2 rootfstype=ext4 elevator=deadline fsck.repair=yes rootwait"
+    elif [[ "$kernel_name" == *"buster"* ]] || [[ "$kernel_name" == *"4.19"* ]]; then
+        kernel_cmdline="dwc_otg.lpm_enable=0 console=ttyAMA0,115200 console=tty1 root=/dev/sda2 rootfstype=ext4 elevator=deadline fsck.repair=yes rootwait"
+    fi
+    
     qemu-system-arm \
         -kernel "$kernel_file" \
-        -cpu arm1176 \
+        -cpu "$qemu_cpu" \
         -m "$memory" \
-        -M versatilepb \
+        -M "$qemu_machine" \
         -serial stdio \
-        -append "root=/dev/sda2 rootfstype=ext4 rw" \
-        -hda "$image" \
-        -nic user,hostfwd=tcp::"${ssh_port}"-:22 \
+        -append "$kernel_cmdline" \
+        -drive format=raw,file="$image",if=scsi,index=0 \
+        -netdev user,id=net0,hostfwd=tcp::"${ssh_port}"-:22 \
+        -device rtl8139,netdev=net0 \
         -no-reboot
     
     local qemu_exit=$?
@@ -499,6 +584,29 @@ launch_instance() {
     
     echo ""
     read -p "Press ENTER to return to menu..."
+}
+
+repair_instances_db() {
+    if [ ! -f "$INSTANCES_DB" ]; then
+        return
+    fi
+    
+    # Crea un backup
+    cp "$INSTANCES_DB" "${INSTANCES_DB}.backup"
+    
+    # Rimuovi righe duplicate o malformate
+    grep -v "^#" "$INSTANCES_DB" | grep -E "^[0-9]+\|.*\|.*\|.*\|.*\|.*\|.*\|.*$" > "${INSTANCES_DB}.clean" || true
+    
+    # Riscrive il file con header
+    cat > "$INSTANCES_DB" <<EOF
+# Instance Database
+# Format: ID|Name|Image|Kernel|Memory|SSH_Port|Status|Created
+EOF
+    
+    if [ -f "${INSTANCES_DB}.clean" ]; then
+        cat "${INSTANCES_DB}.clean" >> "$INSTANCES_DB"
+        rm -f "${INSTANCES_DB}.clean"
+    fi
 }
 
 stop_instance() {
