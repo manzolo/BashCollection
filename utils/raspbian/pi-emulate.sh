@@ -10,6 +10,7 @@ readonly SCRIPT_NAME="$(basename "$0")"
 readonly WORK_DIR="${HOME}/.qemu-rpi-manager"
 readonly IMAGES_DIR="${WORK_DIR}/images"
 readonly KERNELS_DIR="${WORK_DIR}/kernels"
+readonly DTBS_DIR="${WORK_DIR}/dtbs"
 readonly SNAPSHOTS_DIR="${WORK_DIR}/snapshots"
 readonly CONFIGS_DIR="${WORK_DIR}/configs"
 readonly LOGS_DIR="${WORK_DIR}/logs"
@@ -32,12 +33,12 @@ readonly DEFAULT_SSH_PORT="5022"
 declare -A OS_CATALOG=(
     ["jessie_2017_full"]="jessie|2017-04-10|4.4.34|full|http://downloads.raspberrypi.org/raspbian/images/raspbian-2017-04-10/2017-04-10-raspbian-jessie.zip"
     ["jessie_2017_lite"]="jessie|2017-04-10|4.4.34|lite|http://downloads.raspberrypi.org/raspbian_lite/images/raspbian_lite-2017-04-10/2017-04-10-raspbian-jessie-lite.zip"
-    ["stretch_2018_full"]="stretch|2018-11-13|4.9.80|full|http://downloads.raspberrypi.org/raspbian/images/raspbian-2018-11-15/2018-11-13-raspbian-stretch.zip"
-    ["stretch_2018_lite"]="stretch|2018-11-13|4.9.80|lite|http://downloads.raspberrypi.org/raspbian_lite/images/raspbian_lite-2018-11-15/2018-11-13-raspbian-stretch-lite.zip"
-    ["buster_2020_full"]="buster|2020-02-13|4.19.118|full|http://downloads.raspberrypi.org/raspbian/images/raspbian-2020-02-14/2020-02-13-raspbian-buster.zip"
-    ["buster_2020_lite"]="buster|2020-02-13|4.19.118|lite|http://downloads.raspberrypi.org/raspbian_lite/images/raspbian_lite-2020-02-14/2020-02-13-raspbian-buster-lite.zip"
-    ["bullseye_2022_full"]="bullseye|2022-04-04|5.10.103|full|https://downloads.raspberrypi.org/raspios_armhf/images/raspios_armhf-2022-04-07/2022-04-04-raspios-bullseye-armhf.img.xz"
-    ["bullseye_2022_lite"]="bullseye|2022-04-04|5.10.103|lite|https://downloads.raspberrypi.org/raspios_lite_armhf/images/raspios_lite_armhf-2022-04-07/2022-04-04-raspios-bullseye-armhf-lite.img.xz"
+    ["stretch_2018_full"]="stretch|2018-11-13|4.4.34|full|http://downloads.raspberrypi.org/raspbian/images/raspbian-2018-11-15/2018-11-13-raspbian-stretch.zip"
+    ["stretch_2018_lite"]="stretch|2018-11-13|4.4.34|lite|http://downloads.raspberrypi.org/raspbian_lite/images/raspbian_lite-2018-11-15/2018-11-13-raspbian-stretch-lite.zip"
+    ["buster_2020_full"]="buster|2020-02-13|4.4.34|full|http://downloads.raspberrypi.org/raspbian/images/raspbian-2020-02-14/2020-02-13-raspbian-buster.zip"
+    ["buster_2020_lite"]="buster|2020-02-13|4.4.34|lite|http://downloads.raspberrypi.org/raspbian_lite/images/raspbian_lite-2020-02-14/2020-02-13-raspbian-buster-lite.zip"
+    ["bullseye_2022_full"]="bullseye|2022-04-04|4.4.34|full|https://downloads.raspberrypi.org/raspios_armhf/images/raspios_armhf-2022-04-07/2022-04-04-raspios-bullseye-armhf.img.xz"
+    ["bullseye_2022_lite"]="bullseye|2022-04-04|4.4.34|lite|https://downloads.raspberrypi.org/raspios_lite_armhf/images/raspios_lite_armhf-2022-04-07/2022-04-04-raspios-bullseye-armhf-lite.img.xz"
 )
 
 # Kernel repository
@@ -81,7 +82,7 @@ check_dialog() {
 }
 
 show_main_menu() {
-    dialog --clear --backtitle "QEMU Raspberry Pi Manager v2.0.4 - Fixed Network & Performance" \
+    dialog --clear --backtitle "QEMU Raspberry Pi Manager v3.0 - Fixed Edition" \
         --title "[ Main Menu ]" \
         --menu "Select an option:" 18 65 11 \
         "1" "Quick Start (Jessie 2017)" \
@@ -101,7 +102,7 @@ show_main_menu() {
 # ==============================================================================
 
 init_workspace() {
-    local dirs=("$WORK_DIR" "$IMAGES_DIR" "$KERNELS_DIR" "$SNAPSHOTS_DIR" 
+    local dirs=("$WORK_DIR" "$IMAGES_DIR" "$KERNELS_DIR" "$DTBS_DIR" "$SNAPSHOTS_DIR" 
                 "$CONFIGS_DIR" "$LOGS_DIR" "$TEMP_DIR" "$CACHE_DIR" "$MOUNT_DIR")
     
     for dir in "${dirs[@]}"; do
@@ -162,16 +163,16 @@ install_dependencies() {
 
 download_os_image() {
     local choice
-    choice=$(dialog --title "Download OS Image" --menu "Select download option:" 15 70 9 \
-        "1" "Download All Compatible Images" \
-        "2" "Jessie 2017 Full" \
+    choice=$(dialog --title "Download OS Image" --menu "Select OS to download:" 15 70 9 \
+        "1" "Download All Images" \
+        "2" "Jessie 2017 Full (Best compatibility)" \
         "3" "Jessie 2017 Lite" \
         "4" "Stretch 2018 Full" \
         "5" "Stretch 2018 Lite" \
-        "6" "Buster 2020 Full (Experimental)" \
-        "7" "Buster 2020 Lite (Experimental)" \
-        "8" "Bullseye 2022 Full (Experimental)" \
-        "9" "Bullseye 2022 Lite (Experimental)" \
+        "6" "Buster 2020 Full" \
+        "7" "Buster 2020 Lite" \
+        "8" "Bullseye 2022 Full" \
+        "9" "Bullseye 2022 Lite" \
         2>&1 >/dev/tty)
     
     [ -z "$choice" ] && return
@@ -190,7 +191,7 @@ download_os_image() {
 }
 
 download_all_images() {
-    dialog --title "Download All Images" --infobox "This will download all compatible OS images...\nThis may take a long time!" 8 50
+    dialog --title "Download All Images" --infobox "Downloading all OS images...\nThis will take some time!" 8 50
     sleep 2
     
     for key in "${!OS_CATALOG[@]}"; do
@@ -199,7 +200,7 @@ download_all_images() {
         download_and_prepare_image "$key" "$url" "$kernel" "$version"
     done
     
-    dialog --msgbox "All compatible images downloaded!" 8 40
+    dialog --msgbox "All images downloaded!" 8 40
 }
 
 download_single_image() {
@@ -218,18 +219,15 @@ download_and_prepare_image() {
     local dest_file="${CACHE_DIR}/${filename}"
     local final_image="${IMAGES_DIR}/${os_key}.img"
     
-    # CORREZIONE: Controlla prima se l'immagine finale esiste già
     if [ -f "$final_image" ]; then
-        dialog --msgbox "Image already available: $final_image" 8 50
+        dialog --msgbox "Image already exists: $final_image" 8 50
         return 0
     fi
     
-    # Se l'archivio esiste, chiedi se re-scaricare
     if [ -f "$dest_file" ]; then
         if dialog --yesno "Archive already downloaded. Re-download?" 8 40; then
             rm -f "$dest_file"
         else
-            # Se dice no, estrai dall'archivio esistente
             extract_and_prepare_image "$dest_file" "$os_key" "$kernel_version" "$os_version"
             return
         fi
@@ -250,13 +248,12 @@ download_and_prepare_image() {
     fi
     
     if [ $? -ne 0 ] || [ ! -f "$dest_file" ] || [ ! -s "$dest_file" ]; then
-        dialog --msgbox "Download failed! Check your internet connection." 8 50
+        dialog --msgbox "Download failed!" 8 50
         return 1
     fi
     
     extract_and_prepare_image "$dest_file" "$os_key" "$kernel_version" "$os_version"
 }
-
 
 extract_and_prepare_image() {
     local archive=$1
@@ -288,19 +285,18 @@ extract_and_prepare_image() {
     echo "Preparing final image..."
     cp "$extracted_img" "$final_image"
     
+    # Download kernel
     download_kernel "$kernel_version" "$os_version"
     
-    # CORREZIONE: Verifica che il database immagini esista
     mkdir -p "${CONFIGS_DIR}"
     if [ ! -f "${CONFIGS_DIR}/images.db" ]; then
         echo "# Images Database" > "${CONFIGS_DIR}/images.db"
         echo "# Format: OS_KEY|IMAGE_PATH|KERNEL_NAME|TIMESTAMP" >> "${CONFIGS_DIR}/images.db"
     fi
     
-    # CORREZIONE: Scrittura corretta del database immagini
-    echo "${os_key}|${final_image}|kernel-qemu-${kernel_version}-${os_version}|$(date +%s)" >> "${CONFIGS_DIR}/images.db"
+    echo "${os_key}|${final_image}|kernel-qemu-4.4.34-jessie|$(date +%s)" >> "${CONFIGS_DIR}/images.db"
     
-    echo "Image prepared successfully: $final_image"
+    echo "Image prepared: $final_image"
     sleep 2
     
     rm -f "$extracted_img"
@@ -311,41 +307,13 @@ download_kernel() {
     local kernel_version=$1
     local os_version=$2
     
-    local kernel_file="${KERNELS_DIR}/kernel-qemu-${kernel_version}-${os_version}"
+    # Always use the same kernel for all versions
+    local kernel_file="${KERNELS_DIR}/kernel-qemu-4.4.34-jessie"
     
     if [ ! -f "$kernel_file" ]; then
-        echo "Downloading kernel for $os_version ($kernel_version)..."
-        
-        # Gestione intelligente dei kernel per tutte le versioni
-        case $os_version in
-            jessie)
-                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.4.34-jessie" || \
-                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.4.34"
-                ;;
-            stretch)
-                # Per Stretch, usa il kernel jessie che è più stabile
-                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.4.34-jessie" || \
-                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.4.34"
-                ;;
-            buster)
-                # Per Buster, prova diversi kernel in ordine di compatibilità
-                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.19.50-buster" || \
-                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.4.34-jessie" || \
-                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.4.34"
-                ;;
-            bullseye)
-                # Per Bullseye, usa fallback al kernel buster o jessie
-                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-5.10.63-bullseye" || \
-                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.19.50-buster" || \
-                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.4.34-jessie" || \
-                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.4.34"
-                ;;
-            *)
-                # Fallback generico al kernel jessie per versioni sconosciute
-                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.4.34-jessie" || \
-                wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.4.34"
-                ;;
-        esac
+        echo "Downloading kernel..."
+        wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.4.34-jessie" || \
+        wget -q -O "$kernel_file" "${KERNEL_REPO}/kernel-qemu-4.4.34"
         
         if [ ! -f "$kernel_file" ] || [ ! -s "$kernel_file" ]; then
             echo "Failed to download kernel!"
@@ -360,13 +328,6 @@ download_kernel() {
 # INSTANCE MANAGEMENT
 # ==============================================================================
 
-#!/bin/bash
-
-# ==============================================================================
-# CORREZIONI PRINCIPALI
-# ==============================================================================
-
-# 1. CORREZIONE CREAZIONE ISTANZE - Database malformato
 create_instance() {
     local name
     name=$(dialog --inputbox "Instance name:" 8 40 "rpi-$(date +%Y%m%d)" 2>&1 >/dev/tty)
@@ -374,7 +335,7 @@ create_instance() {
     
     local images=$(ls -1 "$IMAGES_DIR"/*.img 2>/dev/null)
     if [ -z "$images" ]; then
-        dialog --msgbox "No images available! Please download an OS image first." 8 50
+        dialog --msgbox "No images available! Download an OS image first." 8 50
         return
     fi
     
@@ -404,23 +365,12 @@ create_instance() {
     echo "Creating instance image..."
     cp "$selected_image" "$instance_img"
     
-    # CORREZIONE: Lettura corretta del kernel dal database immagini
-    local kernel_name=""
-    if [ -f "${CONFIGS_DIR}/images.db" ]; then
-        kernel_name=$(grep "$(basename "$selected_image" .img)" "${CONFIGS_DIR}/images.db" 2>/dev/null | cut -d'|' -f3 | head -1)
-    fi
-    
-    # Fallback se non trovato nel database
-    if [ -z "$kernel_name" ]; then
-        kernel_name="kernel-qemu-4.4.34-jessie"
-    fi
-    
+    local kernel_name="kernel-qemu-4.4.34-jessie"
     local instance_id=$(date +%s)
     
-    # CORREZIONE: Scrittura corretta in una sola riga
     echo "${instance_id}|${name}|${instance_img}|${kernel_name}|${memory}|${ssh_port}|created|$(date +%s)" >> "$INSTANCES_DB"
     
-    dialog --msgbox "Instance '$name' created successfully!\n\nID: $instance_id" 10 50
+    dialog --msgbox "Instance '$name' created!\n\nID: $instance_id" 10 50
     
     if dialog --yesno "Start instance now?" 8 30; then
         launch_instance "$instance_id"
@@ -485,7 +435,7 @@ manage_instance_by_id() {
 }
 
 # ==============================================================================
-# QEMU LAUNCHER - FIXED NETWORKING AND PERFORMANCE
+# QEMU LAUNCHER - FIXED WITH CORRECT NETWORK CONFIG
 # ==============================================================================
 
 launch_instance() {
@@ -506,16 +456,13 @@ launch_instance() {
     
     local kernel_file="${KERNELS_DIR}/${kernel_name}"
     if [ ! -f "$kernel_file" ]; then
-        kernel_file=$(ls -1 "$KERNELS_DIR"/kernel-qemu-* | head -1)
+        kernel_file="${KERNELS_DIR}/kernel-qemu-4.4.34-jessie"
     fi
     
-    if [ -z "$kernel_file" ] || [ ! -f "$kernel_file" ]; then
+    if [ ! -f "$kernel_file" ]; then
         dialog --msgbox "Kernel not found!" 8 30
         return 1
     fi
-    
-    # CORREZIONE: Rimuovi mount/unmount che causano problemi
-    # Non montare l'immagine per avviarla, QEMU la gestisce direttamente
     
     clear
     echo "=========================================="
@@ -535,73 +482,46 @@ launch_instance() {
     echo "To exit QEMU: Press Ctrl+A, then X"
     echo "=========================================="
     echo ""
-    echo "Starting QEMU with optimized settings..."
-    sleep 3
     
-    # Determina la versione OS dal nome del kernel per parametri appropriati
-    local os_type="jessie"  # default fallback
-    if [[ "$kernel_name" == *"stretch"* ]]; then
+    # Determine OS type from image name
+    local os_type="jessie"
+    if [[ "$image" == *"stretch"* ]]; then
         os_type="stretch"
-    elif [[ "$kernel_name" == *"buster"* ]]; then
+    elif [[ "$image" == *"buster"* ]]; then
         os_type="buster"
-    elif [[ "$kernel_name" == *"bullseye"* ]]; then
+    elif [[ "$image" == *"bullseye"* ]]; then
         os_type="bullseye"
     fi
     
-    # Parametri QEMU base per tutte le versioni (configurazione che funzionava)
-    # local qemu_args=(
-    #     -kernel "$kernel_file"
-    #     -cpu arm1176
-    #     -m "$memory"
-    #     -M versatilepb
-    #     -serial stdio
-    #     -drive format=raw,file="$image",if=scsi,index=0
-    #     -netdev user,id=net0,hostfwd=tcp::"${ssh_port}"-:22
-    #     -device rtl8139,netdev=net0
-    #     -no-reboot
-    # )
-    local qemu_args=(
-        -kernel "$kernel_file"
-        -cpu arm1176
-        -m "$memory"
-        -M versatilepb
-        -serial stdio
-        -drive format=raw,file="$image",if=scsi,index=0
-        -nic user,hostfwd=tcp::"${DEFAULT_SSH_PORT}"-:22 \
-        -no-reboot
-    )
-
-    # Parametri kernel specifici per versione
+    # Show warnings for newer versions
     case $os_type in
-        jessie|stretch)
-            qemu_args+=(-append "root=/dev/sda2 rootfstype=ext4 rw")
+        stretch)
+            echo "Note: Stretch running with Jessie kernel"
             ;;
         buster)
-            qemu_args+=(-append "dwc_otg.lpm_enable=0 console=ttyAMA0,115200 console=tty1 root=/dev/sda2 rootfstype=ext4 elevator=deadline fsck.repair=yes rootwait")
+            echo "WARNING: Buster with Jessie kernel - limited features"
+            sleep 1
             ;;
         bullseye)
-            qemu_args+=(-append "dwc_otg.lpm_enable=0 console=ttyAMA0,115200 console=tty1 root=/dev/sda2 rootfstype=ext4 elevator=deadline fsck.repair=yes rootwait quiet")
+            echo "WARNING: Bullseye with Jessie kernel - experimental!"
+            sleep 2
             ;;
     esac
     
-    # Avviso per versioni sperimentali
-    if [[ "$os_type" == "buster" || "$os_type" == "bullseye" ]]; then
-        echo "WARNING: $os_type is experimental and may not boot properly!"
-        echo "If boot fails, use Jessie or Stretch for better compatibility."
-        echo ""
-        sleep 2
-    fi
+    echo "Starting QEMU..."
+    sleep 2
     
-    # Esegui QEMU con tentativo KVM (fallback senza KVM)
-    qemu-system-arm "${qemu_args[@]}" -enable-kvm 2>/dev/null || \
-    qemu-system-arm "${qemu_args[@]}"
-    
-    local qemu_exit=$?
-    
-    if [ $qemu_exit -ne 0 ]; then
-        echo ""
-        echo "QEMU exited with code: $qemu_exit"
-    fi
+    # QEMU command with YOUR network configuration
+    qemu-system-arm \
+        -kernel "$kernel_file" \
+        -cpu arm1176 \
+        -m "$memory" \
+        -M versatilepb \
+        -serial stdio \
+        -append "root=/dev/sda2 rootfstype=ext4 rw" \
+        -drive format=raw,file="$image" \
+        -nic user,hostfwd=tcp::"${ssh_port}"-:22 \
+        -no-reboot
     
     echo ""
     read -p "Press ENTER to return to menu..."
@@ -610,7 +530,15 @@ launch_instance() {
 stop_instance() {
     local instance_id=$1
     
-    local qemu_pids=$(pgrep -f "qemu-system-arm.*$(basename "$(grep "^$instance_id" "$INSTANCES_DB" | cut -d'|' -f3)")" || true)
+    local instance_data=$(grep "^$instance_id|" "$INSTANCES_DB")
+    if [ -z "$instance_data" ]; then
+        dialog --msgbox "Instance not found!" 8 30
+        return
+    fi
+    
+    IFS='|' read -r id name image kernel memory ssh_port status created <<< "$instance_data"
+    
+    local qemu_pids=$(pgrep -f "qemu-system-arm.*$(basename "$image")" || true)
     
     if [ -n "$qemu_pids" ]; then
         echo "$qemu_pids" | xargs kill -TERM 2>/dev/null || true
@@ -624,14 +552,17 @@ connect_ssh() {
     local port=$1
     dialog --msgbox "Connecting to SSH on port $port...\n\nPress OK to continue" 10 50
     clear
-    ssh -p "$port" -o StrictHostKeyChecking=no pi@localhost
+    echo "Attempting SSH connection..."
+    echo "Default credentials: pi / raspberry"
+    echo ""
+    ssh -p "$port" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null pi@localhost
     read -p "Press ENTER to return to menu..."
 }
 
 clone_instance() {
     local instance_id=$1
-    local instance_data=$(grep "^$instance_id" "$INSTANCES_DB")
-    IFS='|' read -r id name image kernel_name memory ssh_port status created <<< "$instance_data"
+    local instance_data=$(grep "^$instance_id|" "$INSTANCES_DB")
+    IFS='|' read -r id name image kernel memory ssh_port status created <<< "$instance_data"
     
     local new_name
     new_name=$(dialog --inputbox "Clone name:" 8 40 "${name}-clone" 2>&1 >/dev/tty)
@@ -642,26 +573,26 @@ clone_instance() {
     cp "$image" "$new_image"
     
     local new_id=$(date +%s)
-    echo "${new_id}|${new_name}|${new_image}|${kernel_name}|${memory}|$((ssh_port + 1))|created|$(date +%s)" >> "$INSTANCES_DB"
+    echo "${new_id}|${new_name}|${new_image}|${kernel}|${memory}|$((ssh_port + 1))|created|$(date +%s)" >> "$INSTANCES_DB"
     
     dialog --msgbox "Instance cloned successfully!" 8 40
 }
 
 delete_instance() {
     local instance_id=$1
-    local instance_data=$(grep "^$instance_id" "$INSTANCES_DB")
-    IFS='|' read -r id name image kernel_name memory ssh_port status created <<< "$instance_data"
+    local instance_data=$(grep "^$instance_id|" "$INSTANCES_DB")
+    IFS='|' read -r id name image kernel memory ssh_port status created <<< "$instance_data"
     
     if dialog --yesno "Delete instance '$name'?\n\nThis will remove the image file!" 10 50; then
         rm -f "$image"
-        sed -i "/^$instance_id/d" "$INSTANCES_DB"
+        sed -i "/^$instance_id|/d" "$INSTANCES_DB"
         dialog --msgbox "Instance deleted!" 8 30
     fi
 }
 
 show_properties() {
     local instance_id=$1
-    local instance_data=$(grep "^$instance_id" "$INSTANCES_DB")
+    local instance_data=$(grep "^$instance_id|" "$INSTANCES_DB")
     IFS='|' read -r id name image kernel_name memory ssh_port status created <<< "$instance_data"
     
     local props=""
@@ -684,7 +615,7 @@ show_properties() {
 }
 
 # ==============================================================================
-# QUICK START - SAME NETWORK CONFIG AS INSTANCES
+# QUICK START
 # ==============================================================================
 
 quick_start() {
@@ -701,6 +632,11 @@ quick_start() {
     if [ ! -f "$jessie_image" ]; then
         dialog --msgbox "Failed to prepare Jessie image!" 8 40
         return
+    fi
+    
+    if [ ! -f "$jessie_kernel" ]; then
+        echo "Downloading Jessie kernel..."
+        download_kernel "4.4.34" "jessie"
     fi
     
     if [ ! -f "$jessie_kernel" ]; then
@@ -726,44 +662,20 @@ quick_start() {
     echo "To exit QEMU: Press Ctrl+A, then X"
     echo "=========================================="
     echo ""
-    echo "Starting QEMU with optimized settings..."
+    echo "Starting QEMU..."
     sleep 3
     
-    # Parametri QEMU ottimizzati per Jessie (configurazione originale)
-    # local qemu_args=(
-    #     -kernel "$jessie_kernel"
-    #     -cpu arm1176
-    #     -m "$DEFAULT_MEMORY"
-    #     -M versatilepb
-    #     -serial stdio
-    #     -append "root=/dev/sda2 rootfstype=ext4 rw"
-    #     -drive format=raw,file="$jessie_image",if=scsi,index=0
-    #     -netdev user,id=net0,hostfwd=tcp::"${DEFAULT_SSH_PORT}"-:22
-    #     -device rtl8139,netdev=net0
-    #     -no-reboot
-    # )
-    local qemu_args=(
-        -kernel "$jessie_kernel"
-        -cpu arm1176
-        -m "$DEFAULT_MEMORY"
-        -M versatilepb
-        -serial stdio
-        -append "root=/dev/sda2 rootfstype=ext4 rw"
-        -drive format=raw,file="$jessie_image",if=scsi,index=0
+    # Quick start with YOUR network config
+    qemu-system-arm \
+        -kernel "$jessie_kernel" \
+        -cpu arm1176 \
+        -m "$DEFAULT_MEMORY" \
+        -M versatilepb \
+        -serial stdio \
+        -append "root=/dev/sda2 rootfstype=ext4 rw" \
+        -drive format=raw,file="$jessie_image" \
         -nic user,hostfwd=tcp::"${DEFAULT_SSH_PORT}"-:22 \
         -no-reboot
-    )    
-    
-    # Esegui QEMU con tentativo KVM (fallback senza KVM)
-    qemu-system-arm "${qemu_args[@]}" -enable-kvm 2>/dev/null || \
-    qemu-system-arm "${qemu_args[@]}"
-    
-    local qemu_exit=$?
-    
-    if [ $qemu_exit -ne 0 ]; then
-        echo ""
-        echo "QEMU exited with code: $qemu_exit"
-    fi
     
     echo ""
     read -p "Press ENTER to return to menu..."
@@ -780,28 +692,25 @@ download_jessie_default() {
 
 show_performance_tips() {
     local tips=""
-    tips+="QEMU Performance Optimization Tips:\n\n"
-    tips+="1. CPU Cores: QEMU ARM emulation uses single core only\n"
-    tips+="2. KVM: ARM KVM not available on x86 hosts\n"
-    tips+="3. Memory: 512MB is optimal balance\n"
-    tips+="4. Disk: Use raw format (already configured)\n"
-    tips+="5. Network: rtl8139 provides best compatibility\n\n"
-    tips+="Host System Optimizations:\n"
-    tips+="- Ensure adequate RAM (4GB+ recommended)\n"
-    tips+="- Close unnecessary applications\n"
-    tips+="- Use SSD storage for images\n"
-    tips+="- Disable swap if possible\n\n"
+    tips+="QEMU Raspberry Pi Performance & Compatibility:\n\n"
+    tips+="OS Compatibility:\n"
+    tips+="✅ Jessie 2017 - FULL SUPPORT\n"
+    tips+="✅ Stretch 2018 - WORKS (with Jessie kernel)\n"
+    tips+="⚠️  Buster 2020 - PARTIAL (with Jessie kernel)\n"
+    tips+="⚠️  Bullseye 2022 - EXPERIMENTAL (with Jessie kernel)\n\n"
+    tips+="Performance Notes:\n"
+    tips+="- ARM emulation is single-core only\n"
+    tips+="- No KVM acceleration on x86 hosts\n"
+    tips+="- Optimal memory: 256-512MB\n"
+    tips+="- SSD storage recommended\n\n"
+    tips+="Network Configuration:\n"
+    tips+="- Using: -nic user,hostfwd=tcp::PORT-:22\n"
+    tips+="- SSH available after boot (~2-3 min)\n\n"
     tips+="Known Limitations:\n"
-    tips+="- ARM emulation is inherently slower than native\n"
-    tips+="- GPU acceleration not available\n"
-    tips+="- Limited to single CPU core\n\n"
-    tips+="Recommended OS Versions for QEMU:\n"
-    tips+="✓ Raspbian Jessie 2017 (Best compatibility)\n"
-    tips+="✓ Raspbian Stretch 2018 (Good compatibility)\n"
-    tips+="⚠ Raspbian Buster 2020 (Experimental)\n"
-    tips+="⚠ Raspbian Bullseye 2022 (Experimental)\n\n"
-    tips+="Note: Newer versions may fail to boot due to\n"
-    tips+="DTB/kernel compatibility issues with QEMU ARM.\n"
+    tips+="- Newer OS versions have reduced features\n"
+    tips+="- No GPU acceleration\n"
+    tips+="- USB passthrough limited\n\n"
+    tips+="Best practice: Use Jessie or Stretch\n"
     
     dialog --title "Performance Tips" --msgbox "$tips" 22 70
 }
@@ -820,7 +729,7 @@ clean_workspace() {
         # Remove workspace directory
         rm -rf "$WORK_DIR"
         
-        dialog --msgbox "Workspace cleaned successfully!\nThe program will now exit." 8 40
+        dialog --msgbox "Workspace cleaned!\nExiting..." 8 40
         exit 0
     fi
 }
@@ -835,23 +744,32 @@ system_diagnostics() {
     diag_info+="QEMU Version:\n$(qemu-system-arm --version | head -1)\n\n"
     diag_info+="Host CPU: $(lscpu | grep "Model name" | cut -d: -f2 | xargs)\n"
     diag_info+="Host RAM: $(free -h | grep "Mem:" | awk '{print $2}')\n\n"
-    diag_info+="Running Instances: $(pgrep -c qemu-system-arm || echo 0)\n\n"
+    diag_info+="Running Instances: $(pgrep -c qemu-system-arm 2>/dev/null || echo 0)\n\n"
     diag_info+="Disk Usage:\n"
     diag_info+="Images: $(du -sh "$IMAGES_DIR" 2>/dev/null | awk '{print $1}')\n"
+    diag_info+="Kernels: $(du -sh "$KERNELS_DIR" 2>/dev/null | awk '{print $1}')\n"
     diag_info+="Cache: $(du -sh "$CACHE_DIR" 2>/dev/null | awk '{print $1}')\n\n"
     diag_info+="Available Images: $(ls -1 "$IMAGES_DIR"/*.img 2>/dev/null | wc -l)\n"
     diag_info+="Available Kernels: $(ls -1 "$KERNELS_DIR"/kernel-* 2>/dev/null | wc -l)\n\n"
     
     # Check KVM availability
     if [ -r /dev/kvm ]; then
-        diag_info+="KVM: Available (but not usable for ARM emulation)\n"
+        diag_info+="KVM: Available (but not usable for ARM on x86)\n"
     else
         diag_info+="KVM: Not available\n"
     fi
     
     # Check disk space
-    local free_space=$(df -h "$WORK_DIR" | tail -1 | awk '{print $4}')
-    diag_info+="Free space: $free_space\n"
+    local free_space=$(df -h "$WORK_DIR" 2>/dev/null | tail -1 | awk '{print $4}')
+    diag_info+="Free space: $free_space\n\n"
+    
+    # List kernels
+    diag_info+="Available Kernels:\n"
+    for kernel in "$KERNELS_DIR"/kernel-*; do
+        if [ -f "$kernel" ]; then
+            diag_info+="- $(basename "$kernel")\n"
+        fi
+    done
     
     dialog --title "System Diagnostics" --msgbox "$diag_info" 20 70
 }
@@ -886,39 +804,6 @@ cleanup_and_exit() {
     log INFO "QEMU RPi Manager terminated"
     echo "Thank you for using QEMU Raspberry Pi Manager!"
     exit 0
-}
-
-# ==============================================================================
-# NETWORK TROUBLESHOOTING
-# ==============================================================================
-
-network_test() {
-    local instance_id=$1
-    local instance_data=$(grep "^$instance_id|" "$INSTANCES_DB")
-    
-    if [ -z "$instance_data" ]; then
-        dialog --msgbox "Instance not found!" 8 30
-        return
-    fi
-    
-    IFS='|' read -r id name image kernel memory ssh_port status created <<< "$instance_data"
-    
-    echo "Testing network connectivity for instance: $name"
-    echo "SSH Port: $ssh_port"
-    echo ""
-    
-    # Test if port is listening
-    if netstat -an | grep -q ":${ssh_port}.*LISTEN"; then
-        echo "✓ QEMU is forwarding port $ssh_port"
-    else
-        echo "✗ Port $ssh_port not listening"
-    fi
-    
-    # Test SSH connection
-    echo "Testing SSH connection..."
-    timeout 5 nc -z localhost "$ssh_port" && echo "✓ SSH port is reachable" || echo "✗ SSH port not reachable"
-    
-    read -p "Press ENTER to continue..."
 }
 
 # ==============================================================================
@@ -999,7 +884,7 @@ fi
 while [[ $# -gt 0 ]]; do
     case $1 in
         -h|--help)
-            echo "QEMU Raspberry Pi Manager v2.0.4 - Fixed Network & Performance"
+            echo "QEMU Raspberry Pi Manager v3.0 - Fixed Edition"
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
@@ -1008,10 +893,10 @@ while [[ $# -gt 0 ]]; do
             echo "  -d, --debug     Enable debug mode"
             echo ""
             echo "Features:"
-            echo "  - Fixed network configuration for all instances"
-            echo "  - Optimized performance settings"
-            echo "  - Compatible OS versions only (Jessie/Stretch)"
-            echo "  - Performance tips and diagnostics"
+            echo "  - Support for Jessie, Stretch, Buster, and Bullseye"
+            echo "  - All versions use Jessie kernel for compatibility"
+            echo "  - Network: -nic user,hostfwd=tcp::PORT-:22"
+            echo "  - Optimized for best compatibility"
             exit 0
             ;;
         -v|--verbose)
@@ -1034,13 +919,13 @@ done
 if [ "$EUID" -ne 0 ]; then
     if ! sudo -n true 2>/dev/null; then
         echo "=================================================="
-        echo " QEMU Raspberry Pi Manager v2.0.4"
-        echo " Fixed Network & Performance Edition"
+        echo " QEMU Raspberry Pi Manager v3.0"
+        echo " Fixed Edition"
         echo "=================================================="
         echo ""
         echo "Sudo privileges are required for:"
         echo "  - Package installation"
-        echo "  - Mounting/unmounting images"
+        echo "  - Some file operations"
         echo ""
         echo "Press ENTER to continue or Ctrl+C to exit..."
         read -r
