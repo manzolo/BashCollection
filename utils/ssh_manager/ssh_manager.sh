@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Enhanced SSH Manager
-# Version: 2.1
+# Version: 2.2 - Named server identification
 
 # Configuration
 CONFIG_DIR="$HOME/.config/manzolo-ssh-manager"
@@ -163,6 +163,24 @@ validate_config() {
     return 0
 }
 
+# Get server index by name
+get_server_index_by_name() {
+    local server_name="$1"
+    local server_count
+    server_count=$(yq eval '.servers | length' "$CONFIG_FILE")
+    
+    for ((i=0; i<server_count; i++)); do
+        local name
+        name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
+        if [[ "$name" == "$server_name" ]]; then
+            echo "$i"
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
 # Check for SSH key existence
 check_ssh_key() {
     if [[ ! -f "$HOME/.ssh/id_rsa.pub" ]]; then
@@ -217,7 +235,8 @@ handle_ssh_action() {
             local display_text="$name ($user@$host:$port)"
             [[ -n "$description" && "$description" != "null" ]] && display_text="$display_text - $description"
             
-            menu_items+=("$i" "$display_text")
+            # Usa il nome del server come identificatore invece dell'indice
+            menu_items+=("$name" "$display_text")
         done
         
         menu_items+=("T" "🔍 Test connectivity")
@@ -225,15 +244,18 @@ handle_ssh_action() {
         
         local choice
         choice=$(dialog --clear --title "SSH Manager - $action" --menu \
-            "Select a server:\n(Use arrow keys and press Enter)" \
+            "Select a server:\n(Use arrow keys and press Enter, or type to search)" \
             20 80 10 "${menu_items[@]}" 2>&1 >/dev/tty)
         
         case "$choice" in
             ""|"Q") clear; return ;;
             "T") test_connectivity_menu; continue ;;
             *)
-                if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -lt "$server_count" ]]; then
-                    execute_ssh_action "$action" "$choice"
+                # Trova l'indice del server dal nome
+                local server_index
+                server_index=$(get_server_index_by_name "$choice")
+                if [[ $? -eq 0 ]]; then
+                    execute_ssh_action "$action" "$server_index"
                 fi
                 ;;
         esac
@@ -312,7 +334,7 @@ test_connectivity_menu() {
         name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
         host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
         user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
-        menu_items+=("$i" "$name ($user@$host)")
+        menu_items+=("$name" "$name ($user@$host)")
     done
     
     local choice
@@ -320,16 +342,20 @@ test_connectivity_menu() {
         "Select server to test:" \
         15 60 8 "${menu_items[@]}" 2>&1 >/dev/tty)
     
-    if [[ -n "$choice" && "$choice" =~ ^[0-9]+$ ]]; then
-        local user host port
-        user=$(yq eval ".servers[$choice].user" "$CONFIG_FILE")
-        host=$(yq eval ".servers[$choice].host" "$CONFIG_FILE")
-        port=$(yq eval ".servers[$choice].port // 22" "$CONFIG_FILE")
-        
-        clear
-        test_ssh_connection "$user" "$host" "$port"
-        print_message "$YELLOW" "\nPress ENTER to continue..."
-        read -r
+    if [[ -n "$choice" ]]; then
+        local server_index
+        server_index=$(get_server_index_by_name "$choice")
+        if [[ $? -eq 0 ]]; then
+            local user host port
+            user=$(yq eval ".servers[$server_index].user" "$CONFIG_FILE")
+            host=$(yq eval ".servers[$server_index].host" "$CONFIG_FILE")
+            port=$(yq eval ".servers[$server_index].port // 22" "$CONFIG_FILE")
+            
+            clear
+            test_ssh_connection "$user" "$host" "$port"
+            print_message "$YELLOW" "\nPress ENTER to continue..."
+            read -r
+        fi
     fi
 }
 
@@ -337,15 +363,47 @@ test_connectivity_menu() {
 check_duplicate_server() {
     local host="$1"
     local user="$2"
+    local exclude_name="$3"  # Nome da escludere durante l'edit
     local server_count
     server_count=$(yq eval '.servers | length' "$CONFIG_FILE")
     
     for ((i=0; i<server_count; i++)); do
-        local existing_host existing_user
+        local existing_host existing_user existing_name
         existing_host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
         existing_user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
+        existing_name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
+        
+        # Skip se è il server che stiamo modificando
+        if [[ -n "$exclude_name" && "$existing_name" == "$exclude_name" ]]; then
+            continue
+        fi
+        
         if [[ "$existing_host" == "$host" && "$existing_user" == "$user" ]]; then
             dialog --title "Error" --msgbox "Server with host '$host' and user '$user' already exists!" 8 50
+            return 1
+        fi
+    done
+    return 0
+}
+
+# Check for duplicate server name
+check_duplicate_name() {
+    local name="$1"
+    local exclude_name="$2"  # Nome da escludere durante l'edit
+    local server_count
+    server_count=$(yq eval '.servers | length' "$CONFIG_FILE")
+    
+    for ((i=0; i<server_count; i++)); do
+        local existing_name
+        existing_name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
+        
+        # Skip se è il server che stiamo modificando
+        if [[ -n "$exclude_name" && "$existing_name" == "$exclude_name" ]]; then
+            continue
+        fi
+        
+        if [[ "$existing_name" == "$name" ]]; then
+            dialog --title "Error" --msgbox "Server name '$name' already exists!" 8 50
             return 1
         fi
     done
@@ -358,6 +416,11 @@ add_server() {
     
     name=$(dialog --inputbox "Server name:" 10 60 2>&1 >/dev/tty) || return
     [[ -z "$name" ]] && return
+    
+    # Check for duplicate name
+    if ! check_duplicate_name "$name"; then
+        return 1
+    fi
     
     host=$(dialog --inputbox "Server address (host/IP):" 10 60 2>&1 >/dev/tty) || return
     [[ -z "$host" ]] && return
@@ -420,7 +483,7 @@ edit_server() {
         name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
         host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
         user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
-        menu_items+=("$i" "$name ($user@$host)")
+        menu_items+=("$name" "$name ($user@$host)")
     done
     
     local choice
@@ -428,18 +491,33 @@ edit_server() {
         "Select server to edit:" \
         15 60 8 "${menu_items[@]}" 2>&1 >/dev/tty) || return
     
+    local server_index
+    server_index=$(get_server_index_by_name "$choice")
+    if [[ $? -ne 0 ]]; then
+        dialog --title "Error" --msgbox "Server not found!" 8 50
+        return 1
+    fi
+    
     local name host user port description ssh_options
-    name=$(yq eval ".servers[$choice].name" "$CONFIG_FILE")
-    host=$(yq eval ".servers[$choice].host" "$CONFIG_FILE")
-    user=$(yq eval ".servers[$choice].user" "$CONFIG_FILE")
-    port=$(yq eval ".servers[$choice].port // 22" "$CONFIG_FILE")
-    description=$(yq eval ".servers[$choice].description // \"\"" "$CONFIG_FILE")
-    ssh_options=$(yq eval ".servers[$choice].ssh_options // \"\"" "$CONFIG_FILE")
+    name=$(yq eval ".servers[$server_index].name" "$CONFIG_FILE")
+    host=$(yq eval ".servers[$server_index].host" "$CONFIG_FILE")
+    user=$(yq eval ".servers[$server_index].user" "$CONFIG_FILE")
+    port=$(yq eval ".servers[$server_index].port // 22" "$CONFIG_FILE")
+    description=$(yq eval ".servers[$server_index].description // \"\"" "$CONFIG_FILE")
+    ssh_options=$(yq eval ".servers[$server_index].ssh_options // \"\"" "$CONFIG_FILE")
     [[ "$description" == "null" ]] && description=""
     [[ "$ssh_options" == "null" ]] && ssh_options=""
     
     local new_name new_host new_user new_port new_description new_ssh_options
     new_name=$(dialog --inputbox "Server name:" 10 60 "$name" 2>&1 >/dev/tty) || return
+    
+    # Check for duplicate name only if changed
+    if [[ "$new_name" != "$name" ]]; then
+        if ! check_duplicate_name "$new_name" "$name"; then
+            return 1
+        fi
+    fi
+    
     new_host=$(dialog --inputbox "Server address:" 10 60 "$host" 2>&1 >/dev/tty) || return
     new_user=$(dialog --inputbox "Username:" 10 60 "$user" 2>&1 >/dev/tty) || return
     new_port=$(dialog --inputbox "SSH port:" 10 60 "$port" 2>&1 >/dev/tty) || return
@@ -452,27 +530,27 @@ edit_server() {
     fi
     
     if [[ "$new_host" != "$host" || "$new_user" != "$user" ]]; then
-        if ! check_duplicate_server "$new_host" "$new_user"; then
+        if ! check_duplicate_server "$new_host" "$new_user" "$name"; then
             return 1
         fi
     fi
     
     backup_config
-    yq eval ".servers[$choice].name = \"$new_name\"" -i "$CONFIG_FILE"
-    yq eval ".servers[$choice].host = \"$new_host\"" -i "$CONFIG_FILE"
-    yq eval ".servers[$choice].user = \"$new_user\"" -i "$CONFIG_FILE"
-    yq eval ".servers[$choice].port = $new_port" -i "$CONFIG_FILE"
+    yq eval ".servers[$server_index].name = \"$new_name\"" -i "$CONFIG_FILE"
+    yq eval ".servers[$server_index].host = \"$new_host\"" -i "$CONFIG_FILE"
+    yq eval ".servers[$server_index].user = \"$new_user\"" -i "$CONFIG_FILE"
+    yq eval ".servers[$server_index].port = $new_port" -i "$CONFIG_FILE"
     
     if [[ -n "$new_description" ]]; then
-        yq eval ".servers[$choice].description = \"$new_description\"" -i "$CONFIG_FILE"
+        yq eval ".servers[$server_index].description = \"$new_description\"" -i "$CONFIG_FILE"
     else
-        yq eval "del(.servers[$choice].description)" -i "$CONFIG_FILE"
+        yq eval "del(.servers[$server_index].description)" -i "$CONFIG_FILE"
     fi
     
     if [[ -n "$new_ssh_options" ]]; then
-        yq eval ".servers[$choice].ssh_options = \"$new_ssh_options\"" -i "$CONFIG_FILE"
+        yq eval ".servers[$server_index].ssh_options = \"$new_ssh_options\"" -i "$CONFIG_FILE"
     else
-        yq eval "del(.servers[$choice].ssh_options)" -i "$CONFIG_FILE"
+        yq eval "del(.servers[$server_index].ssh_options)" -i "$CONFIG_FILE"
     fi
     
     dialog --title "Success" --msgbox "Server edited successfully!" 8 50
@@ -496,7 +574,7 @@ remove_server() {
         host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
         user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
         port=$(yq eval ".servers[$i].port // 22" "$CONFIG_FILE")
-        menu_items+=("$i" "$name ($user@$host:$port)")
+        menu_items+=("$name" "$name ($user@$host:$port)")
     done
     
     local choice
@@ -504,18 +582,25 @@ remove_server() {
         "Select server to remove:" \
         15 70 8 "${menu_items[@]}" 2>&1 >/dev/tty) || return
     
+    local server_index
+    server_index=$(get_server_index_by_name "$choice")
+    if [[ $? -ne 0 ]]; then
+        dialog --title "Error" --msgbox "Server not found!" 8 50
+        return 1
+    fi
+    
     local name host user port
-    name=$(yq eval ".servers[$choice].name" "$CONFIG_FILE")
-    host=$(yq eval ".servers[$choice].host" "$CONFIG_FILE")
-    user=$(yq eval ".servers[$choice].user" "$CONFIG_FILE")
-    port=$(yq eval ".servers[$choice].port // 22" "$CONFIG_FILE")
+    name=$(yq eval ".servers[$server_index].name" "$CONFIG_FILE")
+    host=$(yq eval ".servers[$server_index].host" "$CONFIG_FILE")
+    user=$(yq eval ".servers[$server_index].user" "$CONFIG_FILE")
+    port=$(yq eval ".servers[$server_index].port // 22" "$CONFIG_FILE")
     
     dialog --clear --title "Confirm Removal" --yesno \
         "Are you sure you want to remove this server?\n\nName: $name\nHost: $host\nUser: $user\nPort: $port" \
         12 60 || return
     
     backup_config
-    yq eval "del(.servers[$choice])" -i "$CONFIG_FILE"
+    yq eval "del(.servers[$server_index])" -i "$CONFIG_FILE"
     dialog --title "Success" --msgbox "Server removed successfully!" 8 50
     log_message "INFO" "Server removed: $name"
 }
@@ -560,7 +645,7 @@ show_server_info() {
 main_menu() {
     while true; do
         local choice
-        choice=$(dialog --clear --title "🔧 SSH Manager v2.1" --menu \
+        choice=$(dialog --clear --title "🔧 SSH Manager v2.2" --menu \
             "Select an option:\n(ESC to exit)" \
             18 60 9 \
             "1" "🚀 Connect via SSH" \
