@@ -262,6 +262,79 @@ handle_ssh_action() {
     done
 }
 
+# Check for required packages
+check_sshfs_mc() {
+    local missing_packages=()
+    
+    if ! command -v sshfs &> /dev/null; then
+        missing_packages+=("sshfs")
+    fi
+    
+    if ! command -v mc &> /dev/null; then
+        missing_packages+=("mc")
+    fi
+    
+    if [[ ${#missing_packages[@]} -gt 0 ]]; then
+        local packages_list=$(printf ", %s" "${missing_packages[@]}")
+        packages_list=${packages_list:2}  # Remove leading ", "
+        
+        dialog --title "Missing Packages" --yesno \
+            "The following packages are required for SSHFS+MC functionality:\n\n$packages_list\n\nWould you like to install them now?" \
+            12 60
+        
+        if [[ $? -eq 0 ]]; then
+            install_sshfs_mc_packages "${missing_packages[@]}"
+            return $?
+        else
+            return 1
+        fi
+    fi
+    
+    return 0
+}
+
+# Install SSHFS and MC packages
+install_sshfs_mc_packages() {
+    local packages=("$@")
+    
+    print_message "$BLUE" "🔧 Installing packages: ${packages[*]}..."
+    
+    local pkg_manager=""
+    if command -v apt >/dev/null 2>&1; then
+        pkg_manager="apt"
+    elif command -v yum >/dev/null 2>&1; then
+        pkg_manager="yum"
+    elif command -v dnf >/dev/null 2>&1; then
+        pkg_manager="dnf"
+    elif command -v pacman >/dev/null 2>&1; then
+        pkg_manager="pacman"
+    else
+        print_message "$RED" "❌ No supported package manager found"
+        return 1
+    fi
+    
+    case "$pkg_manager" in
+        "apt")
+            sudo apt update -qq && sudo apt install -qqy "${packages[@]}"
+            ;;
+        "yum")
+            sudo yum install -y "${packages[@]}"
+            ;;
+        "dnf")
+            sudo dnf install -y "${packages[@]}"
+            ;;
+        "pacman")
+            sudo pacman -Syu --noconfirm "${packages[@]}"
+            ;;
+    esac || {
+        print_message "$RED" "❌ Error installing packages: ${packages[*]}"
+        return 1
+    }
+    
+    print_message "$GREEN" "✅ Packages installed successfully"
+    return 0
+}
+
 # Execute specific SSH action
 execute_ssh_action() {
     local action="$1"
@@ -299,23 +372,120 @@ execute_ssh_action() {
             sftp $ssh_options -P "$port" "$user@$host" 2> ssh_error.log
             local status=$?
             ;;
+        "sshfs-mc")
+            if ! check_sshfs_mc; then
+                print_message "$RED" "❌ Required packages not available"
+                print_message "$YELLOW" "\nPress ENTER to continue..."
+                read -r
+                return 1
+            fi
+            
+            execute_sshfs_mc "$name" "$host" "$user" "$port" "$ssh_options"
+            local status=$?
+            ;;
     esac
     
     if [[ $status -ne 0 ]]; then
-        print_message "$RED" "❌ Error during $action: $(cat ssh_error.log)"
-        log_message "ERROR" "$action failed on $user@$host:$port - $(cat ssh_error.log)"
+        print_message "$RED" "❌ Error during $action: $(cat ssh_error.log 2>/dev/null || echo 'Unknown error')"
+        log_message "ERROR" "$action failed on $user@$host:$port - $(cat ssh_error.log 2>/dev/null || echo 'Unknown error')"
         rm -f ssh_error.log
     else
         case "$action" in
             "ssh") print_message "$GREEN" "✅ SSH connection terminated successfully" ;;
             "ssh-copy-id") print_message "$GREEN" "✅ SSH key copied successfully" ;;
             "sftp") print_message "$GREEN" "✅ SFTP session terminated" ;;
+            "sshfs-mc") print_message "$GREEN" "✅ SSHFS+MC session completed" ;;
         esac
         log_message "INFO" "Operation $action completed successfully on $user@$host:$port"
     fi
     
-    print_message "$YELLOW" "\nPress ENTER to continue..."
-    read -r
+    if [[ "$action" != "sshfs-mc" ]]; then
+        print_message "$YELLOW" "\nPress ENTER to continue..."
+        read -r
+    fi
+}
+
+# Execute SSHFS + MC
+execute_sshfs_mc() {
+    local name="$1"
+    local host="$2"
+    local user="$3"
+    local port="$4"
+    local ssh_options="$5"
+    
+    # Create mount point
+    local mount_point="/tmp/sshfs-${name// /_}-$"
+    mkdir -p "$mount_point" || {
+        print_message "$RED" "❌ Cannot create mount point: $mount_point"
+        return 1
+    }
+    
+    print_message "$BLUE" "🔗 Mounting remote filesystem: $user@$host:$port ($name)..."
+    print_message "$BLUE" "📂 Mount point: $mount_point"
+    
+    # SSHFS mount options
+    local sshfs_options="-p $port"
+    if [[ -n "$ssh_options" && "$ssh_options" != "null" ]]; then
+        sshfs_options="$sshfs_options -o ssh_command='ssh $ssh_options'"
+    fi
+    
+    # Add common SSHFS options for better experience
+    sshfs_options="$sshfs_options -o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3"
+    
+    # Mount the remote filesystem
+    if sshfs $sshfs_options "$user@$host:/" "$mount_point" 2> sshfs_error.log; then
+        print_message "$GREEN" "✅ Remote filesystem mounted successfully"
+        log_message "INFO" "SSHFS mount successful: $user@$host:/ -> $mount_point"
+        
+        print_message "$BLUE" "🗂️  Starting Midnight Commander..."
+        print_message "$YELLOW" "💡 When you exit MC, the remote filesystem will be automatically unmounted"
+        
+        # Wait a moment to let user read the message
+        sleep 2
+        
+        # Start Midnight Commander
+        mc "$mount_point" 2> mc_error.log
+        local mc_status=$?
+        
+        # Unmount the filesystem
+        print_message "$BLUE" "🔌 Unmounting remote filesystem..."
+        if fusermount -u "$mount_point" 2> unmount_error.log; then
+            print_message "$GREEN" "✅ Remote filesystem unmounted successfully"
+            log_message "INFO" "SSHFS unmount successful: $mount_point"
+        else
+            print_message "$YELLOW" "⚠️  Warning during unmount: $(cat unmount_error.log)"
+            log_message "WARNING" "SSHFS unmount warning: $(cat unmount_error.log)"
+            # Try force unmount
+            if fusermount -uz "$mount_point" 2>/dev/null; then
+                print_message "$GREEN" "✅ Force unmount successful"
+            fi
+        fi
+        
+        # Clean up mount point
+        rmdir "$mount_point" 2>/dev/null
+        
+        # Clean up error logs
+        rm -f sshfs_error.log mc_error.log unmount_error.log
+        
+        if [[ $mc_status -eq 0 ]]; then
+            return 0
+        else
+            print_message "$YELLOW" "⚠️  MC exited with status: $mc_status"
+            return 0  # Non è necessariamente un errore
+        fi
+        
+    else
+        print_message "$RED" "❌ Failed to mount remote filesystem: $(cat sshfs_error.log)"
+        log_message "ERROR" "SSHFS mount failed: $user@$host:/ -> $mount_point - $(cat sshfs_error.log)"
+        
+        # Clean up
+        rmdir "$mount_point" 2>/dev/null
+        rm -f sshfs_error.log
+        
+        print_message "$YELLOW" "\nPress ENTER to continue..."
+        read -r
+        return 1
+    fi
 }
 
 # Connectivity test menu
@@ -647,15 +817,16 @@ main_menu() {
         local choice
         choice=$(dialog --clear --title "🔧 SSH Manager v2.2" --menu \
             "Select an option:\n(ESC to exit)" \
-            18 60 9 \
+            20 60 10 \
             "1" "🚀 Connect via SSH" \
             "2" "🔑 Copy SSH key" \
             "3" "📁 Connect via SFTP" \
-            "4" "➕ Add server" \
-            "5" "✏️  Edit server" \
-            "6" "🗑️  Remove server" \
-            "7" "ℹ️  Server information" \
-            "8" "🔧 Install prerequisites" \
+            "4" "🗂️  Browse with MC (SSHFS)" \
+            "5" "➕ Add server" \
+            "6" "✏️  Edit server" \
+            "7" "🗑️  Remove server" \
+            "8" "ℹ️  Server information" \
+            "9" "🔧 Install prerequisites" \
             "0" "🚪 Exit" 2>&1 >/dev/tty)
         
         case "$choice" in
@@ -663,11 +834,12 @@ main_menu() {
             "1" ) handle_ssh_action "ssh" ;;
             "2" ) handle_ssh_action "ssh-copy-id" ;;
             "3" ) handle_ssh_action "sftp" ;;
-            "4" ) add_server ;;
-            "5" ) edit_server ;;
-            "6" ) remove_server ;;
-            "7" ) show_server_info ;;
-            "8" ) install_prerequisites ;;
+            "4" ) handle_ssh_action "sshfs-mc" ;;
+            "5" ) add_server ;;
+            "6" ) edit_server ;;
+            "7" ) remove_server ;;
+            "8" ) show_server_info ;;
+            "9" ) install_prerequisites ;;
             "0" ) clear; exit 0 ;;
         esac
     done
@@ -683,7 +855,7 @@ main() {
     
     # Check prerequisites
     if ! command -v dialog &> /dev/null; then
-        print_message "$RED" "❌ Dialog is not installed. Run option 8 from the menu."
+        print_message "$RED" "❌ Dialog is not installed. Run option 9 from the menu."
         echo "Do you want to install the prerequisites now? (y/n)"
         read -r response
         if [[ "$response" =~ ^[Yy]$ ]]; then
@@ -694,7 +866,7 @@ main() {
     fi
     
     if ! command -v yq &> /dev/null; then
-        print_message "$RED" "❌ yq is not installed. Run option 8 from the menu."
+        print_message "$RED" "❌ yq is not installed. Run option 9 from the menu."
         echo "Do you want to install the prerequisites now? (y/n)"
         read -r response
         if [[ "$response" =~ ^[Yy]$ ]]; then
