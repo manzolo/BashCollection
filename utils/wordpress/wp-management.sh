@@ -254,10 +254,12 @@ restore_wp_content() {
     # Create wp-data directory if it doesn't exist
     mkdir -p "$docker_dir/wp-data"
     
-    # Extract wp-content to wp-data
-    print_message $YELLOW "Extracting wp-content to wp-data directory..."
-    if tar -xzf "$wp_content_backup" -C "$docker_dir/wp-data" --strip-components=1; then
+    # Extract wp-content to the correct location within wp-data
+    print_message $YELLOW "Extracting wp-content backup..."
+    if tar -xzf "$wp_content_backup" -C "$docker_dir/wp-data"; then
         print_message $GREEN "✓ wp-content restored successfully"
+        print_message $YELLOW "Note: WordPress core files will be installed automatically on first startup"
+        print_message $YELLOW "Your wp-content (themes, plugins, uploads) will be preserved"
     else
         print_message $RED "✗ Error extracting wp-content backup"
         print_message $YELLOW "WordPress will start with default content"
