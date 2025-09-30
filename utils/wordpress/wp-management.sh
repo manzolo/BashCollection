@@ -66,10 +66,7 @@ get_wp_config_value() {
     local config_file="$1"
     local key="$2"
     
-    # Robust method that handles various wp-config.php formats
-    # Search for lines containing define with our key
     local line
-    # Use -i for case-insensitive search (DB_NAME or db_name)
     line=$(grep -i "define.*['\"]${key}['\"]" "$config_file" | head -n1)
     
     if [ -z "$line" ]; then
@@ -77,8 +74,67 @@ get_wp_config_value() {
         return
     fi
     
-    # Extract the value using sed in a more compatible way
     echo "$line" | sed -e 's/.*define[[:space:]]*([[:space:]]*['\''"][^'\'']*['\''"][[:space:]]*,[[:space:]]*['\''"]//i' -e 's/['\''"][[:space:]]*)[[:space:]]*;.*$//' | head -c 200
+}
+
+# Function to set proper permissions for wp-content
+set_wp_content_permissions() {
+    local docker_dir="$1"
+    local site_name="$2"
+    
+    print_message $BLUE "=== SETTING WP-CONTENT PERMISSIONS ==="
+    
+    local wp_content_path="$docker_dir/wp-data/wp-content"
+    
+    if [ ! -d "$wp_content_path" ]; then
+        print_message $YELLOW "⚠ wp-content directory not found, skipping permissions"
+        return
+    fi
+    
+    if id -u www-data >/dev/null 2>&1; then
+        print_message $GREEN "✓ www-data user found on host system"
+        
+        local WWW_DATA_UID=$(id -u www-data)
+        local WWW_DATA_GID=$(id -g www-data)
+        
+        print_message $YELLOW "Setting ownership to www-data (UID: $WWW_DATA_UID, GID: $WWW_DATA_GID)..."
+        
+        if sudo chown -R www-data:www-data "$wp_content_path" 2>/dev/null; then
+            print_message $GREEN "✓ Ownership set to www-data:www-data"
+        else
+            print_message $YELLOW "⚠ Could not set ownership (may need sudo privileges)"
+            print_message $YELLOW "You can manually run: sudo chown -R www-data:www-data $wp_content_path"
+        fi
+        
+        print_message $YELLOW "Setting permissions (755 for directories, 644 for files)..."
+        if sudo find "$wp_content_path" -type d -exec chmod 755 {} \; 2>/dev/null && \
+           sudo find "$wp_content_path" -type f -exec chmod 644 {} \; 2>/dev/null; then
+            print_message $GREEN "✓ Permissions set correctly"
+        else
+            print_message $YELLOW "⚠ Could not set permissions (may need sudo privileges)"
+        fi
+        
+        local uploads_dir="$wp_content_path/uploads"
+        if [ -d "$uploads_dir" ]; then
+            print_message $YELLOW "Setting writable permissions for uploads directory..."
+            if sudo chmod -R 775 "$uploads_dir" 2>/dev/null; then
+                print_message $GREEN "✓ Uploads directory is now writable"
+            else
+                print_message $YELLOW "⚠ Could not set uploads permissions"
+            fi
+        fi
+        
+    else
+        print_message $YELLOW "⚠ www-data user not found on host system"
+        print_message $YELLOW "Setting generic permissions (will be handled by Docker container)..."
+        
+        chmod -R 755 "$wp_content_path" 2>/dev/null || true
+        find "$wp_content_path" -type f -exec chmod 644 {} \; 2>/dev/null || true
+        
+        print_message $GREEN "✓ Generic permissions set (Docker will handle user mapping)"
+    fi
+    
+    echo
 }
 
 # Function for backup
@@ -91,13 +147,11 @@ backup_site() {
     
     print_message $BLUE "=== BACKUP WORDPRESS SITE: $site_name ==="
     
-    # Check if the site folder exists
     if [ ! -d "$site_path" ]; then
         print_message $RED "Error: The folder $site_path does not exist!"
         exit 1
     fi
     
-    # Check if wp-config.php exists
     local wp_config="$site_path/wp-config.php"
     if [ ! -f "$wp_config" ]; then
         print_message $RED "Error: wp-config.php file not found in $site_path!"
@@ -106,31 +160,17 @@ backup_site() {
     
     print_message $YELLOW "Reading configuration from wp-config.php..."
     
-    # Extract configuration data
     DB_NAME=$(get_wp_config_value "$wp_config" "DB_NAME")
     DB_USER=$(get_wp_config_value "$wp_config" "DB_USER")
     DB_PASSWORD=$(get_wp_config_value "$wp_config" "DB_PASSWORD")
     DB_HOST=$(get_wp_config_value "$wp_config" "DB_HOST")
     
-    # Debug: show what was extracted
-    print_message $YELLOW "Debug - Extracted values (Method 1):"
-    print_message $YELLOW "  DB_NAME: '$DB_NAME'"
-    print_message $YELLOW "  DB_USER: '$DB_USER'"
-    print_message $YELLOW "  DB_HOST: '$DB_HOST'"
-    
-    # Check if data was successfully extracted
     if [ -z "$DB_NAME" ] || [ -z "$DB_USER" ] || [ -z "$DB_PASSWORD" ]; then
-        print_message $RED "Error: Unable to extract database data from wp-config.php using Method 1!"
-        print_message $YELLOW "Attempting alternative method..."
-        
-        # --- Alternative, simpler method using cut ---
-        # Tries double quotes first (most common WordPress default)
         DB_NAME=$(grep -i "DB_NAME" "$wp_config" | cut -d'"' -f4 | head -n1)
         DB_USER=$(grep -i "DB_USER" "$wp_config" | cut -d'"' -f4 | head -n1)
         DB_PASSWORD=$(grep -i "DB_PASSWORD" "$wp_config" | cut -d'"' -f4 | head -n1)
         DB_HOST=$(grep -i "DB_HOST" "$wp_config" | cut -d'"' -f4 | head -n1)
         
-        # If still unsuccessful, try with single quotes
         if [ -z "$DB_NAME" ]; then
             DB_NAME=$(grep -i "DB_NAME" "$wp_config" | cut -d"'" -f4 | head -n1)
             DB_USER=$(grep -i "DB_USER" "$wp_config" | cut -d"'" -f4 | head -n1)
@@ -138,15 +178,8 @@ backup_site() {
             DB_HOST=$(grep -i "DB_HOST" "$wp_config" | cut -d"'" -f4 | head -n1)
         fi
         
-        print_message $YELLOW "Alternative Method - Extracted values:"
-        print_message $YELLOW "  DB_NAME: '$DB_NAME'"
-        print_message $YELLOW "  DB_USER: '$DB_USER'"
-        print_message $YELLOW "  DB_HOST: '$DB_HOST'"
-        
         if [ -z "$DB_NAME" ] || [ -z "$DB_USER" ] || [ -z "$DB_PASSWORD" ]; then
-            print_message $RED "Error: Still unable to extract data!"
-            print_message $RED "Extracted values: DB_NAME='$DB_NAME', DB_USER='$DB_USER', DB_PASSWORD='***'"
-            print_message $YELLOW "Please check the format of your wp-config.php"
+            print_message $RED "Error: Unable to extract database data!"
             exit 1
         fi
     fi
@@ -156,10 +189,8 @@ backup_site() {
     print_message $GREEN "  User: $DB_USER"
     print_message $GREEN "  Host: $DB_HOST"
     
-    # Create the backup folder
     mkdir -p "$site_backup_dir"
     
-    # Backup wp-content
     print_message $YELLOW "Creating wp-content backup..."
     if [ -d "$site_path/wp-content" ]; then
         tar -czf "$site_backup_dir/wp-content_${timestamp}.tar.gz" -C "$site_path" wp-content
@@ -168,48 +199,35 @@ backup_site() {
         print_message $YELLOW "⚠ wp-content folder not found, skipping..."
     fi
     
-    # Backup wp-config.php
     print_message $YELLOW "Backing up wp-config.php..."
     cp "$wp_config" "$site_backup_dir/wp-config_${timestamp}.php"
     print_message $GREEN "✓ wp-config.php backup completed"
     
-    # Backup database
     print_message $YELLOW "Creating database backup..."
     
-    # Check if mysqldump is available
     if ! command_exists mysqldump; then
         print_message $RED "Error: mysqldump not found! Please install mysql-client."
         exit 1
     fi
     
-    # Create the database dump
     local db_backup_file="$site_backup_dir/database_${timestamp}.sql"
     
-    # Test connection using 'mysql' client before running 'mysqldump'
     print_message $YELLOW "Attempting to connect to the database..."
     if command_exists mysql && mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASSWORD" -e "USE $DB_NAME; SELECT 1;" >/dev/null 2>&1; then
         print_message $GREEN "✓ Database connection successful"
         
-        # Perform the dump
         if mysqldump -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" > "$db_backup_file" 2>/dev/null; then
             print_message $GREEN "✓ Database backup completed"
         else
             print_message $RED "Error during database dump!"
-            print_message $YELLOW "Dump command failed despite successful connection test."
             rm -f "$db_backup_file"
             exit 1
         fi
     else
         print_message $RED "Database connection error!"
-        print_message $YELLOW "Verify that:"
-        print_message $YELLOW "  - The MySQL server is running"
-        print_message $YELLOW "  - Credentials are correct"
-        print_message $YELLOW "  - Database '$DB_NAME' exists"
-        print_message $YELLOW "  - Host '$DB_HOST' is reachable (especially if not localhost)"
         exit 1
     fi
     
-    # Create an info file
     cat > "$site_backup_dir/backup_info_${timestamp}.txt" << EOF
 BACKUP WORDPRESS SITE: $site_name
 Backup date: $(date)
@@ -221,16 +239,14 @@ Database: $DB_NAME
 User: $DB_USER
 
 INCLUDED FILES:
-- wp-content_${timestamp}.tar.gz (site contents)
-- database_${timestamp}.sql (database dump)
-- wp-config_${timestamp}.php (configuration file)
-- backup_info_${timestamp}.txt (this file)
+- wp-content_${timestamp}.tar.gz
+- database_${timestamp}.sql
+- wp-config_${timestamp}.php
+- backup_info_${timestamp}.txt
 EOF
     
     print_message $GREEN "=== BACKUP COMPLETED ==="
     print_message $GREEN "Backup folder: $site_backup_dir"
-    print_message $GREEN "Files created:"
-    ls -la "$site_backup_dir"/*${timestamp}*
 }
 
 # Function to restore wp-content from backup
@@ -241,28 +257,23 @@ restore_wp_content() {
     
     print_message $BLUE "=== RESTORING WP-CONTENT ==="
     
-    # Find the most recent wp-content backup
     local wp_content_backup=$(find "$backup_dir" -name "wp-content_*.tar.gz" 2>/dev/null | sort -r | head -n1)
     
     if [ -z "$wp_content_backup" ]; then
-        print_message $YELLOW "⚠ No wp-content backup found. WordPress will start with default content."
+        print_message $YELLOW "⚠ No wp-content backup found."
         return
     fi
     
     print_message $GREEN "Found wp-content backup: $(basename "$wp_content_backup")"
     
-    # Create wp-data directory if it doesn't exist
     mkdir -p "$docker_dir/wp-data"
     
-    # Extract wp-content to the correct location within wp-data
     print_message $YELLOW "Extracting wp-content backup..."
     if tar -xzf "$wp_content_backup" -C "$docker_dir/wp-data"; then
         print_message $GREEN "✓ wp-content restored successfully"
-        print_message $YELLOW "Note: WordPress core files will be installed automatically on first startup"
-        print_message $YELLOW "Your wp-content (themes, plugins, uploads) will be preserved"
+        set_wp_content_permissions "$docker_dir" "$site_name"
     else
         print_message $RED "✗ Error extracting wp-content backup"
-        print_message $YELLOW "WordPress will start with default content"
     fi
 }
 
@@ -274,81 +285,55 @@ restore_database() {
     
     print_message $BLUE "=== RESTORING DATABASE ==="
     
-    # Find the most recent database backup
     local db_backup=$(find "$backup_dir" -name "database_*.sql" 2>/dev/null | sort -r | head -n1)
     
     if [ -z "$db_backup" ]; then
-        print_message $YELLOW "⚠ No database backup found. WordPress will start with a fresh database."
+        print_message $YELLOW "⚠ No database backup found."
         return
     fi
     
     print_message $GREEN "Found database backup: $(basename "$db_backup")"
     
-    # Copy the database backup to the docker directory for easy access
     cp "$db_backup" "$docker_dir/restore_database.sql"
-    print_message $YELLOW "Database backup copied to docker directory as 'restore_database.sql'"
+    print_message $YELLOW "Database backup copied to docker directory"
     
     print_message $YELLOW "Starting containers to restore database..."
-    # Start only the database container first
     cd "$docker_dir"
     docker compose up -d db_${site_name}
     
-    pause_for_user "Database container is starting. Please wait for it to be fully ready, then continue to restore the database."
+    pause_for_user "Database container is starting. Press ENTER when ready to restore..."
     
-    # Wait a bit more for the database to be ready
     print_message $YELLOW "Waiting for database to be ready..."
     sleep 10
     
-    # Check if database container is healthy
-    local container_name="wordpress_${site_name}_db"
+    local container_name="db_${site_name}"
     local max_attempts=30
     local attempt=1
     
     while [ $attempt -le $max_attempts ]; do
-        # Try multiple methods to check if MariaDB is ready
         if docker exec "$container_name" mariadb -u root -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
             print_message $GREEN "✓ Database is ready"
             break
-        elif docker exec "$container_name" mariadb-admin ping -h localhost --silent >/dev/null 2>&1; then
-            print_message $GREEN "✓ Database is ready"
-            break
-        elif docker exec "$container_name" mysqladmin ping -h localhost --silent >/dev/null 2>&1; then
-            print_message $GREEN "✓ Database is ready (legacy command)"
-            break
         fi
         
-        print_message $YELLOW "Waiting for database... (attempt $attempt/$max_attempts)"
+        print_message $YELLOW "Waiting... (attempt $attempt/$max_attempts)"
         sleep 3
         ((attempt++))
     done
     
     if [ $attempt -gt $max_attempts ]; then
-        print_message $RED "✗ Database failed to become ready in time"
-        print_message $YELLOW "You can manually restore later using:"
-        print_message $YELLOW "docker compose exec db_${site_name} mariadb -u root -p\${MYSQL_ROOT_PASSWORD} \${MYSQL_DATABASE} < restore_database.sql"
+        print_message $RED "✗ Database failed to become ready"
         return
     fi
     
-    # Get environment variables
     source .env
     
-    # Restore the database
     print_message $YELLOW "Restoring database content..."
     if docker exec -i "$container_name" mariadb -u root -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" < restore_database.sql; then
         print_message $GREEN "✓ Database restored successfully"
-        # Clean up the copied sql file
-        rm -f restore_database.sql
-    elif docker exec -i "$container_name" mysql -u root -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" < restore_database.sql; then
-        print_message $GREEN "✓ Database restored successfully (legacy command)"
-        # Clean up the copied sql file
         rm -f restore_database.sql
     else
         print_message $RED "✗ Error restoring database"
-        print_message $YELLOW "The SQL file is available at: $docker_dir/restore_database.sql"
-        print_message $YELLOW "You can restore manually later using:"
-        print_message $YELLOW "docker compose exec db_${site_name} mariadb -u root -p\${MYSQL_ROOT_PASSWORD} \${MYSQL_DATABASE} < restore_database.sql"
-        print_message $YELLOW "or try:"
-        print_message $YELLOW "docker compose exec db_${site_name} mysql -u root -p\${MYSQL_ROOT_PASSWORD} \${MYSQL_DATABASE} < restore_database.sql"
     fi
 }
 
@@ -362,93 +347,61 @@ dockerize_site() {
     
     print_message $BLUE "=== DOCKERIZING WORDPRESS SITE: $site_name ==="
     
-    # Check if Docker is available
     if ! command_exists docker; then
-        print_message $RED "Error: Docker is not installed or not in PATH!"
-        print_message $YELLOW "Please install Docker and try again."
+        print_message $RED "Error: Docker is not installed!"
         exit 1
     fi
     
-    # Check and create Docker networks
     check_docker_networks
     
-    # First, try to find wp-config.php in the original site folder
     if [ -d "$site_path" ] && [ -f "$site_path/wp-config.php" ]; then
         wp_config="$site_path/wp-config.php"
         print_message $GREEN "Found wp-config.php in original site folder"
     else
-        # Look for backed-up wp-config.php files
         if [ -d "$backup_dir" ]; then
-            print_message $YELLOW "Original site folder not found or missing wp-config.php"
             print_message $YELLOW "Looking for backed-up wp-config.php files..."
             
-            # Find all wp-config backup files
             local config_files=($(find "$backup_dir" -name "wp-config_*.php" 2>/dev/null | sort -r))
             
             if [ ${#config_files[@]} -eq 0 ]; then
-                print_message $RED "Error: No wp-config.php files found in $site_path or $backup_dir!"
+                print_message $RED "Error: No wp-config.php files found!"
                 exit 1
             elif [ ${#config_files[@]} -eq 1 ]; then
-                # Only one backup file found, use it
                 wp_config="${config_files[0]}"
-                print_message $GREEN "Found single backup: $(basename "$wp_config")"
+                print_message $GREEN "Found backup: $(basename "$wp_config")"
             else
-                # Multiple backup files found, let user choose or show error
-                print_message $YELLOW "Multiple wp-config.php backup files found:"
-                for i in "${!config_files[@]}"; do
-                    local filename=$(basename "${config_files[$i]}")
-                    local timestamp=$(echo "$filename" | sed 's/wp-config_\(.*\)\.php/\1/')
-                    print_message $YELLOW "  [$((i+1))] $filename (timestamp: $timestamp)"
-                done
-                print_message $RED "Error: Multiple backup files found. Please specify which one to use or remove older backups."
-                print_message $YELLOW "You can manually copy the desired wp-config backup to $site_path/wp-config.php and run again."
+                print_message $RED "Error: Multiple backup files found."
                 exit 1
             fi
         else
-            print_message $RED "Error: Neither original site folder nor backup folder found!"
-            print_message $RED "Expected paths: $site_path or $backup_dir"
+            print_message $RED "Error: Neither original site nor backup folder found!"
             exit 1
         fi
     fi
     
     print_message $YELLOW "Reading configuration from: $wp_config"
     
-    # Extract configuration data
     DB_NAME=$(get_wp_config_value "$wp_config" "DB_NAME")
     DB_USER=$(get_wp_config_value "$wp_config" "DB_USER")
     DB_PASSWORD=$(get_wp_config_value "$wp_config" "DB_PASSWORD")
     
-    # Check if data was successfully extracted
     if [ -z "$DB_NAME" ] || [ -z "$DB_USER" ] || [ -z "$DB_PASSWORD" ]; then
-        print_message $RED "Error: Unable to extract database data from wp-config.php using Method 1!"
-        print_message $YELLOW "Attempting alternative method..."
-        
-        # --- Alternative, simpler method using cut ---
-        # Tries double quotes first (most common WordPress default)
         DB_NAME=$(grep -i "DB_NAME" "$wp_config" | cut -d'"' -f4 | head -n1)
         DB_USER=$(grep -i "DB_USER" "$wp_config" | cut -d'"' -f4 | head -n1)
         DB_PASSWORD=$(grep -i "DB_PASSWORD" "$wp_config" | cut -d'"' -f4 | head -n1)
         
-        # If still unsuccessful, try with single quotes
         if [ -z "$DB_NAME" ]; then
             DB_NAME=$(grep -i "DB_NAME" "$wp_config" | cut -d"'" -f4 | head -n1)
             DB_USER=$(grep -i "DB_USER" "$wp_config" | cut -d"'" -f4 | head -n1)
             DB_PASSWORD=$(grep -i "DB_PASSWORD" "$wp_config" | cut -d"'" -f4 | head -n1)
         fi
         
-        print_message $YELLOW "Alternative Method - Extracted values:"
-        print_message $YELLOW "  DB_NAME: '$DB_NAME'"
-        print_message $YELLOW "  DB_USER: '$DB_USER'"
-        
         if [ -z "$DB_NAME" ] || [ -z "$DB_USER" ] || [ -z "$DB_PASSWORD" ]; then
-            print_message $RED "Error: Still unable to extract data!"
-            print_message $RED "Extracted values: DB_NAME='$DB_NAME', DB_USER='$DB_USER', DB_PASSWORD='***'"
-            print_message $YELLOW "Please check the format of your wp-config.php"
+            print_message $RED "Error: Unable to extract database data!"
             exit 1
         fi
     fi
     
-    # Use default values if not found
     DB_NAME=${DB_NAME:-"wordpress_db"}
     DB_USER=${DB_USER:-"wordpress_user"}
     DB_PASSWORD=${DB_PASSWORD:-"wordpress_password"}
@@ -457,49 +410,40 @@ dockerize_site() {
     print_message $GREEN "  Database: $DB_NAME"
     print_message $GREEN "  User: $DB_USER"
     
-    # Create the Docker folder
     mkdir -p "$docker_dir"
     
-    # Generate random root password if not specified
     if command_exists openssl; then
         MYSQL_ROOT_PASSWORD=$(openssl rand -hex 16)
     else
-        # Fallback for systems without openssl
         MYSQL_ROOT_PASSWORD="mysql_root_$(date +%s | tail -c 10)"
     fi
     
-    # Create the .env file
     print_message $YELLOW "Creating .env file..."
+    # Write .env file with proper escaping
     cat > "$docker_dir/.env" << EOF
 # WordPress Docker Environment
-# Automatically generated for: $site_name
+# Automatically generated for: ${site_name}
 
-# Database Configuration
-MYSQL_ROOT_PASSWORD=$MYSQL_ROOT_PASSWORD
-MYSQL_DATABASE=$DB_NAME
-MYSQL_USER=$DB_USER
-MYSQL_PASSWORD=$DB_PASSWORD
+MYSQL_ROOT_PASSWORD='${MYSQL_ROOT_PASSWORD}'
+MYSQL_DATABASE='${DB_NAME}'
+MYSQL_USER='${DB_USER}'
+MYSQL_PASSWORD='${DB_PASSWORD}'
 
-# WordPress Configuration
 WORDPRESS_DB_HOST=db_${site_name}
-WORDPRESS_DB_NAME=$DB_NAME
-WORDPRESS_DB_USER=$DB_USER
-WORDPRESS_DB_PASSWORD=$DB_PASSWORD
+WORDPRESS_DB_NAME='${DB_NAME}'
+WORDPRESS_DB_USER='${DB_USER}'
+WORDPRESS_DB_PASSWORD='${DB_PASSWORD}'
 
-# Container Names
-DB_CONTAINER_NAME=wordpress_${site_name}_db
-WP_CONTAINER_NAME=wordpress_${site_name}_webserver
-PMA_CONTAINER_NAME=wordpress_${site_name}_phpmyadmin
+DB_CONTAINER_NAME=db_${site_name}
+WP_CONTAINER_NAME=wp_${site_name}
+PMA_CONTAINER_NAME=phpmyadmin_${site_name}
 
-# Network Names
 WP_NETWORK=wp-net
 NGINX_NETWORK=nginx-net
 
-# Site Name (for scripts)
-SITE_NAME=$site_name
+SITE_NAME=${site_name}
 EOF
     
-    # Create the docker-compose.yml
     print_message $YELLOW "Creating docker-compose.yml..."
     cat > "$docker_dir/docker-compose.yml" << EOF
 services:
@@ -524,7 +468,7 @@ services:
       timeout: 5s
       retries: 3
 
-  wordpress:
+  wp_${site_name}:
     depends_on:
       db_${site_name}:
         condition: service_healthy
@@ -542,9 +486,9 @@ services:
     volumes:
       - ./wp-data:/var/www/html
     #ports:
-    #  - "8080:80"  # Uncomment if necessary
+    #  - "8080:80"
 
-  phpmyadmin:
+  phpmyadmin_${site_name}:
     depends_on:
       db_${site_name}:
         condition: service_healthy
@@ -552,7 +496,7 @@ services:
     container_name: \${PMA_CONTAINER_NAME}
     restart: unless-stopped
     #ports:
-    #  - "8081:80"  # Uncomment if necessary
+    #  - "8081:80"
     environment:
       PMA_HOST: \${WORDPRESS_DB_HOST}
       MYSQL_ROOT_PASSWORD: \${MYSQL_ROOT_PASSWORD}
@@ -569,28 +513,20 @@ networks:
     external: true
 EOF
     
-    # Create a utility script
     print_message $YELLOW "Creating utility script..."
-    cat > "$docker_dir/manage.sh" << 'EOF'
+    cat > "$docker_dir/manage.sh" << 'MANAGE_EOF'
 #!/bin/bash
-# Management script for the WordPress container
-# Usage: ./manage.sh [start|stop|restart|logs|shell|backup|restore-db|status]
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Function to print colored messages
 print_message() {
-    local color=$1
-    local message=$2
-    echo -e "${color}${message}${NC}"
+    echo -e "${1}${2}${NC}"
 }
 
-# Load environment variables
 if [ -f .env ]; then
     source .env
 else
@@ -598,43 +534,27 @@ else
     exit 1
 fi
 
-# Function to check if container is running
 check_container() {
-    local container_name=$1
-    if docker ps --format "table {{.Names}}" | grep -q "^${container_name}$"; then
-        return 0
-    else
-        return 1
-    fi
+    docker ps --format "table {{.Names}}" | grep -q "^${1}$"
 }
 
-# Function to wait for database to be ready
 wait_for_database() {
-    local container_name=$1
     local max_attempts=30
     local attempt=1
     
-    print_message $YELLOW "Waiting for database to be ready..."
+    print_message $YELLOW "Waiting for database..."
     
     while [ $attempt -le $max_attempts ]; do
-        # Try multiple methods to check if MariaDB is ready
-        if docker exec "$container_name" mariadb -u root -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
+        if docker exec "$1" mariadb -u root -p"$MYSQL_ROOT_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
             print_message $GREEN "✓ Database is ready"
-            return 0
-        elif docker exec "$container_name" mariadb-admin ping -h localhost --silent >/dev/null 2>&1; then
-            print_message $GREEN "✓ Database is ready"
-            return 0
-        elif docker exec "$container_name" mysqladmin ping -h localhost --silent >/dev/null 2>&1; then
-            print_message $GREEN "✓ Database is ready (legacy command)"
             return 0
         fi
         
-        print_message $YELLOW "Waiting for database... (attempt $attempt/$max_attempts)"
         sleep 3
         ((attempt++))
     done
     
-    print_message $RED "✗ Database failed to become ready in time"
+    print_message $RED "✗ Database timeout"
     return 1
 }
 
@@ -642,70 +562,58 @@ case "$1" in
     start)
         print_message $BLUE "Starting containers..."
         docker compose up -d
-        
-        # Wait for database to be ready
         if check_container "$DB_CONTAINER_NAME"; then
             wait_for_database "$DB_CONTAINER_NAME"
         fi
-        
-        print_message $GREEN "✓ All containers started"
+        print_message $GREEN "✓ Containers started"
         ;;
         
     stop)
         print_message $BLUE "Stopping containers..."
         docker compose down
-        print_message $GREEN "✓ All containers stopped"
+        print_message $GREEN "✓ Containers stopped"
         ;;
         
     restart)
         print_message $BLUE "Restarting containers..."
         docker compose restart
-        
-        # Wait for database to be ready after restart
         if check_container "$DB_CONTAINER_NAME"; then
             wait_for_database "$DB_CONTAINER_NAME"
         fi
-        
-        print_message $GREEN "✓ All containers restarted"
+        print_message $GREEN "✓ Containers restarted"
         ;;
         
     logs)
-        print_message $BLUE "Viewing logs..."
         docker compose logs -f
         ;;
         
     shell)
         if check_container "$WP_CONTAINER_NAME"; then
-            print_message $BLUE "Accessing WordPress container shell..."
-            docker compose exec wordpress bash
+            docker compose exec wp_${SITE_NAME} bash
         else
-            print_message $RED "WordPress container is not running. Start it first with: ./manage.sh start"
+            print_message $RED "WordPress container not running"
         fi
         ;;
         
     status)
         print_message $BLUE "Container Status:"
         echo
-        print_message $YELLOW "Database Container ($DB_CONTAINER_NAME):"
+        
+        print_message $YELLOW "Database ($DB_CONTAINER_NAME):"
         if check_container "$DB_CONTAINER_NAME"; then
             print_message $GREEN "  ✓ Running"
-            if wait_for_database "$DB_CONTAINER_NAME" >/dev/null 2>&1; then
-                print_message $GREEN "  ✓ Database is responsive"
-            else
-                print_message $YELLOW "  ⚠ Database is starting up"
-            fi
         else
             print_message $RED "  ✗ Not running"
         fi
         
-        print_message $YELLOW "WordPress Container ($WP_CONTAINER_NAME):"
+        print_message $YELLOW "WordPress ($WP_CONTAINER_NAME):"
         if check_container "$WP_CONTAINER_NAME"; then
             print_message $GREEN "  ✓ Running"
         else
             print_message $RED "  ✗ Not running"
         fi
         
-        print_message $YELLOW "phpMyAdmin Container ($PMA_CONTAINER_NAME):"
+        print_message $YELLOW "phpMyAdmin ($PMA_CONTAINER_NAME):"
         if check_container "$PMA_CONTAINER_NAME"; then
             print_message $GREEN "  ✓ Running"
         else
@@ -715,40 +623,21 @@ case "$1" in
         
     backup)
         if ! check_container "$DB_CONTAINER_NAME"; then
-            print_message $RED "Database container is not running. Start it first with: ./manage.sh start"
+            print_message $RED "Database not running"
             exit 1
         fi
         
-        print_message $BLUE "Backing up database..."
-        
-        # Check if database is ready
         if ! wait_for_database "$DB_CONTAINER_NAME" >/dev/null 2>&1; then
-            print_message $RED "Database is not ready. Please wait and try again."
+            print_message $RED "Database not ready"
             exit 1
         fi
         
         backup_file="backup_$(date +%Y%m%d_%H%M%S).sql"
         
-        # Try mariadb-dump first, then mysqldump as fallback
         if docker exec "$DB_CONTAINER_NAME" mariadb-dump -u root -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" > "$backup_file" 2>/dev/null; then
-            print_message $GREEN "✓ Database backup completed using mariadb-dump"
-        elif docker exec "$DB_CONTAINER_NAME" mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" > "$backup_file" 2>/dev/null; then
-            print_message $GREEN "✓ Database backup completed using mysqldump"
+            print_message $GREEN "✓ Backup completed: $backup_file"
         else
-            print_message $RED "✗ Backup failed with both mariadb-dump and mysqldump"
-            print_message $YELLOW "Try checking if the database container is healthy:"
-            print_message $YELLOW "  ./manage.sh status"
-            rm -f "$backup_file"
-            exit 1
-        fi
-        
-        # Check if backup file was created and has content
-        if [ -s "$backup_file" ]; then
-            file_size=$(stat -c%s "$backup_file" 2>/dev/null || stat -f%z "$backup_file" 2>/dev/null || echo "unknown")
-            print_message $GREEN "Backup saved as: $backup_file"
-            print_message $GREEN "File size: $file_size bytes"
-        else
-            print_message $RED "✗ Backup file is empty or was not created"
+            print_message $RED "✗ Backup failed"
             rm -f "$backup_file"
             exit 1
         fi
@@ -756,171 +645,113 @@ case "$1" in
         
     restore-db)
         if [ ! -f "restore_database.sql" ]; then
-            print_message $RED "Error: restore_database.sql file not found"
-            print_message $YELLOW "Place your SQL backup file as 'restore_database.sql' and try again"
+            print_message $RED "Error: restore_database.sql not found"
             exit 1
         fi
         
         if ! check_container "$DB_CONTAINER_NAME"; then
-            print_message $RED "Database container is not running. Start it first with: ./manage.sh start"
+            print_message $RED "Database not running"
             exit 1
         fi
         
-        # Check if database is ready
         if ! wait_for_database "$DB_CONTAINER_NAME" >/dev/null 2>&1; then
-            print_message $RED "Database is not ready. Please wait and try again."
+            print_message $RED "Database not ready"
             exit 1
         fi
         
-        print_message $BLUE "Restoring database from restore_database.sql..."
-        
-        # Try mariadb first, then mysql as fallback
         if docker exec -i "$DB_CONTAINER_NAME" mariadb -u root -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" < restore_database.sql 2>/dev/null; then
-            print_message $GREEN "✓ Database restore completed using mariadb"
-        elif docker exec -i "$DB_CONTAINER_NAME" mysql -u root -p"$MYSQL_ROOT_PASSWORD" "$MYSQL_DATABASE" < restore_database.sql 2>/dev/null; then
-            print_message $GREEN "✓ Database restore completed using mysql"
+            print_message $GREEN "✓ Database restored"
         else
-            print_message $RED "✗ Database restore failed with both mariadb and mysql"
-            print_message $YELLOW "Check if:"
-            print_message $YELLOW "  - The restore_database.sql file is valid"
-            print_message $YELLOW "  - The database container is healthy: ./manage.sh status"
+            print_message $RED "✗ Restore failed"
             exit 1
         fi
         ;;
         
     *)
         print_message $RED "Usage: $0 {start|stop|restart|logs|shell|backup|restore-db|status}"
-        print_message $YELLOW ""
-        print_message $YELLOW "Commands:"
-        print_message $YELLOW "  start      - Start all containers"
-        print_message $YELLOW "  stop       - Stop all containers"
-        print_message $YELLOW "  restart    - Restart all containers"
-        print_message $YELLOW "  logs       - View container logs"
-        print_message $YELLOW "  shell      - Access WordPress container shell"
-        print_message $YELLOW "  backup     - Backup the database"
-        print_message $YELLOW "  restore-db - Restore database from restore_database.sql"
-        print_message $YELLOW "  status     - Show container status"
         exit 1
         ;;
 esac
-EOF
+MANAGE_EOF
     chmod +x "$docker_dir/manage.sh"
     
-    # Create README
     cat > "$docker_dir/README.md" << EOF
 # WordPress Docker Setup - $site_name
 
-Docker configuration for the WordPress site: **$site_name**
-
-## Generated Files:
-- \`.env\` - Environment variables
-- \`docker-compose.yml\` - Docker configuration
-- \`manage.sh\` - Management script
-- \`README.md\` - This documentation
+## Service Names:
+- \`db_${site_name}\` - MariaDB database
+- \`wp_${site_name}\` - WordPress application
+- \`phpmyadmin_${site_name}\` - phpMyAdmin interface
 
 ## Usage:
-
-### First run:
 \`\`\`bash
 cd docker-$site_name
 docker compose up -d
 \`\`\`
 
-### Management with script:
+## Management:
 \`\`\`bash
 ./manage.sh start      # Start containers
 ./manage.sh stop       # Stop containers
 ./manage.sh restart    # Restart containers
 ./manage.sh logs       # View logs
-./manage.sh shell      # Access the WordPress container
-./manage.sh backup     # Backup the database
-./manage.sh restore-db # Restore database from restore_database.sql
-./manage.sh status     # Show container status
+./manage.sh shell      # Access WordPress shell
+./manage.sh backup     # Backup database
+./manage.sh restore-db # Restore database
+./manage.sh status     # Show status
 \`\`\`
 
-### Access:
-- **WordPress**: http://localhost (if ports uncommented)
-- **phpMyAdmin**: http://localhost:8081 (if ports uncommented)
-
-### Directories:
-- \`wp-data/\` - WordPress files
+## Directories:
+- \`wp-data/\` - WordPress files (www-data ownership)
 - \`mysql-data/\` - Database data
 
 ## Notes:
-- The networks \`wp-net\` and \`nginx-net\` are automatically created if missing
-- Ports are commented out for use with a reverse proxy
-- If you have backup files, they will be automatically restored during setup
-
-## Configuration Source:
-- Configuration read from: $wp_config
-
-## Backup Restoration:
-- **wp-content**: Automatically restored from backup if available
-- **Database**: Automatically restored from backup if available
-- Manual database restore: Place SQL file as \`restore_database.sql\` and run \`./manage.sh restore-db\`
+- Networks \`wp-net\` and \`nginx-net\` are external
+- Ports commented for reverse proxy usage
+- wp-content permissions set for www-data if available
 EOF
     
-    # Restore wp-content if backup exists
     if [ -d "$backup_dir" ]; then
         restore_wp_content "$docker_dir" "$backup_dir" "$site_name"
-        pause_for_user "wp-content restoration completed. Ready to start containers and restore database?"
-        
-        # Restore database
+        pause_for_user "wp-content restored. Ready to restore database?"
         restore_database "$docker_dir" "$backup_dir" "$site_name"
-        print_message $GREEN "All containers are now running with restored content!"
+        print_message $GREEN "All containers running with restored content!"
     else
-        print_message $YELLOW "No backup directory found. Creating empty Docker setup."
+        print_message $YELLOW "No backup directory found."
     fi
     
     print_message $GREEN "=== DOCKERIZATION COMPLETED ==="
     print_message $GREEN "Docker folder: $docker_dir"
-    print_message $GREEN "Files created:"
-    if [ -d "$docker_dir" ]; then
-        ls -la "$docker_dir"
-    else
-        print_message $RED "Error: Docker directory was not created successfully"
-    fi
     
     print_message $BLUE "=== NEXT STEPS ==="
-    print_message $YELLOW "1. Navigate to the docker directory: cd $docker_dir"
-    print_message $YELLOW "2. Start all services: docker compose up -d"
+    print_message $YELLOW "1. cd $docker_dir"
+    print_message $YELLOW "2. docker compose up -d"
     print_message $YELLOW "3. Check logs: docker compose logs -f"
-    print_message $YELLOW "4. Access WordPress at the configured domain/port"
     
-    print_message $BLUE "=== IMPORTANT NOTES ==="
-    print_message $GREEN "✓ Docker networks 'wp-net' and 'nginx-net' are ready"
-    print_message $GREEN "✓ Database and wp-content have been restored from backups (if available)"
-    print_message $YELLOW "⚠ Ports are commented out in docker-compose.yml for reverse proxy usage"
-    print_message $YELLOW "⚠ Uncomment port mappings if you want direct access"
+    print_message $BLUE "=== NOTES ==="
+    print_message $GREEN "✓ Networks ready"
+    print_message $GREEN "✓ Content restored (if available)"
+    print_message $GREEN "✓ Permissions set for www-data"
 }
 
-# Main function
 main() {
     if [ $# -lt 2 ]; then
         print_message $RED "Usage: $0 {backup|dockerize} <site_name>"
-        print_message $YELLOW "Examples:"
-        print_message $YELLOW "  $0 backup site1"
-        print_message $YELLOW "  $0 dockerize site1"
         exit 1
     fi
     
-    local command=$1
-    local site_name=$2
-    
-    case "$command" in
+    case "$1" in
         backup)
-            backup_site "$site_name"
+            backup_site "$2"
             ;;
         dockerize)
-            dockerize_site "$site_name"
+            dockerize_site "$2"
             ;;
         *)
-            print_message $RED "Unrecognized command: $command"
-            print_message $YELLOW "Available commands: backup, dockerize"
+            print_message $RED "Unknown command: $1"
             exit 1
             ;;
     esac
 }
 
-# Execute the main function with all arguments
 main "$@"
