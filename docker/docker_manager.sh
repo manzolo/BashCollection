@@ -194,7 +194,7 @@ list_images() {
     whiptail --title "Docker Images" --msgbox "$IMAGES" 20 120
 }
 
-# Remove image
+# Remove image (with multi-selection support)
 remove_image() {
     # Create an array with images
     IMAGES=$(sudo docker images --format "{{.Repository}}:{{.Tag}} {{.ID}} {{.Size}}")
@@ -202,52 +202,91 @@ remove_image() {
         whiptail --title "Info" --msgbox "No images found!" 8 50
         return
     fi
-    
-    # Build whiptail options
+
+    # Build whiptail checklist options
     OPTIONS=()
     counter=1
-    
+
     # Save mapping to a temporary file
     TEMP_MAP=$(mktemp)
-    
+
     while read -r line; do
         if [ -n "$line" ]; then
             # Extract name, ID, and size
             IMAGE_NAME=$(echo "$line" | awk '{print $1}')
             IMAGE_ID=$(echo "$line" | awk '{print $2}')
             IMAGE_SIZE=$(echo "$line" | awk '{print $3}')
-            
-            # Add to options array
-            OPTIONS+=("$counter" "$IMAGE_NAME ($IMAGE_SIZE)")
-            
+
+            # Add to options array (tag, item, status)
+            OPTIONS+=("$counter" "$IMAGE_NAME ($IMAGE_SIZE)" "OFF")
+
             # Save mapping
             echo "$counter|$IMAGE_ID|$IMAGE_NAME" >> "$TEMP_MAP"
-            
+
             counter=$((counter + 1))
         fi
     done <<< "$IMAGES"
-    
-    # Show menu
-    SELECTED=$(whiptail --title "Remove Image" --menu "Choose image to remove:" 20 90 10 "${OPTIONS[@]}" 3>&1 1>&2 2>&3)
-    
+
+    # Show checklist for multiple selection
+    SELECTED=$(whiptail --title "Remove Images" --checklist \
+        "Select images to remove (use SPACE to select, ENTER to confirm):" \
+        20 90 10 "${OPTIONS[@]}" 3>&1 1>&2 2>&3)
+
     if [ $? -eq 0 ] && [ -n "$SELECTED" ]; then
-        # Retrieve selected image info
-        IMAGE_LINE=$(grep "^$SELECTED|" "$TEMP_MAP")
-        if [ -n "$IMAGE_LINE" ]; then
-            IMAGE_ID=$(echo "$IMAGE_LINE" | cut -d'|' -f2)
-            IMAGE_NAME=$(echo "$IMAGE_LINE" | cut -d'|' -f3)
-            
-            if whiptail --title "Confirmation" --yesno "Remove image:\n$IMAGE_NAME\n(ID: ${IMAGE_ID:0:12}...)?" 10 70; then
-                # Use ID for certainty
-                if sudo docker rmi -f "$IMAGE_ID" 2>/dev/null; then
-                    whiptail --title "Success" --msgbox "Image $IMAGE_NAME removed successfully!" 8 60
-                else
-                    whiptail --title "Error" --msgbox "Error removing image!\nIt might be in use by a container." 8 70
+        # Remove quotes from selected items
+        SELECTED=$(echo "$SELECTED" | tr -d '"')
+
+        # Count selected images
+        SELECTED_COUNT=$(echo "$SELECTED" | wc -w)
+
+        # Build confirmation message with list of images
+        CONFIRM_MSG="You selected $SELECTED_COUNT image(s) to remove:\n\n"
+        for item in $SELECTED; do
+            IMAGE_LINE=$(grep "^$item|" "$TEMP_MAP")
+            if [ -n "$IMAGE_LINE" ]; then
+                IMAGE_NAME=$(echo "$IMAGE_LINE" | cut -d'|' -f3)
+                IMAGE_ID=$(echo "$IMAGE_LINE" | cut -d'|' -f2)
+                CONFIRM_MSG="${CONFIRM_MSG}• $IMAGE_NAME (ID: ${IMAGE_ID:0:12})\n"
+            fi
+        done
+        CONFIRM_MSG="${CONFIRM_MSG}\nAre you sure you want to remove these images?"
+
+        if whiptail --title "Confirmation" --yesno "$CONFIRM_MSG" 18 80; then
+            # Remove each selected image
+            SUCCESS_COUNT=0
+            FAILED_COUNT=0
+            FAILED_IMAGES=""
+
+            for item in $SELECTED; do
+                IMAGE_LINE=$(grep "^$item|" "$TEMP_MAP")
+                if [ -n "$IMAGE_LINE" ]; then
+                    IMAGE_ID=$(echo "$IMAGE_LINE" | cut -d'|' -f2)
+                    IMAGE_NAME=$(echo "$IMAGE_LINE" | cut -d'|' -f3)
+
+                    # Try to remove the image
+                    if sudo docker rmi -f "$IMAGE_ID" 2>/dev/null; then
+                        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+                    else
+                        FAILED_COUNT=$((FAILED_COUNT + 1))
+                        FAILED_IMAGES="${FAILED_IMAGES}• $IMAGE_NAME\n"
+                    fi
                 fi
+            done
+
+            # Show result summary
+            RESULT_MSG="Operation completed!\n\n"
+            RESULT_MSG="${RESULT_MSG}✓ Successfully removed: $SUCCESS_COUNT image(s)\n"
+
+            if [ $FAILED_COUNT -gt 0 ]; then
+                RESULT_MSG="${RESULT_MSG}✗ Failed to remove: $FAILED_COUNT image(s)\n\n"
+                RESULT_MSG="${RESULT_MSG}Failed images (may be in use by containers):\n${FAILED_IMAGES}"
+                whiptail --title "Partial Success" --msgbox "$RESULT_MSG" 18 80
+            else
+                whiptail --title "Success" --msgbox "$RESULT_MSG" 10 60
             fi
         fi
     fi
-    
+
     # Clean up temporary file
     rm -f "$TEMP_MAP"
 }
