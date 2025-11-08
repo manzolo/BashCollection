@@ -213,20 +213,22 @@ show_interactive_menu() {
     echo ""
     
     local options=(
-        "🔧 Install Scripts" 
-        "🗑️  Uninstall Scripts" 
-        "📋 List Available Scripts" 
-        "🚀 Run a Script" 
-        "🔍 Debug Information" 
+        "🔧 Install Scripts"
+        "🗑️  Uninstall Scripts"
+        "📋 List Available Scripts"
+        "🚀 Run a Script"
+        "📦 Build & Publish to Repository"
+        "🔍 Debug Information"
         "🔄 Update Scripts from Git"
         "❌ Exit"
     )
-    
+
     local commands=(
         "install_menu"
-        "uninstall_menu" 
+        "uninstall_menu"
         "list_menu"
         "run_script_menu"
+        "publish_menu"
         "debug_menu"
         "update_menu"
         "exit"
@@ -746,7 +748,7 @@ update_scripts() {
         git -C "$SCRIPT_DIR" pull
         PULL_RESULT=$?
     fi
-    
+
     if [ $PULL_RESULT -eq 0 ]; then
         echo -e "${GREEN}✔ Git pull successful!${NC}"
         echo -e "${YELLOW}>> Re-running installation to update scripts...${NC}"
@@ -755,6 +757,302 @@ update_scripts() {
         echo -e "${RED}✖ Git pull failed. Please check your network connection or repository status.${NC}"
         exit 1
     fi
+}
+
+# Menu per la pubblicazione nel repository
+publish_menu() {
+    echo -e "${MAGENTA}📦 Build & Publish to Repository${NC}"
+    echo -e "${YELLOW}This will build .deb packages and publish them to your Ubuntu repository.${NC}"
+    echo ""
+
+    # Check if repository exists
+    if [ ! -d "$SCRIPT_DIR/utils/ubuntu_repo" ]; then
+        echo -e "${RED}✖ Ubuntu repository not found at utils/ubuntu_repo${NC}"
+        echo -e "${YELLOW}Please set up the repository first.${NC}"
+        return 1
+    fi
+
+    echo -e "${CYAN}Select publish mode:${NC}"
+    echo "  1) Publish all scripts"
+    echo "  2) Select specific scripts to publish"
+    echo "  3) Cancel"
+    echo ""
+
+    read -p "$(echo -e "${BOLD}Enter your choice [1-3]:${NC} ")" choice
+
+    case "$choice" in
+        1)
+            publish_all_scripts
+            ;;
+        2)
+            publish_selected_scripts
+            ;;
+        3)
+            echo -e "${GREEN}Operation cancelled.${NC}"
+            ;;
+        *)
+            echo -e "${RED}Invalid choice.${NC}"
+            ;;
+    esac
+}
+
+# Funzione per pubblicare tutti gli script
+publish_all_scripts() {
+    echo -e "${CYAN}Building and publishing all scripts...${NC}"
+    echo ""
+
+    # Carica gli script disponibili
+    load_ignore_patterns
+    load_name_mappings
+    find_executable_scripts
+
+    if [ ${#INCLUDED_FILES[@]} -eq 0 ]; then
+        echo -e "${RED}No executable scripts found.${NC}"
+        return 1
+    fi
+
+    # Crea directory temporanea per i pacchetti
+    PACKAGE_BUILD_DIR=$(mktemp -d)
+    echo -e "${YELLOW}Build directory: $PACKAGE_BUILD_DIR${NC}"
+
+    local success_count=0
+    local fail_count=0
+
+    for script_path in "${INCLUDED_FILES[@]}"; do
+        local script_name=$(get_command_name "$script_path")
+        local relative_path="${script_path#$SCRIPT_DIR/}"
+
+        echo -e "${CYAN}Building package for: ${YELLOW}$script_name${NC} ${BLUE}($relative_path)${NC}"
+
+        if build_script_package "$script_path" "$script_name" "$PACKAGE_BUILD_DIR"; then
+            ((success_count++))
+        else
+            ((fail_count++))
+        fi
+        echo ""
+    done
+
+    echo -e "${GREEN}✔ Built $success_count package(s)${NC}"
+    if [ $fail_count -gt 0 ]; then
+        echo -e "${RED}✖ Failed: $fail_count package(s)${NC}"
+    fi
+
+    # Pubblica nel repository
+    if [ $success_count -gt 0 ]; then
+        publish_to_repository "$PACKAGE_BUILD_DIR"
+    fi
+
+    # Cleanup
+    rm -rf "$PACKAGE_BUILD_DIR"
+}
+
+# Funzione per pubblicare script selezionati
+publish_selected_scripts() {
+    echo -e "${CYAN}Select scripts to publish:${NC}"
+    echo ""
+
+    # Carica gli script disponibili
+    load_ignore_patterns
+    load_name_mappings
+    find_executable_scripts
+
+    if [ ${#INCLUDED_FILES[@]} -eq 0 ]; then
+        echo -e "${RED}No executable scripts found.${NC}"
+        return 1
+    fi
+
+    # Mostra lista script
+    declare -a script_names
+    declare -a script_paths
+
+    for script_path in "${INCLUDED_FILES[@]}"; do
+        local script_name=$(get_command_name "$script_path")
+        local relative_path="${script_path#$SCRIPT_DIR/}"
+
+        script_names+=("$script_name")
+        script_paths+=("$script_path")
+    done
+
+    for i in "${!script_names[@]}"; do
+        local relative_path="${script_paths[i]#$SCRIPT_DIR/}"
+        echo -e "  ${YELLOW}$((i+1)).${NC} ${GREEN}${script_names[i]}${NC} ${BLUE}($relative_path)${NC}"
+    done
+
+    echo ""
+    read -p "$(echo -e "${BOLD}Enter script numbers separated by spaces (e.g., 1 3 5):${NC} ")" selection
+
+    if [ -z "$selection" ]; then
+        echo -e "${YELLOW}No scripts selected.${NC}"
+        return
+    fi
+
+    # Crea directory temporanea per i pacchetti
+    PACKAGE_BUILD_DIR=$(mktemp -d)
+    echo -e "${YELLOW}Build directory: $PACKAGE_BUILD_DIR${NC}"
+    echo ""
+
+    local success_count=0
+    local fail_count=0
+
+    for num in $selection; do
+        if [[ "$num" =~ ^[0-9]+$ ]] && [ "$num" -ge 1 ] && [ "$num" -le "${#script_names[@]}" ]; then
+            local idx=$((num-1))
+            local script_path="${script_paths[idx]}"
+            local script_name="${script_names[idx]}"
+            local relative_path="${script_path#$SCRIPT_DIR/}"
+
+            echo -e "${CYAN}Building package for: ${YELLOW}$script_name${NC} ${BLUE}($relative_path)${NC}"
+
+            if build_script_package "$script_path" "$script_name" "$PACKAGE_BUILD_DIR"; then
+                ((success_count++))
+            else
+                ((fail_count++))
+            fi
+            echo ""
+        else
+            echo -e "${RED}Invalid selection: $num${NC}"
+        fi
+    done
+
+    echo -e "${GREEN}✔ Built $success_count package(s)${NC}"
+    if [ $fail_count -gt 0 ]; then
+        echo -e "${RED}✖ Failed: $fail_count package(s)${NC}"
+    fi
+
+    # Pubblica nel repository
+    if [ $success_count -gt 0 ]; then
+        publish_to_repository "$PACKAGE_BUILD_DIR"
+    fi
+
+    # Cleanup
+    rm -rf "$PACKAGE_BUILD_DIR"
+}
+
+# Funzione per costruire un pacchetto .deb per uno script
+build_script_package() {
+    local script_path="$1"
+    local script_name="$2"
+    local build_dir="$3"
+
+    local version="1.0.0"
+    local package_name=$(echo "$script_name" | tr '_' '-')
+    local pkg_dir="$build_dir/${package_name}_${version}"
+
+    # Crea struttura pacchetto
+    mkdir -p "$pkg_dir/DEBIAN"
+    mkdir -p "$pkg_dir/usr/local/bin"
+    mkdir -p "$pkg_dir/usr/share/doc/$package_name"
+
+    # Crea file control
+    cat > "$pkg_dir/DEBIAN/control" << EOF
+Package: $package_name
+Version: $version
+Section: utils
+Priority: optional
+Architecture: all
+Depends: bash (>= 4.0)
+Maintainer: BashCollection <bashcollection@example.com>
+Description: $script_name - BashCollection utility
+ Part of the BashCollection suite of system administration
+ and management tools for Ubuntu/Debian systems.
+Homepage: https://github.com/yourusername/BashCollection
+EOF
+
+    # Crea script postinst
+    cat > "$pkg_dir/DEBIAN/postinst" << EOF
+#!/bin/bash
+set -e
+chmod +x /usr/local/bin/$script_name
+echo "$package_name installed successfully!"
+exit 0
+EOF
+    chmod 755 "$pkg_dir/DEBIAN/postinst"
+
+    # Copia lo script
+    cp "$script_path" "$pkg_dir/usr/local/bin/$script_name"
+    chmod 755 "$pkg_dir/usr/local/bin/$script_name"
+
+    # Crea copyright
+    cat > "$pkg_dir/usr/share/doc/$package_name/copyright" << EOF
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: $package_name
+Source: https://github.com/yourusername/BashCollection
+
+Files: *
+Copyright: 2024 BashCollection
+License: MIT
+EOF
+
+    # Crea changelog
+    cat > "$pkg_dir/usr/share/doc/$package_name/changelog" << EOF
+$package_name ($version) stable; urgency=medium
+
+  * Initial package release
+  * Part of BashCollection suite
+
+ -- BashCollection <bashcollection@example.com>  $(date -R)
+EOF
+    gzip -9 "$pkg_dir/usr/share/doc/$package_name/changelog"
+
+    # Costruisci il pacchetto
+    dpkg-deb --build "$pkg_dir" > /dev/null 2>&1
+
+    if [ $? -eq 0 ]; then
+        echo -e "  ${GREEN}✔ Package built: ${package_name}_${version}.deb${NC}"
+        rm -rf "$pkg_dir"
+        return 0
+    else
+        echo -e "  ${RED}✖ Failed to build package${NC}"
+        return 1
+    fi
+}
+
+# Funzione per pubblicare nel repository
+publish_to_repository() {
+    local package_dir="$1"
+
+    echo -e "${CYAN}Publishing packages to repository...${NC}"
+    echo ""
+
+    # Conta pacchetti .deb
+    local deb_count=$(find "$package_dir" -name "*.deb" | wc -l)
+
+    if [ $deb_count -eq 0 ]; then
+        echo -e "${YELLOW}No packages to publish.${NC}"
+        return
+    fi
+
+    echo -e "${YELLOW}Found $deb_count package(s) to publish${NC}"
+
+    # Check se esiste il repository Docker
+    if [ -f "$SCRIPT_DIR/utils/ubuntu_repo/repo.sh" ]; then
+        echo -e "${CYAN}Using Docker repository manager...${NC}"
+
+        # Copia pacchetti nella directory packages del repo
+        find "$package_dir" -name "*.deb" -exec cp {} "$SCRIPT_DIR/utils/ubuntu_repo/packages/" \;
+
+        # Usa il repo manager per importare
+        cd "$SCRIPT_DIR/utils/ubuntu_repo"
+
+        # Check se il container è in esecuzione
+        if docker ps | grep -q ubuntu-repo; then
+            echo -e "${GREEN}✔ Repository container is running${NC}"
+            ./repo.sh import
+        else
+            echo -e "${YELLOW}! Repository container is not running${NC}"
+            echo -e "${CYAN}Packages copied to utils/ubuntu_repo/packages/${NC}"
+            echo -e "${CYAN}Start the repository and run: ./repo.sh import${NC}"
+        fi
+
+        cd "$SCRIPT_DIR"
+    else
+        echo -e "${YELLOW}! Repository manager not found${NC}"
+        echo -e "${CYAN}Packages are available in: $package_dir${NC}"
+        echo -e "${CYAN}You can manually add them to your repository.${NC}"
+    fi
+
+    echo ""
+    echo -e "${GREEN}✔ Publish process complete!${NC}"
 }
 
 # Funzione principale per gestire gli argomenti
@@ -782,6 +1080,9 @@ main() {
             ;;
         debug)
             debug_exclusions
+            ;;
+        publish)
+            publish_menu
             ;;
         update)
             check_root_permissions
@@ -870,6 +1171,7 @@ show_help() {
     echo "  uninstall        Remove all installed scripts"
     echo "  list             Show available scripts"
     echo "  run [SCRIPT]     Run a specific script or show selection menu"
+    echo "  publish          Build .deb packages and publish to repository"
     echo "  debug            Show detailed debug information"
     echo "  update           Update scripts from git and reinstall"
     echo "  help             Show this help message"
@@ -885,6 +1187,7 @@ show_help() {
     echo "  $SCRIPT_NAME run                # Show script selection menu"
     echo "  $SCRIPT_NAME run myscript       # Run 'myscript' directly"
     echo "  $SCRIPT_NAME run backup --help  # Run 'backup' script with --help"
+    echo "  $SCRIPT_NAME publish            # Build and publish packages to repository"
     echo ""
     echo -e "${CYAN}FILE SELECTION RULES:${NC}"
     echo "  • Only executable .sh files in subdirectories are included"

@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  ubuntu-repo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ${CONTAINER_NAME:-ubuntu-repo}
+    hostname: ${SERVER_NAME:-repo.local}
+
+    # Environment variables from .env file
+    environment:
+      - REPO_NAME=${REPO_NAME:-myrepo}
+      - REPO_DISTRIBUTION=${REPO_DISTRIBUTION:-focal}
+      - REPO_COMPONENT=${REPO_COMPONENT:-main}
+      - REPO_ARCHITECTURE=${REPO_ARCHITECTURE:-amd64}
+      - GPG_KEY_NAME=${GPG_KEY_NAME:-Ubuntu Repo Signing Key}
+      - GPG_KEY_EMAIL=${GPG_KEY_EMAIL:-repo@example.com}
+      - SERVER_NAME=${SERVER_NAME:-localhost}
+      - TZ=${TZ:-UTC}
+
+    # Port mapping
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+
+    # Persistent volumes
+    volumes:
+      # Repository data
+      - repo-data:/var/www/manzolo-ubuntu-repo/aptly
+      - repo-public:/var/www/manzolo-ubuntu-repo/public
+      # GPG keys
+      - gpg-keys:/root/.gnupg
+      # Package staging area (for adding packages)
+      - ./packages:/packages
+      # Nginx logs
+      - ./logs:/var/log/nginx
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    # Resource limits (optional, adjust as needed)
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '1'
+    #       memory: 1G
+    #     reservations:
+    #       cpus: '0.5'
+    #       memory: 512M
+
+# Named volumes for persistent data
+volumes:
+  repo-data:
+    driver: local
+  repo-public:
+    driver: local
+  gpg-keys:
+    driver: local
+
+# Network (optional)
+networks:
+  default:
+    name: ubuntu-repo-network
