@@ -28,7 +28,7 @@ The installer uses two configuration files in the repository root:
 - **.manzoloignore**: Excludes scripts from installation (similar to .gitignore syntax)
 - **.manzolomap**: Maps script filenames to custom command names using `path#name` format
 
-Example mapping: `chroot/manzolo_chroot.sh#mchroot` creates both `mchroot` and `manzolo_chroot` commands.
+Example mapping: `chroot/manzolo-chroot.sh#mchroot` creates both `mchroot` and `manzolo-chroot` commands.
 
 ### Other Management Commands
 
@@ -59,10 +59,10 @@ done
 ```
 
 This pattern is used by:
-- `chroot/manzolo_chroot.sh` → sources from `chroot/manzolo_chroot/`
-- `disk_cloner/manzolo_disk_clone.sh` → sources from `disk_cloner/manzolo_disk_clone/`
+- `chroot/manzolo-chroot.sh` → sources from `chroot/manzolo-chroot/`
+- `disk-cloner/manzolo-disk-clone.sh` → sources from `disk-cloner/manzolo-disk-clone/`
 - `vm/vm_disk_manager.sh` → sources from `vm/vm_disk_manager/`
-- `utils/ventoy/ventoy_usb_test.sh` → sources from `utils/ventoy/ventoy_usb_test/`
+- `utils/ventoy/ventoy-usb-test.sh` → sources from `utils/ventoy/ventoy-usb-test/`
 
 When modifying these scripts, always check the subdirectory for the actual implementation logic.
 
@@ -74,25 +74,25 @@ When modifying these scripts, always check the subdirectory for the actual imple
 - `vm_clone.sh`: Clone VM images
 
 **Chroot Tools** (`chroot/`):
-- `manzolo_chroot.sh`: Advanced chroot into physical/virtual disks with NBD, LUKS, and LVM support
+- `manzolo-chroot.sh`: Advanced chroot into physical/virtual disks with NBD, LUKS, and LVM support
 - Supports both block devices and virtual disk images
 
-**Disk Operations** (`disk_cloner/`):
-- `manzolo_disk_clone.sh`: Clone between physical/virtual disks with UUID preservation, LUKS support, and dry-run mode
+**Disk Operations** (`disk-cloner/`):
+- `manzolo-disk-clone.sh`: Clone between physical/virtual disks with UUID preservation, LUKS support, and dry-run mode
 - Uses `partclone` for smart cloning (only used space)
 
 **Docker Management** (`docker/`):
-- `docker_manager.sh`: TUI for container/image/volume/network management
-- `update_docker_compose.sh`: Update and restart Docker Compose projects
+- `docker-manager.sh`: TUI for container/image/volume/network management
+- `update-docker-compose.sh`: Update and restart Docker Compose projects
 
 **Backup** (`backup/`):
-- `backup_qemu_vms.sh`: Backup QEMU VMs (shutdown, copy, MD5 verification)
-- `manzolo_backup_home.sh`: Incremental rsync-based backups with exclusions
+- `backup-qemu-vms.sh`: Backup QEMU VMs (shutdown, copy, MD5 verification)
+- `manzolo-backup-home.sh`: Incremental rsync-based backups with exclusions
 
 **Utilities** (`utils/`):
-- `systemd/systemd_manager.sh`: Manage systemd services via TUI
-- `server_monitor/server_monitor.sh`: System dashboard with Docker stats
-- `ventoy/ventoy_usb_test.sh`: Test Ventoy USB in QEMU (UEFI/BIOS modes)
+- `systemd/systemd-manager.sh`: Manage systemd services via TUI
+- `server-monitor/server-monitor.sh`: System dashboard with Docker stats
+- `ventoy/ventoy-usb-test.sh`: Test Ventoy USB in QEMU (UEFI/BIOS modes)
 - `code2one/`: Merge/extract files to/from single files
 
 ### Common Patterns

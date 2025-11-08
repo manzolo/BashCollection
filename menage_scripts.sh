@@ -759,19 +759,110 @@ update_scripts() {
     fi
 }
 
+# Funzione per pubblicare uno script specifico per nome
+publish_specific_script() {
+    local script_name="$1"
+
+    if [ -z "$script_name" ]; then
+        echo -e "${RED}✖ No script name provided${NC}"
+        return 1
+    fi
+
+    echo -e "${CYAN}Searching for script: ${YELLOW}$script_name${NC}"
+    echo ""
+
+    # Carica gli script disponibili
+    load_ignore_patterns
+    load_name_mappings
+    find_executable_scripts
+
+    if [ ${#INCLUDED_FILES[@]} -eq 0 ]; then
+        echo -e "${RED}No executable scripts found.${NC}"
+        return 1
+    fi
+
+    # Cerca lo script che corrisponde al nome
+    local found_script=""
+    local found_name=""
+
+    for script_path in "${INCLUDED_FILES[@]}"; do
+        local cmd_name=$(get_command_name "$script_path")
+        local base_name=$(basename "$script_path" .sh)
+
+        # Cerca corrispondenza esatta o parziale
+        if [ "$cmd_name" = "$script_name" ] || \
+           [ "$base_name" = "$script_name" ] || \
+           [ "$base_name" = "${script_name}.sh" ] || \
+           [[ "$script_path" == *"$script_name"* ]]; then
+            found_script="$script_path"
+            found_name="$cmd_name"
+            break
+        fi
+    done
+
+    if [ -z "$found_script" ]; then
+        echo -e "${RED}✖ Script not found: $script_name${NC}"
+        echo -e "${YELLOW}Available scripts:${NC}"
+        for script_path in "${INCLUDED_FILES[@]}"; do
+            local cmd_name=$(get_command_name "$script_path")
+            echo -e "  - ${CYAN}$cmd_name${NC} (${script_path#$SCRIPT_DIR/})"
+        done
+        return 1
+    fi
+
+    echo -e "${GREEN}✔ Found: ${CYAN}$found_name${NC} ${BLUE}(${found_script#$SCRIPT_DIR/})${NC}"
+    echo ""
+
+    # Build directory temporanea
+    local PACKAGE_BUILD_DIR=$(mktemp -d)
+    echo -e "Build directory: ${BLUE}$PACKAGE_BUILD_DIR${NC}"
+    echo ""
+
+    local success=0
+
+    echo -e "${CYAN}Building package for: ${YELLOW}$found_name${NC} ${BLUE}(${found_script#$SCRIPT_DIR/})${NC}"
+    if build_script_package "$found_script" "$found_name" "$PACKAGE_BUILD_DIR"; then
+        success=1
+        echo ""
+        echo -e "${GREEN}✔ Package built successfully!${NC}"
+    else
+        echo ""
+        echo -e "${RED}✖ Package build failed${NC}"
+    fi
+
+    # Publish to repository if successful
+    if [ $success -eq 1 ]; then
+        publish_to_repository "$PACKAGE_BUILD_DIR"
+    fi
+
+    # Cleanup
+    rm -rf "$PACKAGE_BUILD_DIR"
+
+    return $((1 - success))
+}
+
 # Menu per la pubblicazione nel repository
 publish_menu() {
+    local target_script="$1"
+
     echo -e "${MAGENTA}📦 Build & Publish to Repository${NC}"
     echo -e "${YELLOW}This will build .deb packages and publish them to your Ubuntu repository.${NC}"
     echo ""
 
     # Check if repository exists
-    if [ ! -d "$SCRIPT_DIR/utils/ubuntu_repo" ]; then
-        echo -e "${RED}✖ Ubuntu repository not found at utils/ubuntu_repo${NC}"
+    if [ ! -d "$SCRIPT_DIR/utils/ubuntu-repo" ]; then
+        echo -e "${RED}✖ Ubuntu repository not found at utils/ubuntu-repo${NC}"
         echo -e "${YELLOW}Please set up the repository first.${NC}"
         return 1
     fi
 
+    # If a target script is specified, publish it directly
+    if [ -n "$target_script" ]; then
+        publish_specific_script "$target_script"
+        return $?
+    fi
+
+    # Otherwise, show interactive menu
     echo -e "${CYAN}Select publish mode:${NC}"
     echo "  1) Publish all scripts"
     echo "  2) Select specific scripts to publish"
@@ -928,25 +1019,103 @@ publish_selected_scripts() {
     rm -rf "$PACKAGE_BUILD_DIR"
 }
 
+# Parse package metadata from script comments
+# Usage: parse_package_metadata <script_path>
+# Returns: Associative array with metadata fields
+parse_package_metadata() {
+    local script_path="$1"
+
+    # Initialize metadata with defaults
+    declare -gA PKG_META=(
+        [NAME]=""
+        [VERSION]=""
+        [SECTION]="utils"
+        [PRIORITY]="optional"
+        [ARCHITECTURE]="all"
+        [DEPENDS]="bash (>= 4.0)"
+        [RECOMMENDS]=""
+        [SUGGESTS]=""
+        [MAINTAINER]="BashCollection <manzolo@libero.it>"
+        [DESCRIPTION]=""
+        [LONG_DESCRIPTION]=""
+        [HOMEPAGE]="https://github.com/manzolo/BashCollection"
+    )
+
+    if [ ! -f "$script_path" ]; then
+        return 1
+    fi
+
+    # Parse metadata from script comments
+    local in_long_desc=false
+    local long_desc=""
+
+    while IFS= read -r line; do
+        # Stop at first non-comment line (after shebang)
+        if [[ ! "$line" =~ ^#.*$ ]] && [[ "$line" =~ [^[:space:]] ]]; then
+            break
+        fi
+
+        # Parse PKG_* fields
+        if [[ "$line" =~ ^#[[:space:]]*PKG_([A-Z_]+):[[:space:]]*(.+)$ ]]; then
+            local key="${BASH_REMATCH[1]}"
+            local value="${BASH_REMATCH[2]}"
+
+            case "$key" in
+                LONG_DESCRIPTION)
+                    in_long_desc=true
+                    long_desc="$value"
+                    ;;
+                *)
+                    PKG_META[$key]="$value"
+                    in_long_desc=false
+                    ;;
+            esac
+        # Handle multi-line LONG_DESCRIPTION
+        elif $in_long_desc && [[ "$line" =~ ^#[[:space:]]+(.+)$ ]]; then
+            long_desc="${long_desc}"$'\n'"${BASH_REMATCH[1]}"
+        else
+            in_long_desc=false
+        fi
+    done < "$script_path"
+
+    # Store multi-line description
+    if [ -n "$long_desc" ]; then
+        PKG_META[LONG_DESCRIPTION]="$long_desc"
+    fi
+
+    return 0
+}
+
 # Funzione per costruire un pacchetto .deb per uno script
 build_script_package() {
     local script_path="$1"
     local script_name="$2"
     local build_dir="$3"
 
-    # === CHIEDE LA VERSIONE CON DEFAULT 1.0.0 ===
-    local version=""
-    while [ -z "$version" ]; do
-        read -p "$(echo -e "${BOLD}Version for $script_name [default: 1.0.0]: ${NC}")" input_version
-        version="${input_version:-1.0.0}"
-        # Validazione minima (almeno x.y.z o x.y)
-        if ! [[ "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9]+)?$ ]]; then
-            echo -e "${RED}Formato non valido! Esempi: 1.0.0, 2.1, 1.5.3-beta${NC}"
-            version=""
-        fi
-    done
+    # Parse metadata from script
+    parse_package_metadata "$script_path"
 
-    local package_name=$(echo "$script_name" | tr '_' '-')
+    # Use metadata or defaults
+    local package_name="${PKG_META[NAME]}"
+    if [ -z "$package_name" ]; then
+        package_name=$(echo "$script_name" | tr '_' '-')
+    fi
+
+    # === CHIEDE LA VERSIONE SE NON SPECIFICATA NEI METADATI ===
+    local version="${PKG_META[VERSION]}"
+    if [ -z "$version" ]; then
+        while [ -z "$version" ]; do
+            read -p "$(echo -e "${BOLD}Version for $package_name [default: 1.0.0]: ${NC}")" input_version
+            version="${input_version:-1.0.0}"
+            # Validazione minima (almeno x.y.z o x.y)
+            if ! [[ "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9]+)?$ ]]; then
+                echo -e "${RED}Formato non valido! Esempi: 1.0.0, 2.1, 1.5.3-beta${NC}"
+                version=""
+            fi
+        done
+    else
+        echo -e " ${CYAN}Using version from metadata: ${YELLOW}$version${NC}"
+    fi
     local pkg_dir="$build_dir/${package_name}_${version}"
     local deb_file="${package_name}_${version}_all.deb"
 
@@ -987,20 +1156,55 @@ exec /usr/share/$package_name/$(basename "$script_path") "\$@"
 EOF
     chmod 755 "$pkg_dir/usr/local/bin/$script_name"
 
-    # === Control file ===
+    # === Control file with metadata ===
+    local description="${PKG_META[DESCRIPTION]}"
+    if [ -z "$description" ]; then
+        description="$package_name - BashCollection utility"
+    fi
+
+    local long_description="${PKG_META[LONG_DESCRIPTION]}"
+    if [ -z "$long_description" ]; then
+        long_description="Part of the BashCollection suite."$'\n'"This package includes all libraries and functions."
+    fi
+
     cat > "$pkg_dir/DEBIAN/control" << EOF
 Package: $package_name
 Version: $version
-Section: utils
-Priority: optional
-Architecture: all
-Depends: bash (>= 4.0)
-Maintainer: BashCollection <manzolo@libero.it>
-Description: $script_name - BashCollection utility (v$version)
- Part of the BashCollection suite.
- This package includes all libraries and functions.
-Homepage: https://github.com/manzolo/BashCollection
+Section: ${PKG_META[SECTION]}
+Priority: ${PKG_META[PRIORITY]}
+Architecture: ${PKG_META[ARCHITECTURE]}
+Depends: ${PKG_META[DEPENDS]}
 EOF
+
+    # Add optional fields if present
+    if [ -n "${PKG_META[RECOMMENDS]}" ]; then
+        echo "Recommends: ${PKG_META[RECOMMENDS]}" >> "$pkg_dir/DEBIAN/control"
+    fi
+    if [ -n "${PKG_META[SUGGESTS]}" ]; then
+        echo "Suggests: ${PKG_META[SUGGESTS]}" >> "$pkg_dir/DEBIAN/control"
+    fi
+
+    # Write maintainer
+    echo "Maintainer: ${PKG_META[MAINTAINER]}" >> "$pkg_dir/DEBIAN/control"
+
+    # Write description (short + long)
+    echo "Description: $description" >> "$pkg_dir/DEBIAN/control"
+
+    # Write long description (ensuring each line starts with a space)
+    if [ -n "$long_description" ]; then
+        # Use printf to avoid echo -e issues, and ensure lines start with space
+        printf "%s\n" "$long_description" | while IFS= read -r line; do
+            # Each line must start with a space for Debian control format
+            if [ -z "$line" ]; then
+                echo " ." >> "$pkg_dir/DEBIAN/control"
+            else
+                echo " $line" >> "$pkg_dir/DEBIAN/control"
+            fi
+        done
+    fi
+
+    # Write homepage
+    echo "Homepage: ${PKG_META[HOMEPAGE]}" >> "$pkg_dir/DEBIAN/control"
 
     # === postinst ===
     cat > "$pkg_dir/DEBIAN/postinst" << EOF
@@ -1031,12 +1235,16 @@ EOF
     gzip -9 "$pkg_dir/usr/share/doc/$package_name/changelog"
 
     # === Build finale ===
-    if dpkg-deb --build --root-owner-group "$pkg_dir" "$build_dir/$deb_file" > /dev/null 2>&1; then
+    echo -e " ${CYAN}Building package with dpkg-deb...${NC}"
+    if dpkg-deb --build --root-owner-group "$pkg_dir" "$build_dir/$deb_file" 2>&1 | tee /tmp/dpkg-deb-error.log; then
         echo -e " ${GREEN}Pacchetto creato: $deb_file${NC}"
         rm -rf "$pkg_dir"
         return 0
     else
-        echo -e " ${RED}Errore durante dpkg-deb${NC}"
+        echo -e " ${RED}Errore durante dpkg-deb:${NC}"
+        cat /tmp/dpkg-deb-error.log
+        echo -e " ${YELLOW}Control file contents:${NC}"
+        cat "$pkg_dir/DEBIAN/control" 2>/dev/null || echo "Control file not found"
         return 1
     fi
 }
@@ -1059,14 +1267,14 @@ publish_to_repository() {
     echo -e "${YELLOW}Found $deb_count package(s) to publish${NC}"
 
     # Check se esiste il repository Docker
-    if [ -f "$SCRIPT_DIR/utils/ubuntu_repo/repo.sh" ]; then
+    if [ -f "$SCRIPT_DIR/utils/ubuntu-repo/repo.sh" ]; then
         echo -e "${CYAN}Using Docker repository manager...${NC}"
 
         # Copia pacchetti nella directory packages del repo
-        find "$package_dir" -name "*.deb" -exec cp {} "$SCRIPT_DIR/utils/ubuntu_repo/packages/" \;
+        find "$package_dir" -name "*.deb" -exec cp {} "$SCRIPT_DIR/utils/ubuntu-repo/packages/" \;
 
         # Usa il repo manager per importare
-        cd "$SCRIPT_DIR/utils/ubuntu_repo"
+        cd "$SCRIPT_DIR/utils/ubuntu-repo"
 
         # Check se il container è in esecuzione
         if docker ps | grep -q ubuntu-repo; then
@@ -1074,7 +1282,7 @@ publish_to_repository() {
             ./repo.sh import
         else
             echo -e "${YELLOW}! Repository container is not running${NC}"
-            echo -e "${CYAN}Packages copied to utils/ubuntu_repo/packages/${NC}"
+            echo -e "${CYAN}Packages copied to utils/ubuntu-repo/packages/${NC}"
             echo -e "${CYAN}Start the repository and run: ./repo.sh import${NC}"
         fi
 
@@ -1116,7 +1324,7 @@ main() {
             debug_exclusions
             ;;
         publish)
-            publish_menu
+            publish_menu "$2"
             ;;
         update)
             check_root_permissions
@@ -1205,7 +1413,9 @@ show_help() {
     echo "  uninstall        Remove all installed scripts"
     echo "  list             Show available scripts"
     echo "  run [SCRIPT]     Run a specific script or show selection menu"
-    echo "  publish          Build .deb packages and publish to repository"
+    echo "  publish [SCRIPT] Build .deb packages and publish to repository"
+    echo "                   - Without SCRIPT: shows interactive menu"
+    echo "                   - With SCRIPT: builds and publishes that specific script"
     echo "  debug            Show detailed debug information"
     echo "  update           Update scripts from git and reinstall"
     echo "  help             Show this help message"
@@ -1221,7 +1431,8 @@ show_help() {
     echo "  $SCRIPT_NAME run                # Show script selection menu"
     echo "  $SCRIPT_NAME run myscript       # Run 'myscript' directly"
     echo "  $SCRIPT_NAME run backup --help  # Run 'backup' script with --help"
-    echo "  $SCRIPT_NAME publish            # Build and publish packages to repository"
+    echo "  $SCRIPT_NAME publish            # Show publish menu (interactive)"
+    echo "  $SCRIPT_NAME publish disk-usage # Build and publish disk-usage only"
     echo ""
     echo -e "${CYAN}FILE SELECTION RULES:${NC}"
     echo "  • Only executable .sh files in subdirectories are included"

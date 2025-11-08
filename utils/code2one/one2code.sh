@@ -1,4 +1,23 @@
 #!/bin/bash
+# PKG_NAME: one2code
+# PKG_VERSION: 1.0.0
+# PKG_SECTION: devel
+# PKG_PRIORITY: optional
+# PKG_ARCHITECTURE: all
+# PKG_DEPENDS: bash (>= 4.0)
+# PKG_MAINTAINER: Manzolo <manzolo@libero.it>
+# PKG_DESCRIPTION: Extract files from merged code file
+# PKG_LONG_DESCRIPTION: Companion tool to code2one for extracting individual
+#  files from a merged code file back to their original structure.
+#  .
+#  Features:
+#  - Restore files from merged code file
+#  - Preserves original directory structure
+#  - Automatic path creation
+#  - Timestamped restore directory
+#  - Progress reporting
+#  - Error handling and validation
+# PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
 # Terminal colors
 RED='\033[0;31m'

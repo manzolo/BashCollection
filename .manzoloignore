@@ -1,3 +1,3 @@
-#vm/test_vm_create_disk.sh
-chroot/manzolo_chroot/*
-utils/ventoy/ventoy_usb_test/*
+#vm/test-vm-create-disk.sh
+chroot/manzolo-chroot/*
+utils/ventoy/ventoy-usb-test/*

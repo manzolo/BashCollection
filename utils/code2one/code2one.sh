@@ -1,4 +1,23 @@
 #!/bin/bash
+# PKG_NAME: code2one
+# PKG_VERSION: 1.0.0
+# PKG_SECTION: devel
+# PKG_PRIORITY: optional
+# PKG_ARCHITECTURE: all
+# PKG_DEPENDS: bash (>= 4.0)
+# PKG_MAINTAINER: Manzolo <manzolo@libero.it>
+# PKG_DESCRIPTION: Merge multiple code files into single file
+# PKG_LONG_DESCRIPTION: Tools for merging multiple code files into a single
+#  file and extracting them back, useful for code sharing and backups.
+#  .
+#  Features:
+#  - Merge multiple source directories into one file
+#  - Support for multiple formats (plain, markdown)
+#  - Customizable inclusion/exclusion filters
+#  - Directory and extension filtering
+#  - Verbose mode for detailed output
+#  - Preserves file structure and paths
+# PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
