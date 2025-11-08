@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Enhanced SSH Manager
-# Version: 2.1
+# Version: 2.2 - Named server identification
 
 # Configuration
 CONFIG_DIR="$HOME/.config/manzolo-ssh-manager"
@@ -163,6 +163,24 @@ validate_config() {
     return 0
 }
 
+# Get server index by name
+get_server_index_by_name() {
+    local server_name="$1"
+    local server_count
+    server_count=$(yq eval '.servers | length' "$CONFIG_FILE")
+    
+    for ((i=0; i<server_count; i++)); do
+        local name
+        name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
+        if [[ "$name" == "$server_name" ]]; then
+            echo "$i"
+            return 0
+        fi
+    done
+    
+    return 1
+}
+
 # Check for SSH key existence
 check_ssh_key() {
     if [[ ! -f "$HOME/.ssh/id_rsa.pub" ]]; then
@@ -217,7 +235,8 @@ handle_ssh_action() {
             local display_text="$name ($user@$host:$port)"
             [[ -n "$description" && "$description" != "null" ]] && display_text="$display_text - $description"
             
-            menu_items+=("$i" "$display_text")
+            # Usa il nome del server come identificatore invece dell'indice
+            menu_items+=("$name" "$display_text")
         done
         
         menu_items+=("T" "🔍 Test connectivity")
@@ -225,19 +244,95 @@ handle_ssh_action() {
         
         local choice
         choice=$(dialog --clear --title "SSH Manager - $action" --menu \
-            "Select a server:\n(Use arrow keys and press Enter)" \
+            "Select a server:\n(Use arrow keys and press Enter, or type to search)" \
             20 80 10 "${menu_items[@]}" 2>&1 >/dev/tty)
         
         case "$choice" in
             ""|"Q") clear; return ;;
             "T") test_connectivity_menu; continue ;;
             *)
-                if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -lt "$server_count" ]]; then
-                    execute_ssh_action "$action" "$choice"
+                # Trova l'indice del server dal nome
+                local server_index
+                server_index=$(get_server_index_by_name "$choice")
+                if [[ $? -eq 0 ]]; then
+                    execute_ssh_action "$action" "$server_index"
                 fi
                 ;;
         esac
     done
+}
+
+# Check for required packages
+check_sshfs_mc() {
+    local missing_packages=()
+    
+    if ! command -v sshfs &> /dev/null; then
+        missing_packages+=("sshfs")
+    fi
+    
+    if ! command -v mc &> /dev/null; then
+        missing_packages+=("mc")
+    fi
+    
+    if [[ ${#missing_packages[@]} -gt 0 ]]; then
+        local packages_list=$(printf ", %s" "${missing_packages[@]}")
+        packages_list=${packages_list:2}  # Remove leading ", "
+        
+        dialog --title "Missing Packages" --yesno \
+            "The following packages are required for SSHFS+MC functionality:\n\n$packages_list\n\nWould you like to install them now?" \
+            12 60
+        
+        if [[ $? -eq 0 ]]; then
+            install_sshfs_mc_packages "${missing_packages[@]}"
+            return $?
+        else
+            return 1
+        fi
+    fi
+    
+    return 0
+}
+
+# Install SSHFS and MC packages
+install_sshfs_mc_packages() {
+    local packages=("$@")
+    
+    print_message "$BLUE" "🔧 Installing packages: ${packages[*]}..."
+    
+    local pkg_manager=""
+    if command -v apt >/dev/null 2>&1; then
+        pkg_manager="apt"
+    elif command -v yum >/dev/null 2>&1; then
+        pkg_manager="yum"
+    elif command -v dnf >/dev/null 2>&1; then
+        pkg_manager="dnf"
+    elif command -v pacman >/dev/null 2>&1; then
+        pkg_manager="pacman"
+    else
+        print_message "$RED" "❌ No supported package manager found"
+        return 1
+    fi
+    
+    case "$pkg_manager" in
+        "apt")
+            sudo apt update -qq && sudo apt install -qqy "${packages[@]}"
+            ;;
+        "yum")
+            sudo yum install -y "${packages[@]}"
+            ;;
+        "dnf")
+            sudo dnf install -y "${packages[@]}"
+            ;;
+        "pacman")
+            sudo pacman -Syu --noconfirm "${packages[@]}"
+            ;;
+    esac || {
+        print_message "$RED" "❌ Error installing packages: ${packages[*]}"
+        return 1
+    }
+    
+    print_message "$GREEN" "✅ Packages installed successfully"
+    return 0
 }
 
 # Execute specific SSH action
@@ -277,23 +372,120 @@ execute_ssh_action() {
             sftp $ssh_options -P "$port" "$user@$host" 2> ssh_error.log
             local status=$?
             ;;
+        "sshfs-mc")
+            if ! check_sshfs_mc; then
+                print_message "$RED" "❌ Required packages not available"
+                print_message "$YELLOW" "\nPress ENTER to continue..."
+                read -r
+                return 1
+            fi
+            
+            execute_sshfs_mc "$name" "$host" "$user" "$port" "$ssh_options"
+            local status=$?
+            ;;
     esac
     
     if [[ $status -ne 0 ]]; then
-        print_message "$RED" "❌ Error during $action: $(cat ssh_error.log)"
-        log_message "ERROR" "$action failed on $user@$host:$port - $(cat ssh_error.log)"
+        print_message "$RED" "❌ Error during $action: $(cat ssh_error.log 2>/dev/null || echo 'Unknown error')"
+        log_message "ERROR" "$action failed on $user@$host:$port - $(cat ssh_error.log 2>/dev/null || echo 'Unknown error')"
         rm -f ssh_error.log
     else
         case "$action" in
             "ssh") print_message "$GREEN" "✅ SSH connection terminated successfully" ;;
             "ssh-copy-id") print_message "$GREEN" "✅ SSH key copied successfully" ;;
             "sftp") print_message "$GREEN" "✅ SFTP session terminated" ;;
+            "sshfs-mc") print_message "$GREEN" "✅ SSHFS+MC session completed" ;;
         esac
         log_message "INFO" "Operation $action completed successfully on $user@$host:$port"
     fi
     
-    print_message "$YELLOW" "\nPress ENTER to continue..."
-    read -r
+    if [[ "$action" != "sshfs-mc" ]]; then
+        print_message "$YELLOW" "\nPress ENTER to continue..."
+        read -r
+    fi
+}
+
+# Execute SSHFS + MC
+execute_sshfs_mc() {
+    local name="$1"
+    local host="$2"
+    local user="$3"
+    local port="$4"
+    local ssh_options="$5"
+    
+    # Create mount point
+    local mount_point="/tmp/sshfs-${name// /_}-$"
+    mkdir -p "$mount_point" || {
+        print_message "$RED" "❌ Cannot create mount point: $mount_point"
+        return 1
+    }
+    
+    print_message "$BLUE" "🔗 Mounting remote filesystem: $user@$host:$port ($name)..."
+    print_message "$BLUE" "📂 Mount point: $mount_point"
+    
+    # SSHFS mount options
+    local sshfs_options="-p $port"
+    if [[ -n "$ssh_options" && "$ssh_options" != "null" ]]; then
+        sshfs_options="$sshfs_options -o ssh_command='ssh $ssh_options'"
+    fi
+    
+    # Add common SSHFS options for better experience
+    sshfs_options="$sshfs_options -o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3"
+    
+    # Mount the remote filesystem
+    if sshfs $sshfs_options "$user@$host:/" "$mount_point" 2> sshfs_error.log; then
+        print_message "$GREEN" "✅ Remote filesystem mounted successfully"
+        log_message "INFO" "SSHFS mount successful: $user@$host:/ -> $mount_point"
+        
+        print_message "$BLUE" "🗂️  Starting Midnight Commander..."
+        print_message "$YELLOW" "💡 When you exit MC, the remote filesystem will be automatically unmounted"
+        
+        # Wait a moment to let user read the message
+        sleep 2
+        
+        # Start Midnight Commander
+        mc "$mount_point" 2> mc_error.log
+        local mc_status=$?
+        
+        # Unmount the filesystem
+        print_message "$BLUE" "🔌 Unmounting remote filesystem..."
+        if fusermount -u "$mount_point" 2> unmount_error.log; then
+            print_message "$GREEN" "✅ Remote filesystem unmounted successfully"
+            log_message "INFO" "SSHFS unmount successful: $mount_point"
+        else
+            print_message "$YELLOW" "⚠️  Warning during unmount: $(cat unmount_error.log)"
+            log_message "WARNING" "SSHFS unmount warning: $(cat unmount_error.log)"
+            # Try force unmount
+            if fusermount -uz "$mount_point" 2>/dev/null; then
+                print_message "$GREEN" "✅ Force unmount successful"
+            fi
+        fi
+        
+        # Clean up mount point
+        rmdir "$mount_point" 2>/dev/null
+        
+        # Clean up error logs
+        rm -f sshfs_error.log mc_error.log unmount_error.log
+        
+        if [[ $mc_status -eq 0 ]]; then
+            return 0
+        else
+            print_message "$YELLOW" "⚠️  MC exited with status: $mc_status"
+            return 0  # Non è necessariamente un errore
+        fi
+        
+    else
+        print_message "$RED" "❌ Failed to mount remote filesystem: $(cat sshfs_error.log)"
+        log_message "ERROR" "SSHFS mount failed: $user@$host:/ -> $mount_point - $(cat sshfs_error.log)"
+        
+        # Clean up
+        rmdir "$mount_point" 2>/dev/null
+        rm -f sshfs_error.log
+        
+        print_message "$YELLOW" "\nPress ENTER to continue..."
+        read -r
+        return 1
+    fi
 }
 
 # Connectivity test menu
@@ -312,7 +504,7 @@ test_connectivity_menu() {
         name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
         host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
         user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
-        menu_items+=("$i" "$name ($user@$host)")
+        menu_items+=("$name" "$name ($user@$host)")
     done
     
     local choice
@@ -320,16 +512,20 @@ test_connectivity_menu() {
         "Select server to test:" \
         15 60 8 "${menu_items[@]}" 2>&1 >/dev/tty)
     
-    if [[ -n "$choice" && "$choice" =~ ^[0-9]+$ ]]; then
-        local user host port
-        user=$(yq eval ".servers[$choice].user" "$CONFIG_FILE")
-        host=$(yq eval ".servers[$choice].host" "$CONFIG_FILE")
-        port=$(yq eval ".servers[$choice].port // 22" "$CONFIG_FILE")
-        
-        clear
-        test_ssh_connection "$user" "$host" "$port"
-        print_message "$YELLOW" "\nPress ENTER to continue..."
-        read -r
+    if [[ -n "$choice" ]]; then
+        local server_index
+        server_index=$(get_server_index_by_name "$choice")
+        if [[ $? -eq 0 ]]; then
+            local user host port
+            user=$(yq eval ".servers[$server_index].user" "$CONFIG_FILE")
+            host=$(yq eval ".servers[$server_index].host" "$CONFIG_FILE")
+            port=$(yq eval ".servers[$server_index].port // 22" "$CONFIG_FILE")
+            
+            clear
+            test_ssh_connection "$user" "$host" "$port"
+            print_message "$YELLOW" "\nPress ENTER to continue..."
+            read -r
+        fi
     fi
 }
 
@@ -337,15 +533,47 @@ test_connectivity_menu() {
 check_duplicate_server() {
     local host="$1"
     local user="$2"
+    local exclude_name="$3"  # Nome da escludere durante l'edit
     local server_count
     server_count=$(yq eval '.servers | length' "$CONFIG_FILE")
     
     for ((i=0; i<server_count; i++)); do
-        local existing_host existing_user
+        local existing_host existing_user existing_name
         existing_host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
         existing_user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
+        existing_name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
+        
+        # Skip se è il server che stiamo modificando
+        if [[ -n "$exclude_name" && "$existing_name" == "$exclude_name" ]]; then
+            continue
+        fi
+        
         if [[ "$existing_host" == "$host" && "$existing_user" == "$user" ]]; then
             dialog --title "Error" --msgbox "Server with host '$host' and user '$user' already exists!" 8 50
+            return 1
+        fi
+    done
+    return 0
+}
+
+# Check for duplicate server name
+check_duplicate_name() {
+    local name="$1"
+    local exclude_name="$2"  # Nome da escludere durante l'edit
+    local server_count
+    server_count=$(yq eval '.servers | length' "$CONFIG_FILE")
+    
+    for ((i=0; i<server_count; i++)); do
+        local existing_name
+        existing_name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
+        
+        # Skip se è il server che stiamo modificando
+        if [[ -n "$exclude_name" && "$existing_name" == "$exclude_name" ]]; then
+            continue
+        fi
+        
+        if [[ "$existing_name" == "$name" ]]; then
+            dialog --title "Error" --msgbox "Server name '$name' already exists!" 8 50
             return 1
         fi
     done
@@ -358,6 +586,11 @@ add_server() {
     
     name=$(dialog --inputbox "Server name:" 10 60 2>&1 >/dev/tty) || return
     [[ -z "$name" ]] && return
+    
+    # Check for duplicate name
+    if ! check_duplicate_name "$name"; then
+        return 1
+    fi
     
     host=$(dialog --inputbox "Server address (host/IP):" 10 60 2>&1 >/dev/tty) || return
     [[ -z "$host" ]] && return
@@ -420,7 +653,7 @@ edit_server() {
         name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
         host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
         user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
-        menu_items+=("$i" "$name ($user@$host)")
+        menu_items+=("$name" "$name ($user@$host)")
     done
     
     local choice
@@ -428,18 +661,33 @@ edit_server() {
         "Select server to edit:" \
         15 60 8 "${menu_items[@]}" 2>&1 >/dev/tty) || return
     
+    local server_index
+    server_index=$(get_server_index_by_name "$choice")
+    if [[ $? -ne 0 ]]; then
+        dialog --title "Error" --msgbox "Server not found!" 8 50
+        return 1
+    fi
+    
     local name host user port description ssh_options
-    name=$(yq eval ".servers[$choice].name" "$CONFIG_FILE")
-    host=$(yq eval ".servers[$choice].host" "$CONFIG_FILE")
-    user=$(yq eval ".servers[$choice].user" "$CONFIG_FILE")
-    port=$(yq eval ".servers[$choice].port // 22" "$CONFIG_FILE")
-    description=$(yq eval ".servers[$choice].description // \"\"" "$CONFIG_FILE")
-    ssh_options=$(yq eval ".servers[$choice].ssh_options // \"\"" "$CONFIG_FILE")
+    name=$(yq eval ".servers[$server_index].name" "$CONFIG_FILE")
+    host=$(yq eval ".servers[$server_index].host" "$CONFIG_FILE")
+    user=$(yq eval ".servers[$server_index].user" "$CONFIG_FILE")
+    port=$(yq eval ".servers[$server_index].port // 22" "$CONFIG_FILE")
+    description=$(yq eval ".servers[$server_index].description // \"\"" "$CONFIG_FILE")
+    ssh_options=$(yq eval ".servers[$server_index].ssh_options // \"\"" "$CONFIG_FILE")
     [[ "$description" == "null" ]] && description=""
     [[ "$ssh_options" == "null" ]] && ssh_options=""
     
     local new_name new_host new_user new_port new_description new_ssh_options
     new_name=$(dialog --inputbox "Server name:" 10 60 "$name" 2>&1 >/dev/tty) || return
+    
+    # Check for duplicate name only if changed
+    if [[ "$new_name" != "$name" ]]; then
+        if ! check_duplicate_name "$new_name" "$name"; then
+            return 1
+        fi
+    fi
+    
     new_host=$(dialog --inputbox "Server address:" 10 60 "$host" 2>&1 >/dev/tty) || return
     new_user=$(dialog --inputbox "Username:" 10 60 "$user" 2>&1 >/dev/tty) || return
     new_port=$(dialog --inputbox "SSH port:" 10 60 "$port" 2>&1 >/dev/tty) || return
@@ -452,27 +700,27 @@ edit_server() {
     fi
     
     if [[ "$new_host" != "$host" || "$new_user" != "$user" ]]; then
-        if ! check_duplicate_server "$new_host" "$new_user"; then
+        if ! check_duplicate_server "$new_host" "$new_user" "$name"; then
             return 1
         fi
     fi
     
     backup_config
-    yq eval ".servers[$choice].name = \"$new_name\"" -i "$CONFIG_FILE"
-    yq eval ".servers[$choice].host = \"$new_host\"" -i "$CONFIG_FILE"
-    yq eval ".servers[$choice].user = \"$new_user\"" -i "$CONFIG_FILE"
-    yq eval ".servers[$choice].port = $new_port" -i "$CONFIG_FILE"
+    yq eval ".servers[$server_index].name = \"$new_name\"" -i "$CONFIG_FILE"
+    yq eval ".servers[$server_index].host = \"$new_host\"" -i "$CONFIG_FILE"
+    yq eval ".servers[$server_index].user = \"$new_user\"" -i "$CONFIG_FILE"
+    yq eval ".servers[$server_index].port = $new_port" -i "$CONFIG_FILE"
     
     if [[ -n "$new_description" ]]; then
-        yq eval ".servers[$choice].description = \"$new_description\"" -i "$CONFIG_FILE"
+        yq eval ".servers[$server_index].description = \"$new_description\"" -i "$CONFIG_FILE"
     else
-        yq eval "del(.servers[$choice].description)" -i "$CONFIG_FILE"
+        yq eval "del(.servers[$server_index].description)" -i "$CONFIG_FILE"
     fi
     
     if [[ -n "$new_ssh_options" ]]; then
-        yq eval ".servers[$choice].ssh_options = \"$new_ssh_options\"" -i "$CONFIG_FILE"
+        yq eval ".servers[$server_index].ssh_options = \"$new_ssh_options\"" -i "$CONFIG_FILE"
     else
-        yq eval "del(.servers[$choice].ssh_options)" -i "$CONFIG_FILE"
+        yq eval "del(.servers[$server_index].ssh_options)" -i "$CONFIG_FILE"
     fi
     
     dialog --title "Success" --msgbox "Server edited successfully!" 8 50
@@ -496,7 +744,7 @@ remove_server() {
         host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
         user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
         port=$(yq eval ".servers[$i].port // 22" "$CONFIG_FILE")
-        menu_items+=("$i" "$name ($user@$host:$port)")
+        menu_items+=("$name" "$name ($user@$host:$port)")
     done
     
     local choice
@@ -504,18 +752,25 @@ remove_server() {
         "Select server to remove:" \
         15 70 8 "${menu_items[@]}" 2>&1 >/dev/tty) || return
     
+    local server_index
+    server_index=$(get_server_index_by_name "$choice")
+    if [[ $? -ne 0 ]]; then
+        dialog --title "Error" --msgbox "Server not found!" 8 50
+        return 1
+    fi
+    
     local name host user port
-    name=$(yq eval ".servers[$choice].name" "$CONFIG_FILE")
-    host=$(yq eval ".servers[$choice].host" "$CONFIG_FILE")
-    user=$(yq eval ".servers[$choice].user" "$CONFIG_FILE")
-    port=$(yq eval ".servers[$choice].port // 22" "$CONFIG_FILE")
+    name=$(yq eval ".servers[$server_index].name" "$CONFIG_FILE")
+    host=$(yq eval ".servers[$server_index].host" "$CONFIG_FILE")
+    user=$(yq eval ".servers[$server_index].user" "$CONFIG_FILE")
+    port=$(yq eval ".servers[$server_index].port // 22" "$CONFIG_FILE")
     
     dialog --clear --title "Confirm Removal" --yesno \
         "Are you sure you want to remove this server?\n\nName: $name\nHost: $host\nUser: $user\nPort: $port" \
         12 60 || return
     
     backup_config
-    yq eval "del(.servers[$choice])" -i "$CONFIG_FILE"
+    yq eval "del(.servers[$server_index])" -i "$CONFIG_FILE"
     dialog --title "Success" --msgbox "Server removed successfully!" 8 50
     log_message "INFO" "Server removed: $name"
 }
@@ -560,17 +815,18 @@ show_server_info() {
 main_menu() {
     while true; do
         local choice
-        choice=$(dialog --clear --title "🔧 SSH Manager v2.1" --menu \
+        choice=$(dialog --clear --title "🔧 SSH Manager v2.2" --menu \
             "Select an option:\n(ESC to exit)" \
-            18 60 9 \
+            20 60 10 \
             "1" "🚀 Connect via SSH" \
             "2" "🔑 Copy SSH key" \
             "3" "📁 Connect via SFTP" \
-            "4" "➕ Add server" \
-            "5" "✏️  Edit server" \
-            "6" "🗑️  Remove server" \
-            "7" "ℹ️  Server information" \
-            "8" "🔧 Install prerequisites" \
+            "4" "🗂️  Browse with MC (SSHFS)" \
+            "5" "➕ Add server" \
+            "6" "✏️  Edit server" \
+            "7" "🗑️  Remove server" \
+            "8" "ℹ️  Server information" \
+            "9" "🔧 Install prerequisites" \
             "0" "🚪 Exit" 2>&1 >/dev/tty)
         
         case "$choice" in
@@ -578,11 +834,12 @@ main_menu() {
             "1" ) handle_ssh_action "ssh" ;;
             "2" ) handle_ssh_action "ssh-copy-id" ;;
             "3" ) handle_ssh_action "sftp" ;;
-            "4" ) add_server ;;
-            "5" ) edit_server ;;
-            "6" ) remove_server ;;
-            "7" ) show_server_info ;;
-            "8" ) install_prerequisites ;;
+            "4" ) handle_ssh_action "sshfs-mc" ;;
+            "5" ) add_server ;;
+            "6" ) edit_server ;;
+            "7" ) remove_server ;;
+            "8" ) show_server_info ;;
+            "9" ) install_prerequisites ;;
             "0" ) clear; exit 0 ;;
         esac
     done
@@ -598,7 +855,7 @@ main() {
     
     # Check prerequisites
     if ! command -v dialog &> /dev/null; then
-        print_message "$RED" "❌ Dialog is not installed. Run option 8 from the menu."
+        print_message "$RED" "❌ Dialog is not installed. Run option 9 from the menu."
         echo "Do you want to install the prerequisites now? (y/n)"
         read -r response
         if [[ "$response" =~ ^[Yy]$ ]]; then
@@ -609,7 +866,7 @@ main() {
     fi
     
     if ! command -v yq &> /dev/null; then
-        print_message "$RED" "❌ yq is not installed. Run option 8 from the menu."
+        print_message "$RED" "❌ yq is not installed. Run option 9 from the menu."
         echo "Do you want to install the prerequisites now? (y/n)"
         read -r response
         if [[ "$response" =~ ^[Yy]$ ]]; then

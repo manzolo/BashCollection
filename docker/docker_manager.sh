@@ -66,9 +66,9 @@ manage_containers() {
     while true; do
         CHOICE=$(whiptail --title "Container Management" --menu "Choose an option:" 16 70 8 \
             "1" "List all containers" \
-            "2" "Start a container" \
-            "3" "Stop a container" \
-            "4" "Remove a container" \
+            "2" "Start containers" \
+            "3" "Stop containers" \
+            "4" "Remove containers" \
             "5" "Remove ALL containers (FORCE)" \
             "6" "View container logs" \
             "7" "Access a container (bash)" \
@@ -93,67 +93,283 @@ list_containers() {
     whiptail --title "Existing Containers" --msgbox "$CONTAINERS" 20 100
 }
 
-# Start container
+# Start container (with multi-selection support)
 start_container() {
-    CONTAINERS=$(sudo docker ps -a --filter "status=exited" --format "{{.Names}}")
+    CONTAINERS=$(sudo docker ps -a --filter "status=exited" --format "{{.Names}} {{.Status}}")
     if [ -z "$CONTAINERS" ]; then
         whiptail --title "Info" --msgbox "No stopped containers found!" 8 50
         return
     fi
-    
-    OPTIONS=""
-    for container in $CONTAINERS; do
-        OPTIONS="$OPTIONS $container $container"
-    done
-    
-    SELECTED=$(whiptail --title "Start Container" --menu "Choose a container to start:" 15 70 8 $OPTIONS 3>&1 1>&2 2>&3)
-    if [ $? -eq 0 ]; then
-        sudo docker start $SELECTED
-        whiptail --title "Success" --msgbox "Container $SELECTED started!" 8 50
+
+    # Build whiptail checklist options
+    OPTIONS=()
+    counter=1
+
+    # Save mapping to a temporary file
+    TEMP_MAP=$(mktemp)
+
+    while read -r line; do
+        if [ -n "$line" ]; then
+            # Extract container name and status
+            CONTAINER_NAME=$(echo "$line" | awk '{print $1}')
+            CONTAINER_STATUS=$(echo "$line" | awk '{$1=""; print $0}' | xargs)
+
+            # Add to options array (tag, item, status)
+            OPTIONS+=("$counter" "$CONTAINER_NAME ($CONTAINER_STATUS)" "OFF")
+
+            # Save mapping
+            echo "$counter|$CONTAINER_NAME" >> "$TEMP_MAP"
+
+            counter=$((counter + 1))
+        fi
+    done <<< "$CONTAINERS"
+
+    # Show checklist for multiple selection
+    SELECTED=$(whiptail --title "Start Containers" --checklist \
+        "Select containers to start (use SPACE to select, ENTER to confirm):" \
+        20 90 10 "${OPTIONS[@]}" 3>&1 1>&2 2>&3)
+
+    if [ $? -eq 0 ] && [ -n "$SELECTED" ]; then
+        # Remove quotes from selected items
+        SELECTED=$(echo "$SELECTED" | tr -d '"')
+
+        # Count selected containers
+        SELECTED_COUNT=$(echo "$SELECTED" | wc -w)
+
+        # Build confirmation message with list of containers
+        CONFIRM_MSG="You selected $SELECTED_COUNT container(s) to start:\n\n"
+        for item in $SELECTED; do
+            CONTAINER_LINE=$(grep "^$item|" "$TEMP_MAP")
+            if [ -n "$CONTAINER_LINE" ]; then
+                CONTAINER_NAME=$(echo "$CONTAINER_LINE" | cut -d'|' -f2)
+                CONFIRM_MSG="${CONFIRM_MSG}• $CONTAINER_NAME\n"
+            fi
+        done
+        CONFIRM_MSG="${CONFIRM_MSG}\nStart these containers?"
+
+        if whiptail --title "Confirmation" --yesno "$CONFIRM_MSG" 18 80; then
+            # Start each selected container
+            SUCCESS_COUNT=0
+            FAILED_COUNT=0
+            FAILED_CONTAINERS=""
+
+            for item in $SELECTED; do
+                CONTAINER_LINE=$(grep "^$item|" "$TEMP_MAP")
+                if [ -n "$CONTAINER_LINE" ]; then
+                    CONTAINER_NAME=$(echo "$CONTAINER_LINE" | cut -d'|' -f2)
+
+                    # Try to start the container
+                    if sudo docker start "$CONTAINER_NAME" >/dev/null 2>&1; then
+                        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+                    else
+                        FAILED_COUNT=$((FAILED_COUNT + 1))
+                        FAILED_CONTAINERS="${FAILED_CONTAINERS}• $CONTAINER_NAME\n"
+                    fi
+                fi
+            done
+
+            # Show result summary
+            RESULT_MSG="Operation completed!\n\n"
+            RESULT_MSG="${RESULT_MSG}✓ Successfully started: $SUCCESS_COUNT container(s)\n"
+
+            if [ $FAILED_COUNT -gt 0 ]; then
+                RESULT_MSG="${RESULT_MSG}✗ Failed to start: $FAILED_COUNT container(s)\n\n"
+                RESULT_MSG="${RESULT_MSG}Failed containers:\n${FAILED_CONTAINERS}"
+                whiptail --title "Partial Success" --msgbox "$RESULT_MSG" 18 80
+            else
+                whiptail --title "Success" --msgbox "$RESULT_MSG" 10 60
+            fi
+        fi
     fi
+
+    # Clean up temporary file
+    rm -f "$TEMP_MAP"
 }
 
-# Stop container
+# Stop container (with multi-selection support)
 stop_container() {
-    CONTAINERS=$(sudo docker ps --format "{{.Names}}")
+    CONTAINERS=$(sudo docker ps --format "{{.Names}} {{.Status}}")
     if [ -z "$CONTAINERS" ]; then
         whiptail --title "Info" --msgbox "No running containers found!" 8 50
         return
     fi
-    
-    OPTIONS=""
-    for container in $CONTAINERS; do
-        OPTIONS="$OPTIONS $container $container"
-    done
-    
-    SELECTED=$(whiptail --title "Stop Container" --menu "Choose a container to stop:" 15 70 8 $OPTIONS 3>&1 1>&2 2>&3)
-    if [ $? -eq 0 ]; then
-        sudo docker stop $SELECTED
-        whiptail --title "Success" --msgbox "Container $SELECTED stopped!" 8 50
+
+    # Build whiptail checklist options
+    OPTIONS=()
+    counter=1
+
+    # Save mapping to a temporary file
+    TEMP_MAP=$(mktemp)
+
+    while read -r line; do
+        if [ -n "$line" ]; then
+            # Extract container name and status
+            CONTAINER_NAME=$(echo "$line" | awk '{print $1}')
+            CONTAINER_STATUS=$(echo "$line" | awk '{$1=""; print $0}' | xargs)
+
+            # Add to options array (tag, item, status)
+            OPTIONS+=("$counter" "$CONTAINER_NAME ($CONTAINER_STATUS)" "OFF")
+
+            # Save mapping
+            echo "$counter|$CONTAINER_NAME" >> "$TEMP_MAP"
+
+            counter=$((counter + 1))
+        fi
+    done <<< "$CONTAINERS"
+
+    # Show checklist for multiple selection
+    SELECTED=$(whiptail --title "Stop Containers" --checklist \
+        "Select containers to stop (use SPACE to select, ENTER to confirm):" \
+        20 90 10 "${OPTIONS[@]}" 3>&1 1>&2 2>&3)
+
+    if [ $? -eq 0 ] && [ -n "$SELECTED" ]; then
+        # Remove quotes from selected items
+        SELECTED=$(echo "$SELECTED" | tr -d '"')
+
+        # Count selected containers
+        SELECTED_COUNT=$(echo "$SELECTED" | wc -w)
+
+        # Build confirmation message with list of containers
+        CONFIRM_MSG="You selected $SELECTED_COUNT container(s) to stop:\n\n"
+        for item in $SELECTED; do
+            CONTAINER_LINE=$(grep "^$item|" "$TEMP_MAP")
+            if [ -n "$CONTAINER_LINE" ]; then
+                CONTAINER_NAME=$(echo "$CONTAINER_LINE" | cut -d'|' -f2)
+                CONFIRM_MSG="${CONFIRM_MSG}• $CONTAINER_NAME\n"
+            fi
+        done
+        CONFIRM_MSG="${CONFIRM_MSG}\nStop these containers?"
+
+        if whiptail --title "Confirmation" --yesno "$CONFIRM_MSG" 18 80; then
+            # Stop each selected container
+            SUCCESS_COUNT=0
+            FAILED_COUNT=0
+            FAILED_CONTAINERS=""
+
+            for item in $SELECTED; do
+                CONTAINER_LINE=$(grep "^$item|" "$TEMP_MAP")
+                if [ -n "$CONTAINER_LINE" ]; then
+                    CONTAINER_NAME=$(echo "$CONTAINER_LINE" | cut -d'|' -f2)
+
+                    # Try to stop the container
+                    if sudo docker stop "$CONTAINER_NAME" >/dev/null 2>&1; then
+                        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+                    else
+                        FAILED_COUNT=$((FAILED_COUNT + 1))
+                        FAILED_CONTAINERS="${FAILED_CONTAINERS}• $CONTAINER_NAME\n"
+                    fi
+                fi
+            done
+
+            # Show result summary
+            RESULT_MSG="Operation completed!\n\n"
+            RESULT_MSG="${RESULT_MSG}✓ Successfully stopped: $SUCCESS_COUNT container(s)\n"
+
+            if [ $FAILED_COUNT -gt 0 ]; then
+                RESULT_MSG="${RESULT_MSG}✗ Failed to stop: $FAILED_COUNT container(s)\n\n"
+                RESULT_MSG="${RESULT_MSG}Failed containers:\n${FAILED_CONTAINERS}"
+                whiptail --title "Partial Success" --msgbox "$RESULT_MSG" 18 80
+            else
+                whiptail --title "Success" --msgbox "$RESULT_MSG" 10 60
+            fi
+        fi
     fi
+
+    # Clean up temporary file
+    rm -f "$TEMP_MAP"
 }
 
-# Remove container
+# Remove container (with multi-selection support)
 remove_container() {
-    CONTAINERS=$(sudo docker ps -a --format "{{.Names}}")
+    CONTAINERS=$(sudo docker ps -a --format "{{.Names}} {{.Status}}")
     if [ -z "$CONTAINERS" ]; then
         whiptail --title "Info" --msgbox "No containers found!" 8 50
         return
     fi
-    
-    OPTIONS=""
-    for container in $CONTAINERS; do
-        STATUS=$(sudo docker ps -a --filter "name=$container" --format "{{.Status}}")
-        OPTIONS="$OPTIONS $container \"$STATUS\""
-    done
-    
-    SELECTED=$(whiptail --title "Remove Container" --menu "Choose a container to remove:" 15 70 8 $OPTIONS 3>&1 1>&2 2>&3)
-    if [ $? -eq 0 ]; then
-        if whiptail --title "Confirmation" --yesno "Are you sure you want to remove $SELECTED?" 8 50; then
-            sudo docker rm -f $SELECTED
-            whiptail --title "Success" --msgbox "Container $SELECTED removed!" 8 50
+
+    # Build whiptail checklist options
+    OPTIONS=()
+    counter=1
+
+    # Save mapping to a temporary file
+    TEMP_MAP=$(mktemp)
+
+    while read -r line; do
+        if [ -n "$line" ]; then
+            # Extract container name and status
+            CONTAINER_NAME=$(echo "$line" | awk '{print $1}')
+            CONTAINER_STATUS=$(echo "$line" | awk '{$1=""; print $0}' | xargs)
+
+            # Add to options array (tag, item, status)
+            OPTIONS+=("$counter" "$CONTAINER_NAME ($CONTAINER_STATUS)" "OFF")
+
+            # Save mapping
+            echo "$counter|$CONTAINER_NAME" >> "$TEMP_MAP"
+
+            counter=$((counter + 1))
+        fi
+    done <<< "$CONTAINERS"
+
+    # Show checklist for multiple selection
+    SELECTED=$(whiptail --title "Remove Containers" --checklist \
+        "Select containers to remove (use SPACE to select, ENTER to confirm):" \
+        20 90 10 "${OPTIONS[@]}" 3>&1 1>&2 2>&3)
+
+    if [ $? -eq 0 ] && [ -n "$SELECTED" ]; then
+        # Remove quotes from selected items
+        SELECTED=$(echo "$SELECTED" | tr -d '"')
+
+        # Count selected containers
+        SELECTED_COUNT=$(echo "$SELECTED" | wc -w)
+
+        # Build confirmation message with list of containers
+        CONFIRM_MSG="You selected $SELECTED_COUNT container(s) to remove:\n\n"
+        for item in $SELECTED; do
+            CONTAINER_LINE=$(grep "^$item|" "$TEMP_MAP")
+            if [ -n "$CONTAINER_LINE" ]; then
+                CONTAINER_NAME=$(echo "$CONTAINER_LINE" | cut -d'|' -f2)
+                CONFIRM_MSG="${CONFIRM_MSG}• $CONTAINER_NAME\n"
+            fi
+        done
+        CONFIRM_MSG="${CONFIRM_MSG}\nAre you sure you want to remove these containers?"
+
+        if whiptail --title "Confirmation" --yesno "$CONFIRM_MSG" 18 80; then
+            # Remove each selected container
+            SUCCESS_COUNT=0
+            FAILED_COUNT=0
+            FAILED_CONTAINERS=""
+
+            for item in $SELECTED; do
+                CONTAINER_LINE=$(grep "^$item|" "$TEMP_MAP")
+                if [ -n "$CONTAINER_LINE" ]; then
+                    CONTAINER_NAME=$(echo "$CONTAINER_LINE" | cut -d'|' -f2)
+
+                    # Try to remove the container (with force flag)
+                    if sudo docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1; then
+                        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+                    else
+                        FAILED_COUNT=$((FAILED_COUNT + 1))
+                        FAILED_CONTAINERS="${FAILED_CONTAINERS}• $CONTAINER_NAME\n"
+                    fi
+                fi
+            done
+
+            # Show result summary
+            RESULT_MSG="Operation completed!\n\n"
+            RESULT_MSG="${RESULT_MSG}✓ Successfully removed: $SUCCESS_COUNT container(s)\n"
+
+            if [ $FAILED_COUNT -gt 0 ]; then
+                RESULT_MSG="${RESULT_MSG}✗ Failed to remove: $FAILED_COUNT container(s)\n\n"
+                RESULT_MSG="${RESULT_MSG}Failed containers:\n${FAILED_CONTAINERS}"
+                whiptail --title "Partial Success" --msgbox "$RESULT_MSG" 18 80
+            else
+                whiptail --title "Success" --msgbox "$RESULT_MSG" 10 60
+            fi
         fi
     fi
+
+    # Clean up temporary file
+    rm -f "$TEMP_MAP"
 }
 
 # Force remove all containers
@@ -171,7 +387,7 @@ manage_images() {
     while true; do
         CHOICE=$(whiptail --title "Image Management" --menu "Choose an option:" 14 70 6 \
             "1" "List all images" \
-            "2" "Remove a specific image" \
+            "2" "Remove specific image" \
             "3" "Remove ALL images (FORCE)" \
             "4" "Remove dangling images" \
             "5" "Pull a new image" \
@@ -194,7 +410,7 @@ list_images() {
     whiptail --title "Docker Images" --msgbox "$IMAGES" 20 120
 }
 
-# Remove image
+# Remove image (with multi-selection support)
 remove_image() {
     # Create an array with images
     IMAGES=$(sudo docker images --format "{{.Repository}}:{{.Tag}} {{.ID}} {{.Size}}")
@@ -202,52 +418,91 @@ remove_image() {
         whiptail --title "Info" --msgbox "No images found!" 8 50
         return
     fi
-    
-    # Build whiptail options
+
+    # Build whiptail checklist options
     OPTIONS=()
     counter=1
-    
+
     # Save mapping to a temporary file
     TEMP_MAP=$(mktemp)
-    
+
     while read -r line; do
         if [ -n "$line" ]; then
             # Extract name, ID, and size
             IMAGE_NAME=$(echo "$line" | awk '{print $1}')
             IMAGE_ID=$(echo "$line" | awk '{print $2}')
             IMAGE_SIZE=$(echo "$line" | awk '{print $3}')
-            
-            # Add to options array
-            OPTIONS+=("$counter" "$IMAGE_NAME ($IMAGE_SIZE)")
-            
+
+            # Add to options array (tag, item, status)
+            OPTIONS+=("$counter" "$IMAGE_NAME ($IMAGE_SIZE)" "OFF")
+
             # Save mapping
             echo "$counter|$IMAGE_ID|$IMAGE_NAME" >> "$TEMP_MAP"
-            
+
             counter=$((counter + 1))
         fi
     done <<< "$IMAGES"
-    
-    # Show menu
-    SELECTED=$(whiptail --title "Remove Image" --menu "Choose image to remove:" 20 90 10 "${OPTIONS[@]}" 3>&1 1>&2 2>&3)
-    
+
+    # Show checklist for multiple selection
+    SELECTED=$(whiptail --title "Remove Images" --checklist \
+        "Select images to remove (use SPACE to select, ENTER to confirm):" \
+        20 90 10 "${OPTIONS[@]}" 3>&1 1>&2 2>&3)
+
     if [ $? -eq 0 ] && [ -n "$SELECTED" ]; then
-        # Retrieve selected image info
-        IMAGE_LINE=$(grep "^$SELECTED|" "$TEMP_MAP")
-        if [ -n "$IMAGE_LINE" ]; then
-            IMAGE_ID=$(echo "$IMAGE_LINE" | cut -d'|' -f2)
-            IMAGE_NAME=$(echo "$IMAGE_LINE" | cut -d'|' -f3)
-            
-            if whiptail --title "Confirmation" --yesno "Remove image:\n$IMAGE_NAME\n(ID: ${IMAGE_ID:0:12}...)?" 10 70; then
-                # Use ID for certainty
-                if sudo docker rmi -f "$IMAGE_ID" 2>/dev/null; then
-                    whiptail --title "Success" --msgbox "Image $IMAGE_NAME removed successfully!" 8 60
-                else
-                    whiptail --title "Error" --msgbox "Error removing image!\nIt might be in use by a container." 8 70
+        # Remove quotes from selected items
+        SELECTED=$(echo "$SELECTED" | tr -d '"')
+
+        # Count selected images
+        SELECTED_COUNT=$(echo "$SELECTED" | wc -w)
+
+        # Build confirmation message with list of images
+        CONFIRM_MSG="You selected $SELECTED_COUNT image(s) to remove:\n\n"
+        for item in $SELECTED; do
+            IMAGE_LINE=$(grep "^$item|" "$TEMP_MAP")
+            if [ -n "$IMAGE_LINE" ]; then
+                IMAGE_NAME=$(echo "$IMAGE_LINE" | cut -d'|' -f3)
+                IMAGE_ID=$(echo "$IMAGE_LINE" | cut -d'|' -f2)
+                CONFIRM_MSG="${CONFIRM_MSG}• $IMAGE_NAME (ID: ${IMAGE_ID:0:12})\n"
+            fi
+        done
+        CONFIRM_MSG="${CONFIRM_MSG}\nAre you sure you want to remove these images?"
+
+        if whiptail --title "Confirmation" --yesno "$CONFIRM_MSG" 18 80; then
+            # Remove each selected image
+            SUCCESS_COUNT=0
+            FAILED_COUNT=0
+            FAILED_IMAGES=""
+
+            for item in $SELECTED; do
+                IMAGE_LINE=$(grep "^$item|" "$TEMP_MAP")
+                if [ -n "$IMAGE_LINE" ]; then
+                    IMAGE_ID=$(echo "$IMAGE_LINE" | cut -d'|' -f2)
+                    IMAGE_NAME=$(echo "$IMAGE_LINE" | cut -d'|' -f3)
+
+                    # Try to remove the image
+                    if sudo docker rmi -f "$IMAGE_ID" 2>/dev/null; then
+                        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+                    else
+                        FAILED_COUNT=$((FAILED_COUNT + 1))
+                        FAILED_IMAGES="${FAILED_IMAGES}• $IMAGE_NAME\n"
+                    fi
                 fi
+            done
+
+            # Show result summary
+            RESULT_MSG="Operation completed!\n\n"
+            RESULT_MSG="${RESULT_MSG}✓ Successfully removed: $SUCCESS_COUNT image(s)\n"
+
+            if [ $FAILED_COUNT -gt 0 ]; then
+                RESULT_MSG="${RESULT_MSG}✗ Failed to remove: $FAILED_COUNT image(s)\n\n"
+                RESULT_MSG="${RESULT_MSG}Failed images (may be in use by containers):\n${FAILED_IMAGES}"
+                whiptail --title "Partial Success" --msgbox "$RESULT_MSG" 18 80
+            else
+                whiptail --title "Success" --msgbox "$RESULT_MSG" 10 60
             fi
         fi
     fi
-    
+
     # Clean up temporary file
     rm -f "$TEMP_MAP"
 }
@@ -488,37 +743,115 @@ remove_dangling_images() {
     whiptail --title "Completed" --msgbox "Dangling images removed!" 8 50
 }
 
+# Remove volume (with multi-selection support)
+remove_volume() {
+    VOLUMES=$(sudo docker volume ls --format "{{.Name}} {{.Driver}}")
+    if [ -z "$VOLUMES" ]; then
+        whiptail --title "Info" --msgbox "No volumes found!" 8 50
+        return
+    fi
+
+    # Build whiptail checklist options
+    OPTIONS=()
+    counter=1
+
+    # Save mapping to a temporary file
+    TEMP_MAP=$(mktemp)
+
+    while read -r line; do
+        if [ -n "$line" ]; then
+            # Extract volume name and driver
+            VOLUME_NAME=$(echo "$line" | awk '{print $1}')
+            VOLUME_DRIVER=$(echo "$line" | awk '{print $2}')
+
+            # Add to options array (tag, item, status)
+            OPTIONS+=("$counter" "$VOLUME_NAME (Driver: $VOLUME_DRIVER)" "OFF")
+
+            # Save mapping
+            echo "$counter|$VOLUME_NAME" >> "$TEMP_MAP"
+
+            counter=$((counter + 1))
+        fi
+    done <<< "$VOLUMES"
+
+    # Show checklist for multiple selection
+    SELECTED=$(whiptail --title "Remove Volumes" --checklist \
+        "Select volumes to remove (use SPACE to select, ENTER to confirm):" \
+        20 90 10 "${OPTIONS[@]}" 3>&1 1>&2 2>&3)
+
+    if [ $? -eq 0 ] && [ -n "$SELECTED" ]; then
+        # Remove quotes from selected items
+        SELECTED=$(echo "$SELECTED" | tr -d '"')
+
+        # Count selected volumes
+        SELECTED_COUNT=$(echo "$SELECTED" | wc -w)
+
+        # Build confirmation message with list of volumes
+        CONFIRM_MSG="You selected $SELECTED_COUNT volume(s) to remove:\n\n"
+        for item in $SELECTED; do
+            VOLUME_LINE=$(grep "^$item|" "$TEMP_MAP")
+            if [ -n "$VOLUME_LINE" ]; then
+                VOLUME_NAME=$(echo "$VOLUME_LINE" | cut -d'|' -f2)
+                CONFIRM_MSG="${CONFIRM_MSG}• $VOLUME_NAME\n"
+            fi
+        done
+        CONFIRM_MSG="${CONFIRM_MSG}\nWARNING: This will permanently delete all data in these volumes!\nAre you sure you want to remove them?"
+
+        if whiptail --title "Confirmation" --yesno "$CONFIRM_MSG" 18 80; then
+            # Remove each selected volume
+            SUCCESS_COUNT=0
+            FAILED_COUNT=0
+            FAILED_VOLUMES=""
+
+            for item in $SELECTED; do
+                VOLUME_LINE=$(grep "^$item|" "$TEMP_MAP")
+                if [ -n "$VOLUME_LINE" ]; then
+                    VOLUME_NAME=$(echo "$VOLUME_LINE" | cut -d'|' -f2)
+
+                    # Try to remove the volume
+                    if sudo docker volume rm "$VOLUME_NAME" >/dev/null 2>&1; then
+                        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+                    else
+                        FAILED_COUNT=$((FAILED_COUNT + 1))
+                        FAILED_VOLUMES="${FAILED_VOLUMES}• $VOLUME_NAME\n"
+                    fi
+                fi
+            done
+
+            # Show result summary
+            RESULT_MSG="Operation completed!\n\n"
+            RESULT_MSG="${RESULT_MSG}✓ Successfully removed: $SUCCESS_COUNT volume(s)\n"
+
+            if [ $FAILED_COUNT -gt 0 ]; then
+                RESULT_MSG="${RESULT_MSG}✗ Failed to remove: $FAILED_COUNT volume(s)\n\n"
+                RESULT_MSG="${RESULT_MSG}Failed volumes (may be in use):\n${FAILED_VOLUMES}"
+                whiptail --title "Partial Success" --msgbox "$RESULT_MSG" 18 80
+            else
+                whiptail --title "Success" --msgbox "$RESULT_MSG" 10 60
+            fi
+        fi
+    fi
+
+    # Clean up temporary file
+    rm -f "$TEMP_MAP"
+}
+
 # Volume management
 manage_volumes() {
     while true; do
         CHOICE=$(whiptail --title "Volume Management" --menu "Choose an option:" 12 70 4 \
             "1" "List volumes" \
-            "2" "Remove a volume" \
+            "2" "Remove volumes" \
             "3" "Remove unused volumes" \
             "0" "Go back" 3>&1 1>&2 2>&3)
         
         case $CHOICE in
-            1) 
+            1)
                 VOLUMES=$(sudo docker volume ls)
                 whiptail --title "Docker Volumes" --msgbox "$VOLUMES" 20 80
                 ;;
-            2)
-                VOLUMES=$(sudo docker volume ls --format "{{.Name}}")
-                if [ -n "$VOLUMES" ]; then
-                    OPTIONS=""
-                    for vol in $VOLUMES; do
-                        OPTIONS="$OPTIONS $vol $vol"
-                    done
-                    SELECTED=$(whiptail --title "Remove Volume" --menu "Choose volume:" 15 70 8 $OPTIONS 3>&1 1>&2 2>&3)
-                    if [ $? -eq 0 ]; then
-                        sudo docker volume rm $SELECTED
-                        whiptail --title "Success" --msgbox "Volume $SELECTED removed!" 8 50
-                    fi
-                else
-                    whiptail --title "Info" --msgbox "No volumes found!" 8 50
-                fi
-                ;;
-            3) 
+            2) remove_volume ;;
+            3)
                 sudo docker volume prune -f
                 whiptail --title "Completed" --msgbox "Unused volumes removed!" 8 50
                 ;;
@@ -527,12 +860,105 @@ manage_volumes() {
     done
 }
 
+# Remove network (with multi-selection support)
+remove_network() {
+    NETWORKS=$(sudo docker network ls --format "{{.Name}} {{.Driver}}" | grep -v "bridge\|host\|none")
+    if [ -z "$NETWORKS" ]; then
+        whiptail --title "Info" --msgbox "No custom networks found!" 8 50
+        return
+    fi
+
+    # Build whiptail checklist options
+    OPTIONS=()
+    counter=1
+
+    # Save mapping to a temporary file
+    TEMP_MAP=$(mktemp)
+
+    while read -r line; do
+        if [ -n "$line" ]; then
+            # Extract network name and driver
+            NETWORK_NAME=$(echo "$line" | awk '{print $1}')
+            NETWORK_DRIVER=$(echo "$line" | awk '{print $2}')
+
+            # Add to options array (tag, item, status)
+            OPTIONS+=("$counter" "$NETWORK_NAME (Driver: $NETWORK_DRIVER)" "OFF")
+
+            # Save mapping
+            echo "$counter|$NETWORK_NAME" >> "$TEMP_MAP"
+
+            counter=$((counter + 1))
+        fi
+    done <<< "$NETWORKS"
+
+    # Show checklist for multiple selection
+    SELECTED=$(whiptail --title "Remove Networks" --checklist \
+        "Select networks to remove (use SPACE to select, ENTER to confirm):" \
+        20 90 10 "${OPTIONS[@]}" 3>&1 1>&2 2>&3)
+
+    if [ $? -eq 0 ] && [ -n "$SELECTED" ]; then
+        # Remove quotes from selected items
+        SELECTED=$(echo "$SELECTED" | tr -d '"')
+
+        # Count selected networks
+        SELECTED_COUNT=$(echo "$SELECTED" | wc -w)
+
+        # Build confirmation message with list of networks
+        CONFIRM_MSG="You selected $SELECTED_COUNT network(s) to remove:\n\n"
+        for item in $SELECTED; do
+            NETWORK_LINE=$(grep "^$item|" "$TEMP_MAP")
+            if [ -n "$NETWORK_LINE" ]; then
+                NETWORK_NAME=$(echo "$NETWORK_LINE" | cut -d'|' -f2)
+                CONFIRM_MSG="${CONFIRM_MSG}• $NETWORK_NAME\n"
+            fi
+        done
+        CONFIRM_MSG="${CONFIRM_MSG}\nAre you sure you want to remove these networks?"
+
+        if whiptail --title "Confirmation" --yesno "$CONFIRM_MSG" 18 80; then
+            # Remove each selected network
+            SUCCESS_COUNT=0
+            FAILED_COUNT=0
+            FAILED_NETWORKS=""
+
+            for item in $SELECTED; do
+                NETWORK_LINE=$(grep "^$item|" "$TEMP_MAP")
+                if [ -n "$NETWORK_LINE" ]; then
+                    NETWORK_NAME=$(echo "$NETWORK_LINE" | cut -d'|' -f2)
+
+                    # Try to remove the network
+                    if sudo docker network rm "$NETWORK_NAME" >/dev/null 2>&1; then
+                        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+                    else
+                        FAILED_COUNT=$((FAILED_COUNT + 1))
+                        FAILED_NETWORKS="${FAILED_NETWORKS}• $NETWORK_NAME\n"
+                    fi
+                fi
+            done
+
+            # Show result summary
+            RESULT_MSG="Operation completed!\n\n"
+            RESULT_MSG="${RESULT_MSG}✓ Successfully removed: $SUCCESS_COUNT network(s)\n"
+
+            if [ $FAILED_COUNT -gt 0 ]; then
+                RESULT_MSG="${RESULT_MSG}✗ Failed to remove: $FAILED_COUNT network(s)\n\n"
+                RESULT_MSG="${RESULT_MSG}Failed networks (may be in use):\n${FAILED_NETWORKS}"
+                whiptail --title "Partial Success" --msgbox "$RESULT_MSG" 18 80
+            else
+                whiptail --title "Success" --msgbox "$RESULT_MSG" 10 60
+            fi
+        fi
+    fi
+
+    # Clean up temporary file
+    rm -f "$TEMP_MAP"
+}
+
 # Network management
 manage_networks() {
     while true; do
         CHOICE=$(whiptail --title "Network Management" --menu "Choose an option:" 12 70 4 \
             "1" "List networks" \
-            "2" "Remove a network" \
+            "2" "Remove networks" \
             "3" "Remove unused networks" \
             "0" "Go back" 3>&1 1>&2 2>&3)
         
@@ -541,22 +967,7 @@ manage_networks() {
                 NETWORKS=$(sudo docker network ls)
                 whiptail --title "Docker Networks" --msgbox "$NETWORKS" 20 80
                 ;;
-            2)
-                NETWORKS=$(sudo docker network ls --format "{{.Name}}" | grep -v "bridge\|host\|none")
-                if [ -n "$NETWORKS" ]; then
-                    OPTIONS=""
-                    for net in $NETWORKS; do
-                        OPTIONS="$OPTIONS $net $net"
-                    done
-                    SELECTED=$(whiptail --title "Remove Network" --menu "Choose network:" 15 70 8 $OPTIONS 3>&1 1>&2 2>&3)
-                    if [ $? -eq 0 ]; then
-                        sudo docker network rm $SELECTED
-                        whiptail --title "Success" --msgbox "Network $SELECTED removed!" 8 50
-                    fi
-                else
-                    whiptail --title "Info" --msgbox "No custom networks found!" 8 50
-                fi
-                ;;
+            2) remove_network ;;
             3)
                 sudo docker network prune -f
                 whiptail --title "Completed" --msgbox "Unused networks removed!" 8 50
