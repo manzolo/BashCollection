@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: vm-disk-manager
-# PKG_VERSION: 4.0.0
+# PKG_VERSION: 4.0.1
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -21,6 +21,8 @@
 #  - Interactive file browser for image contents
 #  - LUKS encryption support
 #  - LVM management
+#  - Enhanced UEFI support with persistent NVRAM storage
+#  - Cross-distribution OVMF firmware detection
 # PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
 # Main VM image management script

@@ -54,13 +54,24 @@ cleanup() {
     
     # Disconnect all NBD devices
     cleanup_nbd_devices
-    
+
+    # Clean up temporary NVRAM files (fallback files when persistent NVRAM fails)
+    local temp_nvram_files=$(find /tmp -maxdepth 1 -name "OVMF_VARS_*.fd" -type f 2>/dev/null)
+    if [ -n "$temp_nvram_files" ]; then
+        log "Cleaning up temporary NVRAM files"
+        echo "$temp_nvram_files" | while read -r nvram_file; do
+            if [ -f "$nvram_file" ]; then
+                rm -f "$nvram_file" 2>/dev/null && log "Removed temporary NVRAM: $nvram_file"
+            fi
+        done
+    fi
+
     # Remove NBD module if possible
     sleep 2
     if lsmod | grep -q nbd; then
         rmmod nbd 2>/dev/null || log "Failed to remove nbd module"
     fi
-    
+
     log "Cleanup completed"
     CLEANUP_DONE=true
 }

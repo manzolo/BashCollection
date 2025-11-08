@@ -176,6 +176,25 @@ handle_disk_ops_menu() {
     done
 }
 
+handle_nvram_reset() {
+    local file=$1
+    local nvram_dir="$HOME/.local/share/vm-disk-manager/nvram"
+    local vm_basename=$(basename "$file")
+    local nvram_file="$nvram_dir/${vm_basename}.nvram.fd"
+
+    if [ -f "$nvram_file" ]; then
+        if whiptail --title "Reset UEFI NVRAM" --yesno "This will reset all UEFI settings for this VM:\n\n- Boot order\n- Boot entries\n- UEFI configuration\n\nNVRAM file: $nvram_file\n\nAre you sure you want to reset?" 16 70; then
+            if reset_nvram "$file"; then
+                whiptail --msgbox "NVRAM has been reset successfully.\n\nThe VM will start with fresh UEFI settings on next UEFI boot." 10 60
+            else
+                whiptail --msgbox "Error resetting NVRAM.\n\nCheck log file: $LOG_FILE" 10 60
+            fi
+        fi
+    else
+        whiptail --msgbox "No NVRAM file found for this VM.\n\nNVRAM is created automatically when you boot in UEFI mode.\n\nExpected location:\n$nvram_file" 12 70
+    fi
+}
+
 handle_analysis_menu() {
     local file=$1
     while true; do
@@ -183,7 +202,8 @@ handle_analysis_menu() {
         local menu_items=(
             "1" "🔍 Analyze Structure"
             "2" "ℹ️  Detailed File Information"
-            "3" "🚪 Back to Main Menu"
+            "3" "🔧 Reset UEFI NVRAM"
+            "4" "🚪 Back to Main Menu"
         )
         local choice=$(whiptail --title "$menu_title" --menu "Select an analysis option:" 20 70 12 "${menu_items[@]}" 3>&1 1>&2 2>&3)
 
@@ -194,7 +214,10 @@ handle_analysis_menu() {
             2)
                 show_detailed_info "$file"
                 ;;
-            3|"")
+            3)
+                handle_nvram_reset "$file"
+                ;;
+            4|"")
                 return
                 ;;
         esac

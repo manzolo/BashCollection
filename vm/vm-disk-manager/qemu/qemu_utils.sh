@@ -23,23 +23,103 @@ check_kvm_support() {
 find_ovmf_firmware() {
     local ovmf_code=""
     local ovmf_vars=""
-    
-    if [ -f "/usr/share/OVMF/OVMF_CODE.fd" ]; then
-        ovmf_code="/usr/share/OVMF/OVMF_CODE.fd"
-        ovmf_vars="/usr/share/OVMF/OVMF_VARS.fd"
-    elif [ -f "/usr/share/ovmf/OVMF.fd" ]; then
-        ovmf_code="/usr/share/ovmf/OVMF.fd"
-    elif [ -f "/usr/share/edk2-ovmf/OVMF_CODE.fd" ]; then
-        ovmf_code="/usr/share/edk2-ovmf/OVMF_CODE.fd"
-        ovmf_vars="/usr/share/edk2-ovmf/OVMF_VARS.fd"
-    fi
-    
+    local searched_paths=()
+
+    # Common OVMF paths across different distributions
+    local ovmf_locations=(
+        # Debian/Ubuntu
+        "/usr/share/OVMF/OVMF_CODE.fd|/usr/share/OVMF/OVMF_VARS.fd"
+        "/usr/share/OVMF/OVMF_CODE_4M.fd|/usr/share/OVMF/OVMF_VARS_4M.fd"
+        # Debian/Ubuntu legacy
+        "/usr/share/ovmf/OVMF.fd|"
+        # Arch Linux
+        "/usr/share/edk2-ovmf/x64/OVMF_CODE.fd|/usr/share/edk2-ovmf/x64/OVMF_VARS.fd"
+        "/usr/share/edk2-ovmf/OVMF_CODE.fd|/usr/share/edk2-ovmf/OVMF_VARS.fd"
+        # Fedora/RHEL
+        "/usr/share/edk2/ovmf/OVMF_CODE.fd|/usr/share/edk2/ovmf/OVMF_VARS.fd"
+        "/usr/share/OVMF/OVMF_CODE.secboot.fd|/usr/share/OVMF/OVMF_VARS.fd"
+        # openSUSE
+        "/usr/share/qemu/ovmf-x86_64-code.bin|/usr/share/qemu/ovmf-x86_64-vars.bin"
+        # NixOS
+        "/run/libvirt/nix-ovmf/OVMF_CODE.fd|/run/libvirt/nix-ovmf/OVMF_VARS.fd"
+        # Gentoo
+        "/usr/share/edk2-ovmf/OVMF.fd|"
+    )
+
+    for location in "${ovmf_locations[@]}"; do
+        local code_path="${location%|*}"
+        local vars_path="${location#*|}"
+
+        searched_paths+=("$code_path")
+
+        if [ -f "$code_path" ]; then
+            ovmf_code="$code_path"
+            if [ -n "$vars_path" ] && [ -f "$vars_path" ]; then
+                ovmf_vars="$vars_path"
+            fi
+            log "Found OVMF firmware: CODE=$ovmf_code, VARS=${ovmf_vars:-none}" >> "$LOG_FILE"
+            break
+        fi
+    done
+
     if [ -z "$ovmf_code" ]; then
+        log "OVMF firmware not found. Searched paths: ${searched_paths[*]}" >> "$LOG_FILE"
         return 1
     fi
-    
+
     echo "$ovmf_code|$ovmf_vars"
     return 0
+}
+
+# Get or create persistent NVRAM file for a VM disk
+# This allows UEFI settings (boot order, etc.) to persist across VM reboots
+get_persistent_nvram() {
+    local vm_disk="$1"
+    local ovmf_vars_template="$2"
+
+    # Create NVRAM storage directory
+    local nvram_dir="$HOME/.local/share/vm-disk-manager/nvram"
+    if [ ! -d "$nvram_dir" ]; then
+        mkdir -p "$nvram_dir" 2>/dev/null || nvram_dir="/tmp/vm-disk-manager-nvram"
+        mkdir -p "$nvram_dir"
+        log "Created NVRAM storage directory: $nvram_dir" >> "$LOG_FILE"
+    fi
+
+    # Generate NVRAM filename based on VM disk path (sanitize the name)
+    local vm_basename=$(basename "$vm_disk")
+    local nvram_file="$nvram_dir/${vm_basename}.nvram.fd"
+
+    # If NVRAM file doesn't exist and we have a template, create it
+    if [ ! -f "$nvram_file" ] && [ -n "$ovmf_vars_template" ] && [ -f "$ovmf_vars_template" ]; then
+        cp "$ovmf_vars_template" "$nvram_file"
+        chmod 644 "$nvram_file"
+        log "Created new persistent NVRAM file: $nvram_file (from template: $ovmf_vars_template)" >> "$LOG_FILE"
+    elif [ -f "$nvram_file" ]; then
+        log "Using existing persistent NVRAM file: $nvram_file" >> "$LOG_FILE"
+    else
+        log "Warning: Could not create NVRAM file (no template available)" >> "$LOG_FILE"
+        return 1
+    fi
+
+    echo "$nvram_file"
+    return 0
+}
+
+# Reset NVRAM for a specific VM (delete the persistent NVRAM file)
+reset_nvram() {
+    local vm_disk="$1"
+    local nvram_dir="$HOME/.local/share/vm-disk-manager/nvram"
+    local vm_basename=$(basename "$vm_disk")
+    local nvram_file="$nvram_dir/${vm_basename}.nvram.fd"
+
+    if [ -f "$nvram_file" ]; then
+        rm -f "$nvram_file"
+        log "Removed NVRAM file: $nvram_file" >> "$LOG_FILE"
+        return 0
+    else
+        log "No NVRAM file found for: $vm_disk" >> "$LOG_FILE"
+        return 1
+    fi
 }
 
 # Setup network configuration
@@ -141,10 +221,18 @@ configure_uefi_boot() {
     local memory=${4:-2048}
     local network_mode=${5:-user}
     local audio_enabled=${6:-yes}
-    
+
     local ovmf_info=$(find_ovmf_firmware)
     if [ $? -ne 0 ]; then
-        whiptail --msgbox "OVMF firmware not found.\nPlease install the 'ovmf' package with:\nsudo apt install ovmf" 12 70
+        local install_cmd="sudo apt install ovmf"
+        if command -v dnf &>/dev/null; then
+            install_cmd="sudo dnf install edk2-ovmf"
+        elif command -v pacman &>/dev/null; then
+            install_cmd="sudo pacman -S edk2-ovmf"
+        elif command -v zypper &>/dev/null; then
+            install_cmd="sudo zypper install qemu-ovmf-x86_64"
+        fi
+        whiptail --msgbox "OVMF firmware not found.\n\nCommon installation commands:\nDebian/Ubuntu: sudo apt install ovmf\nFedora/RHEL: sudo dnf install edk2-ovmf\nArch Linux: sudo pacman -S edk2-ovmf\nopenSUSE: sudo zypper install qemu-ovmf-x86_64\n\nYour system: $install_cmd\n\nCheck log for searched paths: $LOG_FILE" 18 70
         return 1
     fi
     
@@ -152,7 +240,7 @@ configure_uefi_boot() {
     local ovmf_vars="${ovmf_info#*|}"
     local qemu_args=()
     local net_args=($(setup_network_args "$network_mode"))
-    
+
     qemu_args=(-drive "file=$file,format=$file_format,if=virtio,cache=writeback"
                -m "$memory"
                $kvm_option
@@ -166,16 +254,27 @@ configure_uefi_boot() {
                -serial "file:/tmp/qemu-serial-$$.log"
                -usb -device "usb-tablet"
                "${net_args[@]}")
-    
+
     if [ -n "$ovmf_vars" ] && [ "$ovmf_vars" != "$ovmf_code" ]; then
-        # Use separate CODE and VARS (more modern approach)
-        local temp_vars="/tmp/OVMF_VARS_$$.fd"
-        cp "$ovmf_vars" "$temp_vars"
-        qemu_args+=(-drive "if=pflash,format=raw,readonly=on,file=$ovmf_code"
-                   -drive "if=pflash,format=raw,file=$temp_vars")
+        # Use separate CODE and VARS (modern approach with persistent NVRAM)
+        local persistent_nvram=$(get_persistent_nvram "$file" "$ovmf_vars")
+        if [ $? -eq 0 ] && [ -f "$persistent_nvram" ]; then
+            # Use persistent NVRAM for this VM
+            qemu_args+=(-drive "if=pflash,format=raw,readonly=on,file=$ovmf_code"
+                       -drive "if=pflash,format=raw,file=$persistent_nvram")
+            log "Using persistent NVRAM: $persistent_nvram" >> "$LOG_FILE"
+        else
+            # Fallback to temporary NVRAM if persistent fails
+            local temp_vars="/tmp/OVMF_VARS_$$.fd"
+            cp "$ovmf_vars" "$temp_vars"
+            qemu_args+=(-drive "if=pflash,format=raw,readonly=on,file=$ovmf_code"
+                       -drive "if=pflash,format=raw,file=$temp_vars")
+            log "Warning: Using temporary NVRAM (persistent NVRAM creation failed): $temp_vars" >> "$LOG_FILE"
+        fi
     else
         # Use single OVMF file (legacy approach)
         qemu_args+=(-bios "$ovmf_code")
+        log "Using legacy OVMF single-file approach (no persistent NVRAM)" >> "$LOG_FILE"
     fi
     
     if [ "$audio_enabled" = "yes" ]; then
