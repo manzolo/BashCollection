@@ -21,7 +21,7 @@ A curated collection of Bash scripts for system administration, backups, cleanin
    ```bash
    sudo ./menage_scripts.sh install
    ```
-   - This makes all scripts available as commands (e.g., `backup_qemu_vms` instead of `./backup/backup_qemu_vms.sh`).
+   - This makes all scripts available as commands (e.g., `backup-qemu-vms` instead of `./backup/backup-qemu-vms.sh`).
    - You may need to restart your shell or run `source ~/.bashrc` for PATH changes to take effect.
 
 3. **Verify Installation**:
@@ -39,25 +39,25 @@ sudo ./menage_scripts.sh uninstall
 
 ## Usage
 
-After installation, run scripts directly from the terminal (e.g., `docker_manager`). Most scripts include help messages or TUIs (text-based UIs via `whiptail`).
+After installation, run scripts directly from the terminal (e.g., `docker-manager`). Most scripts include help messages or TUIs (text-based UIs via `whiptail`).
 
 ### Brief Overview of Commands
 
-- **backup_qemu_vms**: Backs up QEMU virtual machines, including XML configs and disk images. Usage: `backup_qemu_vms <backup_dir>`. Includes shutdown, copy, and MD5 verification.
+- **backup-qemu-vms**: Backs up QEMU virtual machines, including XML configs and disk images. Usage: `backup-qemu-vms <backup_dir>`. Includes shutdown, copy, and MD5 verification.
   
-- **manzolo_backup_home**: Backs up multiple directories (e.g., `/home`, `/etc`) using `rsync` with incremental support, exclusions, and sudo for root files. Usage: `manzolo_backup_home <dest_disk> [username] [options]`. Options: `--dry-run`, `--verbose`.
+- **manzolo-backup-home**: Backs up multiple directories (e.g., `/home`, `/etc`) using `rsync` with incremental support, exclusions, and sudo for root files. Usage: `manzolo-backup-home <dest_disk> [username] [options]`. Options: `--dry-run`, `--verbose`.
 
-- **update_docker_compose**: Scans subdirectories for Docker Compose files, pulls updates, and optionally restarts projects. Interactive prompts for confirmation.
+- **update-docker-compose**: Scans subdirectories for Docker Compose files, pulls updates, and optionally restarts projects. Interactive prompts for confirmation.
 
-- **docker_manager**: TUI-based Docker management: containers, images, volumes, networks, cleanup, stats, backups, and Compose integration. Requires `whiptail`.
+- **docker-manager**: TUI-based Docker management: containers, images, volumes, networks, cleanup, stats, backups, and Compose integration. Requires `whiptail`.
 
 - **one2code**: Extracts and restores individual files from a merged code file (e.g., `code_merged.txt`). Usage: `one2code <cumulative_file>`.
 
-- **server_monitor**: Displays a colorful system dashboard with CPU/memory/disk usage, processes, Docker stats, and more. Run without arguments for a one-time report.
+- **server-monitor**: Displays a colorful system dashboard with CPU/memory/disk usage, processes, Docker stats, and more. Run without arguments for a one-time report.
 
-- **systemd_manager**: TUI for managing systemd services: list, view, start/stop/restart, enable/disable, delete. Requires `whiptail`.
+- **systemd-manager**: TUI for managing systemd services: list, view, start/stop/restart, enable/disable, delete. Requires `whiptail`.
 
-- **manzolo_cleaner**: Advanced cleaner with TUI for Docker/Ubuntu: prune resources, remove packages/logs/caches, show stats. Run without arguments to start the menu.
+- **manzolo-cleaner**: Advanced cleaner with TUI for Docker/Ubuntu: prune resources, remove packages/logs/caches, show stats. Run without arguments to start the menu.
 
 - **ventoy_tester**: (From utils) Tests Ventoy USB boot in QEMU with UEFI/BIOS modes, diagnostics, and configs. Requires QEMU and related deps.
 

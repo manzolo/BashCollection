@@ -1,4 +1,26 @@
 #!/bin/bash
+# PKG_NAME: pi-emulate
+# PKG_VERSION: 4.3.0
+# PKG_SECTION: utils
+# PKG_PRIORITY: optional
+# PKG_ARCHITECTURE: all
+# PKG_DEPENDS: bash (>= 4.0), whiptail, qemu-system-arm, qemu-utils, wget, unzip
+# PKG_RECOMMENDS: qemu-system-gui, pulseaudio
+# PKG_SUGGESTS: curl
+# PKG_MAINTAINER: Manzolo <manzolo@libero.it>
+# PKG_DESCRIPTION: Complete Raspberry Pi emulation manager for QEMU
+# PKG_LONG_DESCRIPTION: Advanced TUI tool for managing Raspberry Pi OS emulation in QEMU.
+#  .
+#  Features:
+#  - Download and manage Raspberry Pi OS images
+#  - Auto-download compatible QEMU kernels and DTBs
+#  - Create and manage VM instances with snapshots
+#  - Configure memory, SSH, VNC, and audio settings
+#  - Support for multiple Raspbian versions (Jessie to Bullseye)
+#  - Instance cloning and snapshot management
+#  - Interactive whiptail-based interface
+#  - Comprehensive logging and error handling
+# PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
 set -e
 

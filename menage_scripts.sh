@@ -213,20 +213,22 @@ show_interactive_menu() {
     echo ""
     
     local options=(
-        "🔧 Install Scripts" 
-        "🗑️  Uninstall Scripts" 
-        "📋 List Available Scripts" 
-        "🚀 Run a Script" 
-        "🔍 Debug Information" 
+        "🔧 Install Scripts"
+        "🗑️  Uninstall Scripts"
+        "📋 List Available Scripts"
+        "🚀 Run a Script"
+        "📦 Build & Publish to Repository"
+        "🔍 Debug Information"
         "🔄 Update Scripts from Git"
         "❌ Exit"
     )
-    
+
     local commands=(
         "install_menu"
-        "uninstall_menu" 
+        "uninstall_menu"
         "list_menu"
         "run_script_menu"
+        "publish_menu"
         "debug_menu"
         "update_menu"
         "exit"
@@ -458,10 +460,180 @@ install_self() {
     fi
 }
 
+install_single_script() {
+    local script_name="$1"
+    local debug_mode="${2:-false}"
+
+    if [ -z "$script_name" ]; then
+        echo -e "${RED}✖ No script name provided${NC}"
+        return 1
+    fi
+
+    echo -e "${BLUE}>>> Installing single script: ${YELLOW}$script_name${NC}"
+
+    # Load patterns and find the script
+    load_ignore_patterns "$debug_mode"
+    load_name_mappings "$debug_mode"
+    find_executable_scripts "$debug_mode"
+
+    # Find the matching script
+    local found_script=""
+    local found_name=""
+    for script_path in "${INCLUDED_FILES[@]}"; do
+        local cmd_name=$(get_command_name "$script_path")
+        local default_name=$(get_default_command_name "$script_path")
+
+        if [ "$cmd_name" = "$script_name" ] || [ "$default_name" = "$script_name" ]; then
+            found_script="$script_path"
+            found_name="$cmd_name"
+            break
+        fi
+    done
+
+    if [ -z "$found_script" ]; then
+        echo -e "${RED}✖ Script not found: $script_name${NC}"
+        echo -e "${YELLOW}Run './menage_scripts.sh list' to see available scripts${NC}"
+        return 1
+    fi
+
+    echo -e "${GREEN}✔ Found: ${CYAN}$found_name${NC} ${BLUE}(${found_script#$SCRIPT_DIR/})${NC}"
+
+    # Create directories if needed
+    mkdir -p "$SCRIPT_BASE_DIR"
+
+    # Copy the script and its dependencies
+    local script_dir="$(dirname "$found_script")"
+    local relative_dir="${script_dir#$SCRIPT_DIR/}"
+
+    # Copy the entire directory structure for this script
+    if [ "$relative_dir" != "." ]; then
+        mkdir -p "$SCRIPT_BASE_DIR/$relative_dir"
+        cp -r "$script_dir"/* "$SCRIPT_BASE_DIR/$relative_dir/"
+        chmod -R 755 "$SCRIPT_BASE_DIR/$relative_dir"
+        if [ "$debug_mode" = "true" ]; then
+            echo -e "  ${CYAN}Copied directory: $relative_dir${NC}"
+        fi
+    else
+        cp "$found_script" "$SCRIPT_BASE_DIR/"
+        chmod 755 "$SCRIPT_BASE_DIR/$(basename "$found_script")"
+    fi
+
+    # Create symlinks
+    local target_path="$SCRIPT_BASE_DIR/${found_script#$SCRIPT_DIR/}"
+    local default_name=$(get_default_command_name "$found_script")
+    local relative_path="${found_script#$SCRIPT_DIR/}"
+    local has_mapping="${NAME_MAPPINGS[$relative_path]:+1}"
+
+    # Create main symlink (mapped or default)
+    if command -v "$found_name" >/dev/null 2>&1 && [ ! -L "$INSTALL_DIR/$found_name" ]; then
+        echo -e "  ${RED}⚠ Warning: '$found_name' conflicts with system command. Skipping.${NC}"
+    else
+        ln -sf "$target_path" "$INSTALL_DIR/$found_name"
+        echo -e "  ${GREEN}✔ Symlink created:${NC} ${YELLOW}$found_name${NC}"
+    fi
+
+    # Create original name symlink if different
+    if [ -n "$has_mapping" ] && [ "$found_name" != "$default_name" ]; then
+        if command -v "$default_name" >/dev/null 2>&1 && [ ! -L "$INSTALL_DIR/$default_name" ]; then
+            echo -e "  ${RED}⚠ Warning: '$default_name' conflicts with system command. Skipping.${NC}"
+        else
+            ln -sf "$target_path" "$INSTALL_DIR/$default_name"
+            echo -e "  ${GREEN}✔ Symlink created:${NC} ${YELLOW}$default_name${NC} ${CYAN}(original)${NC}"
+        fi
+    fi
+
+    echo -e "\n${GREEN}Installation complete!${NC} ${YELLOW}$script_name${NC} is now available in your PATH."
+    echo -e "Run '${BOLD}$found_name --help${NC}' to get started."
+}
+
+uninstall_single_script() {
+    local script_name="$1"
+    local debug_mode="${2:-false}"
+
+    if [ -z "$script_name" ]; then
+        echo -e "${RED}✖ No script name provided${NC}"
+        return 1
+    fi
+
+    echo -e "${BLUE}>>> Uninstalling single script: ${YELLOW}$script_name${NC}"
+
+    # Load patterns and find the script
+    load_ignore_patterns "$debug_mode"
+    load_name_mappings "$debug_mode"
+    find_executable_scripts "$debug_mode"
+
+    # Find the matching script
+    local found_script=""
+    local found_name=""
+    for script_path in "${INCLUDED_FILES[@]}"; do
+        local cmd_name=$(get_command_name "$script_path")
+        local default_name=$(get_default_command_name "$script_path")
+
+        if [ "$cmd_name" = "$script_name" ] || [ "$default_name" = "$script_name" ]; then
+            found_script="$script_path"
+            found_name="$cmd_name"
+            break
+        fi
+    done
+
+    if [ -z "$found_script" ]; then
+        echo -e "${RED}✖ Script not found: $script_name${NC}"
+        return 1
+    fi
+
+    echo -e "${GREEN}✔ Found: ${CYAN}$found_name${NC} ${BLUE}(${found_script#$SCRIPT_DIR/})${NC}"
+
+    local default_name=$(get_default_command_name "$found_script")
+    local relative_path="${found_script#$SCRIPT_DIR/}"
+    local has_mapping="${NAME_MAPPINGS[$relative_path]:+1}"
+
+    # Remove main symlink
+    if [ -L "$INSTALL_DIR/$found_name" ]; then
+        rm "$INSTALL_DIR/$found_name"
+        echo -e "  ${RED}✖ Symlink removed:${NC} ${YELLOW}$found_name${NC}"
+    else
+        echo -e "  ${YELLOW}→ Symlink not found:${NC} ${YELLOW}$found_name${NC}"
+    fi
+
+    # Remove original name symlink if different
+    if [ -n "$has_mapping" ] && [ "$found_name" != "$default_name" ]; then
+        if [ -L "$INSTALL_DIR/$default_name" ]; then
+            rm "$INSTALL_DIR/$default_name"
+            echo -e "  ${RED}✖ Symlink removed:${NC} ${YELLOW}$default_name${NC} ${CYAN}(original)${NC}"
+        else
+            echo -e "  ${YELLOW}→ Symlink not found:${NC} ${YELLOW}$default_name${NC}"
+        fi
+    fi
+
+    echo -e "\n${GREEN}Uninstallation complete!${NC} ${YELLOW}$script_name${NC} has been removed."
+}
+
 install_scripts() {
     local debug_mode="false"
-    if [ "$1" = "--debug" ]; then
-        debug_mode="true"
+    local package_name=""
+
+    # Parse arguments
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --debug)
+                debug_mode="true"
+                shift
+                ;;
+            *)
+                package_name="$1"
+                shift
+                ;;
+        esac
+    done
+
+    # If a specific package is requested, install only that
+    if [ -n "$package_name" ]; then
+        install_single_script "$package_name" "$debug_mode"
+        return $?
+    fi
+
+    # Otherwise, install all scripts (original behavior)
+    if [ "$debug_mode" = "true" ]; then
         echo -e "${BLUE}>>> Installing scripts with debug output${NC}"
     else
         echo -e "${BLUE}>>> Installing executable scripts into: $SCRIPT_BASE_DIR and $INSTALL_DIR${NC}"
@@ -538,8 +710,30 @@ install_scripts() {
 
 uninstall_scripts() {
     local debug_mode="false"
-    if [ "$1" = "--debug" ]; then
-        debug_mode="true"
+    local package_name=""
+
+    # Parse arguments
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --debug)
+                debug_mode="true"
+                shift
+                ;;
+            *)
+                package_name="$1"
+                shift
+                ;;
+        esac
+    done
+
+    # If a specific package is requested, uninstall only that
+    if [ -n "$package_name" ]; then
+        uninstall_single_script "$package_name" "$debug_mode"
+        return $?
+    fi
+
+    # Otherwise, uninstall all scripts (original behavior)
+    if [ "$debug_mode" = "true" ]; then
         echo -e "${BLUE}>>> Uninstalling scripts with debug output${NC}"
     else
         echo -e "${BLUE}>>> Uninstalling scripts from: $INSTALL_DIR and $SCRIPT_BASE_DIR${NC}"
@@ -746,7 +940,7 @@ update_scripts() {
         git -C "$SCRIPT_DIR" pull
         PULL_RESULT=$?
     fi
-    
+
     if [ $PULL_RESULT -eq 0 ]; then
         echo -e "${GREEN}✔ Git pull successful!${NC}"
         echo -e "${YELLOW}>> Re-running installation to update scripts...${NC}"
@@ -755,6 +949,827 @@ update_scripts() {
         echo -e "${RED}✖ Git pull failed. Please check your network connection or repository status.${NC}"
         exit 1
     fi
+}
+
+# Funzione per pubblicare uno script specifico per nome
+publish_specific_script() {
+    local script_name="$1"
+
+    if [ -z "$script_name" ]; then
+        echo -e "${RED}✖ No script name provided${NC}"
+        return 1
+    fi
+
+    echo -e "${CYAN}Searching for script: ${YELLOW}$script_name${NC}"
+    echo ""
+
+    # Carica gli script disponibili
+    load_ignore_patterns
+    load_name_mappings
+    find_executable_scripts
+
+    if [ ${#INCLUDED_FILES[@]} -eq 0 ]; then
+        echo -e "${RED}No executable scripts found.${NC}"
+        return 1
+    fi
+
+    # Cerca lo script che corrisponde al nome
+    local found_script=""
+    local found_name=""
+
+    for script_path in "${INCLUDED_FILES[@]}"; do
+        local cmd_name=$(get_command_name "$script_path")
+        local base_name=$(basename "$script_path" .sh)
+
+        # Cerca corrispondenza esatta o parziale
+        if [ "$cmd_name" = "$script_name" ] || \
+           [ "$base_name" = "$script_name" ] || \
+           [ "$base_name" = "${script_name}.sh" ] || \
+           [[ "$script_path" == *"$script_name"* ]]; then
+            found_script="$script_path"
+            found_name="$cmd_name"
+            break
+        fi
+    done
+
+    if [ -z "$found_script" ]; then
+        echo -e "${RED}✖ Script not found: $script_name${NC}"
+        echo -e "${YELLOW}Available scripts:${NC}"
+        for script_path in "${INCLUDED_FILES[@]}"; do
+            local cmd_name=$(get_command_name "$script_path")
+            echo -e "  - ${CYAN}$cmd_name${NC} (${script_path#$SCRIPT_DIR/})"
+        done
+        return 1
+    fi
+
+    echo -e "${GREEN}✔ Found: ${CYAN}$found_name${NC} ${BLUE}(${found_script#$SCRIPT_DIR/})${NC}"
+    echo ""
+
+    # Build directory temporanea
+    local PACKAGE_BUILD_DIR=$(mktemp -d)
+    echo -e "Build directory: ${BLUE}$PACKAGE_BUILD_DIR${NC}"
+    echo ""
+
+    local success=0
+
+    echo -e "${CYAN}Building package for: ${YELLOW}$found_name${NC} ${BLUE}(${found_script#$SCRIPT_DIR/})${NC}"
+    if build_script_package "$found_script" "$found_name" "$PACKAGE_BUILD_DIR"; then
+        success=1
+        echo ""
+        echo -e "${GREEN}✔ Package built successfully!${NC}"
+    else
+        echo ""
+        echo -e "${RED}✖ Package build failed${NC}"
+    fi
+
+    # Publish to repository if successful
+    if [ $success -eq 1 ]; then
+        # Enable auto-deploy for non-interactive publish
+        AUTO_DEPLOY=true publish_to_repository "$PACKAGE_BUILD_DIR"
+    fi
+
+    # Cleanup
+    rm -rf "$PACKAGE_BUILD_DIR"
+
+    return $((1 - success))
+}
+
+# Menu per la pubblicazione nel repository
+publish_menu() {
+    local target_script="$1"
+
+    echo -e "${MAGENTA}📦 Build & Publish to Repository${NC}"
+    echo -e "${YELLOW}This will build .deb packages and publish them to your Ubuntu repository.${NC}"
+    echo ""
+
+    # Note: Remote deployment is optional
+    # If deploy-to-repo.sh exists, packages will be deployed to remote repository
+    # Otherwise, packages will just be built and staged in packages/ directory
+
+    # If a target script is specified, publish it directly
+    if [ -n "$target_script" ]; then
+        publish_specific_script "$target_script"
+        return $?
+    fi
+
+    # Otherwise, show interactive menu
+    echo -e "${CYAN}Select publish mode:${NC}"
+    echo "  1) Publish all scripts"
+    echo "  2) Select specific scripts to publish"
+    echo "  3) Cancel"
+    echo ""
+
+    read -p "$(echo -e "${BOLD}Enter your choice [1-3]:${NC} ")" choice
+
+    case "$choice" in
+        1)
+            publish_all_scripts
+            ;;
+        2)
+            publish_selected_scripts
+            ;;
+        3)
+            echo -e "${GREEN}Operation cancelled.${NC}"
+            ;;
+        *)
+            echo -e "${RED}Invalid choice.${NC}"
+            ;;
+    esac
+}
+
+# Funzione per pubblicare tutti gli script
+publish_all_scripts() {
+    echo -e "${CYAN}Building and publishing all scripts...${NC}"
+    echo ""
+
+    # Carica gli script disponibili
+    load_ignore_patterns
+    load_name_mappings
+    find_executable_scripts
+
+    if [ ${#INCLUDED_FILES[@]} -eq 0 ]; then
+        echo -e "${RED}No executable scripts found.${NC}"
+        return 1
+    fi
+
+    # Crea directory temporanea per i pacchetti
+    PACKAGE_BUILD_DIR=$(mktemp -d)
+    echo -e "${YELLOW}Build directory: $PACKAGE_BUILD_DIR${NC}"
+
+    local success_count=0
+    local fail_count=0
+
+    for script_path in "${INCLUDED_FILES[@]}"; do
+        local script_name=$(get_command_name "$script_path")
+        local relative_path="${script_path#$SCRIPT_DIR/}"
+
+        echo -e "${CYAN}Building package for: ${YELLOW}$script_name${NC} ${BLUE}($relative_path)${NC}"
+
+        if build_script_package "$script_path" "$script_name" "$PACKAGE_BUILD_DIR"; then
+            ((success_count++))
+        else
+            ((fail_count++))
+        fi
+        echo ""
+    done
+
+    echo -e "${GREEN}✔ Built $success_count package(s)${NC}"
+    if [ $fail_count -gt 0 ]; then
+        echo -e "${RED}✖ Failed: $fail_count package(s)${NC}"
+    fi
+
+    # Pubblica nel repository
+    if [ $success_count -gt 0 ]; then
+        publish_to_repository "$PACKAGE_BUILD_DIR"
+    fi
+
+    # Cleanup
+    rm -rf "$PACKAGE_BUILD_DIR"
+}
+
+# Funzione per pubblicare script selezionati
+publish_selected_scripts() {
+    echo -e "${CYAN}Select scripts to publish:${NC}"
+    echo ""
+
+    # Carica gli script disponibili
+    load_ignore_patterns
+    load_name_mappings
+    find_executable_scripts
+
+    if [ ${#INCLUDED_FILES[@]} -eq 0 ]; then
+        echo -e "${RED}No executable scripts found.${NC}"
+        return 1
+    fi
+
+    # Mostra lista script
+    declare -a script_names
+    declare -a script_paths
+
+    for script_path in "${INCLUDED_FILES[@]}"; do
+        local script_name=$(get_command_name "$script_path")
+        local relative_path="${script_path#$SCRIPT_DIR/}"
+
+        script_names+=("$script_name")
+        script_paths+=("$script_path")
+    done
+
+    for i in "${!script_names[@]}"; do
+        local relative_path="${script_paths[i]#$SCRIPT_DIR/}"
+        echo -e "  ${YELLOW}$((i+1)).${NC} ${GREEN}${script_names[i]}${NC} ${BLUE}($relative_path)${NC}"
+    done
+
+    echo ""
+    read -p "$(echo -e "${BOLD}Enter script numbers separated by spaces (e.g., 1 3 5):${NC} ")" selection
+
+    if [ -z "$selection" ]; then
+        echo -e "${YELLOW}No scripts selected.${NC}"
+        return
+    fi
+
+    # Crea directory temporanea per i pacchetti
+    PACKAGE_BUILD_DIR=$(mktemp -d)
+    echo -e "${YELLOW}Build directory: $PACKAGE_BUILD_DIR${NC}"
+    echo ""
+
+    local success_count=0
+    local fail_count=0
+
+    for num in $selection; do
+        if [[ "$num" =~ ^[0-9]+$ ]] && [ "$num" -ge 1 ] && [ "$num" -le "${#script_names[@]}" ]; then
+            local idx=$((num-1))
+            local script_path="${script_paths[idx]}"
+            local script_name="${script_names[idx]}"
+            local relative_path="${script_path#$SCRIPT_DIR/}"
+
+            echo -e "${CYAN}Building package for: ${YELLOW}$script_name${NC} ${BLUE}($relative_path)${NC}"
+
+            if build_script_package "$script_path" "$script_name" "$PACKAGE_BUILD_DIR"; then
+                ((success_count++))
+            else
+                ((fail_count++))
+            fi
+            echo ""
+        else
+            echo -e "${RED}Invalid selection: $num${NC}"
+        fi
+    done
+
+    echo -e "${GREEN}✔ Built $success_count package(s)${NC}"
+    if [ $fail_count -gt 0 ]; then
+        echo -e "${RED}✖ Failed: $fail_count package(s)${NC}"
+    fi
+
+    # Pubblica nel repository
+    if [ $success_count -gt 0 ]; then
+        publish_to_repository "$PACKAGE_BUILD_DIR"
+    fi
+
+    # Cleanup
+    rm -rf "$PACKAGE_BUILD_DIR"
+}
+
+# Parse package metadata from script comments
+# Usage: parse_package_metadata <script_path>
+# Returns: Associative array with metadata fields
+parse_package_metadata() {
+    local script_path="$1"
+
+    # Initialize metadata with defaults
+    declare -gA PKG_META=(
+        [NAME]=""
+        [VERSION]=""
+        [SECTION]="utils"
+        [PRIORITY]="optional"
+        [ARCHITECTURE]="all"
+        [DEPENDS]="bash (>= 4.0)"
+        [RECOMMENDS]=""
+        [SUGGESTS]=""
+        [MAINTAINER]="BashCollection <manzolo@libero.it>"
+        [DESCRIPTION]=""
+        [LONG_DESCRIPTION]=""
+        [HOMEPAGE]="https://github.com/manzolo/BashCollection"
+    )
+
+    if [ ! -f "$script_path" ]; then
+        return 1
+    fi
+
+    # Parse metadata from script comments
+    local in_long_desc=false
+    local long_desc=""
+
+    while IFS= read -r line; do
+        # Stop at first non-comment line (after shebang)
+        if [[ ! "$line" =~ ^#.*$ ]] && [[ "$line" =~ [^[:space:]] ]]; then
+            break
+        fi
+
+        # Parse PKG_* fields
+        if [[ "$line" =~ ^#[[:space:]]*PKG_([A-Z_]+):[[:space:]]*(.+)$ ]]; then
+            local key="${BASH_REMATCH[1]}"
+            local value="${BASH_REMATCH[2]}"
+
+            case "$key" in
+                LONG_DESCRIPTION)
+                    in_long_desc=true
+                    long_desc="$value"
+                    ;;
+                *)
+                    PKG_META[$key]="$value"
+                    in_long_desc=false
+                    ;;
+            esac
+        # Handle multi-line LONG_DESCRIPTION
+        elif $in_long_desc && [[ "$line" =~ ^#[[:space:]]+(.+)$ ]]; then
+            long_desc="${long_desc}"$'\n'"${BASH_REMATCH[1]}"
+        else
+            in_long_desc=false
+        fi
+    done < "$script_path"
+
+    # Store multi-line description
+    if [ -n "$long_desc" ]; then
+        PKG_META[LONG_DESCRIPTION]="$long_desc"
+    fi
+
+    return 0
+}
+
+# Funzione per costruire un pacchetto .deb per uno script
+build_script_package() {
+    local script_path="$1"
+    local script_name="$2"
+    local build_dir="$3"
+
+    # Parse metadata from script
+    parse_package_metadata "$script_path"
+
+    # Use metadata or defaults
+    local package_name="${PKG_META[NAME]}"
+    if [ -z "$package_name" ]; then
+        package_name=$(echo "$script_name" | tr '_' '-')
+    fi
+
+    # === CHIEDE LA VERSIONE SE NON SPECIFICATA NEI METADATI ===
+    local version="${PKG_META[VERSION]}"
+    if [ -z "$version" ]; then
+        while [ -z "$version" ]; do
+            read -p "$(echo -e "${BOLD}Version for $package_name [default: 1.0.0]: ${NC}")" input_version
+            version="${input_version:-1.0.0}"
+            # Validazione minima (almeno x.y.z o x.y)
+            if ! [[ "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9]+)?$ ]]; then
+                echo -e "${RED}Formato non valido! Esempi: 1.0.0, 2.1, 1.5.3-beta${NC}"
+                version=""
+            fi
+        done
+    else
+        echo -e " ${CYAN}Using version from metadata: ${YELLOW}$version${NC}"
+    fi
+    local pkg_dir="$build_dir/${package_name}_${version}"
+    local deb_file="${package_name}_${version}_all.deb"
+
+    # Evita sovrascritture accidentali
+    if [ -f "$build_dir/$deb_file" ]; then
+        echo -e "${YELLOW}Avviso: $deb_file esiste già. Sovrascrivo...${NC}"
+        rm -f "$build_dir/$deb_file"
+    fi
+
+    # === Trova directory base (con lib/, functions/, ecc.) ===
+    local script_dir="$(dirname "$script_path")"
+    local base_dir=""
+    if [ -d "$script_dir/lib" ] || [ -d "$script_dir/functions" ] || [ -d "$script_dir/../lib" ] || [ -d "$script_dir/../functions" ]; then
+        base_dir="$(cd "$script_dir" && pwd)"
+        while [ "$base_dir" != "/" ] && [ ! -d "$base_dir/lib" ] && [ ! -d "$base_dir/functions" ]; do
+            base_dir="$(dirname "$base_dir")"
+        done
+        [ "$base_dir" = "/" ] && base_dir="$script_dir"
+    else
+        base_dir="$script_dir"
+    fi
+
+    # === Crea struttura ===
+    mkdir -p "$pkg_dir/DEBIAN"
+    mkdir -p "$pkg_dir/usr/local/bin"
+    mkdir -p "$pkg_dir/usr/share/$package_name"
+    mkdir -p "$pkg_dir/usr/share/doc/$package_name"
+
+    # === Copia tutto con rsync ===
+    echo -e " ${BLUE}Copia dipendenze da: $base_dir → /usr/share/$package_name/${NC}"
+    rsync -a --exclude='.git' --exclude='__pycache__' --exclude='*.deb' "$base_dir/" "$pkg_dir/usr/share/$package_name/"
+
+    # === Wrapper eseguibile ===
+    # Create wrapper for the alias/mapped name
+    cat > "$pkg_dir/usr/local/bin/$script_name" << EOF
+#!/bin/bash
+# BashCollection wrapper - v$version
+exec /usr/share/$package_name/$(basename "$script_path") "\$@"
+EOF
+    chmod 755 "$pkg_dir/usr/local/bin/$script_name"
+
+    # Also create wrapper for the original name (if different from alias)
+    local original_name=$(basename "$script_path" .sh)
+    if [ "$script_name" != "$original_name" ] && [ "$script_name" != "$package_name" ]; then
+        # The package_name is the canonical original name, use it
+        if [ "$script_name" != "$package_name" ]; then
+            cat > "$pkg_dir/usr/local/bin/$package_name" << EOF
+#!/bin/bash
+# BashCollection wrapper - v$version
+exec /usr/share/$package_name/$(basename "$script_path") "\$@"
+EOF
+            chmod 755 "$pkg_dir/usr/local/bin/$package_name"
+            echo -e " ${CYAN}Created both executables: ${YELLOW}$script_name${CYAN} and ${YELLOW}$package_name${NC}"
+        fi
+    fi
+
+    # === Control file with metadata ===
+    local description="${PKG_META[DESCRIPTION]}"
+    if [ -z "$description" ]; then
+        description="$package_name - BashCollection utility"
+    fi
+
+    local long_description="${PKG_META[LONG_DESCRIPTION]}"
+    if [ -z "$long_description" ]; then
+        long_description="Part of the BashCollection suite."$'\n'"This package includes all libraries and functions."
+    fi
+
+    cat > "$pkg_dir/DEBIAN/control" << EOF
+Package: $package_name
+Version: $version
+Section: ${PKG_META[SECTION]}
+Priority: ${PKG_META[PRIORITY]}
+Architecture: ${PKG_META[ARCHITECTURE]}
+Depends: ${PKG_META[DEPENDS]}
+EOF
+
+    # Add optional fields if present
+    if [ -n "${PKG_META[RECOMMENDS]}" ]; then
+        echo "Recommends: ${PKG_META[RECOMMENDS]}" >> "$pkg_dir/DEBIAN/control"
+    fi
+    if [ -n "${PKG_META[SUGGESTS]}" ]; then
+        echo "Suggests: ${PKG_META[SUGGESTS]}" >> "$pkg_dir/DEBIAN/control"
+    fi
+
+    # Write maintainer
+    echo "Maintainer: ${PKG_META[MAINTAINER]}" >> "$pkg_dir/DEBIAN/control"
+
+    # Write description (short + long)
+    echo "Description: $description" >> "$pkg_dir/DEBIAN/control"
+
+    # Write long description (ensuring each line starts with a space)
+    if [ -n "$long_description" ]; then
+        # Use printf to avoid echo -e issues, and ensure lines start with space
+        printf "%s\n" "$long_description" | while IFS= read -r line; do
+            # Each line must start with a space for Debian control format
+            if [ -z "$line" ]; then
+                echo " ." >> "$pkg_dir/DEBIAN/control"
+            else
+                echo " $line" >> "$pkg_dir/DEBIAN/control"
+            fi
+        done
+    fi
+
+    # Write homepage
+    echo "Homepage: ${PKG_META[HOMEPAGE]}" >> "$pkg_dir/DEBIAN/control"
+
+    # === postinst ===
+    cat > "$pkg_dir/DEBIAN/postinst" << EOF
+#!/bin/bash
+set -e
+echo "$package_name v$version installed successfully!"
+echo "Run: $script_name --help"
+exit 0
+EOF
+    chmod 755 "$pkg_dir/DEBIAN/postinst"
+
+    # === Copyright & changelog ===
+    cat > "$pkg_dir/usr/share/doc/$package_name/copyright" << EOF
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: $package_name
+Source: https://github.com/manzolo/BashCollection
+Files: *
+Copyright: Manzolo 2025
+License: MIT
+EOF
+
+    cat > "$pkg_dir/usr/share/doc/$package_name/changelog" << EOF
+$package_name ($version) noble; urgency=medium
+  * Build automatico da BashCollection
+  * Versione richiesta dall'utente
+ -- BashCollection <manzolo@libero.it>  $(date -R)
+EOF
+    gzip -9 "$pkg_dir/usr/share/doc/$package_name/changelog"
+
+    # === Build finale ===
+    echo -e " ${CYAN}Building package with dpkg-deb...${NC}"
+    if dpkg-deb --build --root-owner-group "$pkg_dir" "$build_dir/$deb_file" 2>&1 | tee /tmp/dpkg-deb-error.log; then
+        echo -e " ${GREEN}Pacchetto creato: $deb_file${NC}"
+        rm -rf "$pkg_dir"
+        return 0
+    else
+        echo -e " ${RED}Errore durante dpkg-deb:${NC}"
+        cat /tmp/dpkg-deb-error.log
+        echo -e " ${YELLOW}Control file contents:${NC}"
+        cat "$pkg_dir/DEBIAN/control" 2>/dev/null || echo "Control file not found"
+        return 1
+    fi
+}
+
+# Function to run SSH commands with the original user's credentials
+run_ssh_as_user() {
+    if [ -n "${SUDO_USER:-}" ]; then
+        # Running under sudo, use the original user's SSH credentials
+        sudo -u "$SUDO_USER" "$@"
+    else
+        # Not running under sudo, execute normally
+        "$@"
+    fi
+}
+
+# Function to deploy packages to remote repository
+deploy_packages_to_remote() {
+    local packages=("$@")
+
+    if [ ${#packages[@]} -eq 0 ]; then
+        echo -e "${RED}No packages specified for deployment${NC}"
+        return 1
+    fi
+
+    # Load deploy configuration
+    local REMOTE_SERVER="${REMOTE_SERVER:-root@home-server.lan}"
+    local REMOTE_REPO_PATH="${REMOTE_REPO_PATH:-/root/ubuntu-repo}"
+    local REMOTE_PACKAGES_DIR="$REMOTE_REPO_PATH/packages"
+    local LOCAL_PACKAGES_DIR="$SCRIPT_DIR/packages"
+
+    # Load custom config if exists
+    if [ -f "$SCRIPT_DIR/.deploy-config" ]; then
+        source "$SCRIPT_DIR/.deploy-config"
+    fi
+
+    echo -e "${CYAN}Deploying to remote repository...${NC}"
+    echo -e "${CYAN}Server: ${YELLOW}$REMOTE_SERVER${NC}"
+    [ -n "${SUDO_USER:-}" ] && echo -e "${CYAN}Using SSH keys from user: ${YELLOW}$SUDO_USER${NC}"
+    echo ""
+
+    # Test connection
+    if ! run_ssh_as_user ssh -o ConnectTimeout=5 -o BatchMode=yes "$REMOTE_SERVER" "echo 'Connected'" &>/dev/null; then
+        echo -e "${RED}✖ Cannot connect to $REMOTE_SERVER${NC}"
+        echo -e "${YELLOW}Make sure SSH key authentication is set up${NC}"
+        if [ -n "${SUDO_USER:-}" ]; then
+            echo -e "${YELLOW}Trying to connect as user: $SUDO_USER${NC}"
+        fi
+        return 1
+    fi
+
+    echo -e "${GREEN}✔ Connection successful${NC}"
+    echo ""
+
+    # Deploy each package
+    local deployed=0
+    local failed=0
+
+    for pkg in "${packages[@]}"; do
+        echo -e "${BLUE}Deploying: ${YELLOW}$pkg${NC}"
+
+        # Find .deb file
+        local deb_file=$(find "$LOCAL_PACKAGES_DIR" -name "${pkg}_*.deb" -type f | head -1)
+
+        if [ -z "$deb_file" ]; then
+            echo -e "${RED}  ✖ Package file not found${NC}"
+            ((failed++))
+            continue
+        fi
+
+        # Copy to remote (using original user's SSH keys)
+        if run_ssh_as_user scp "$deb_file" "$REMOTE_SERVER:$REMOTE_PACKAGES_DIR/" &>/dev/null; then
+            echo -e "${GREEN}  ✔ Uploaded to remote server${NC}"
+            ((deployed++))
+        else
+            echo -e "${RED}  ✖ Upload failed${NC}"
+            ((failed++))
+        fi
+    done
+
+    echo ""
+
+    # Import packages on remote (using original user's SSH keys)
+    if [ $deployed -gt 0 ]; then
+        echo -e "${CYAN}Importing packages on remote repository...${NC}"
+        if run_ssh_as_user ssh "$REMOTE_SERVER" "cd '$REMOTE_REPO_PATH' && ./repo.sh import" &>/dev/null; then
+            echo -e "${GREEN}✔ Repository index updated${NC}"
+        else
+            echo -e "${YELLOW}⚠ Import may have failed, check remote server${NC}"
+        fi
+    fi
+
+    echo ""
+    echo -e "${GREEN}✔ Deployed $deployed package(s)${NC}"
+    [ $failed -gt 0 ] && echo -e "${YELLOW}⚠ Failed: $failed package(s)${NC}"
+
+    return 0
+}
+
+# Function to unpublish packages from remote repository
+unpublish_packages_from_remote() {
+    local packages=("$@")
+
+    # Load deploy configuration
+    local REMOTE_SERVER="${REMOTE_SERVER:-root@home-server.lan}"
+    local REMOTE_REPO_PATH="${REMOTE_REPO_PATH:-/root/ubuntu-repo}"
+
+    # Load custom config if exists
+    if [ -f "$SCRIPT_DIR/.deploy-config" ]; then
+        source "$SCRIPT_DIR/.deploy-config"
+    fi
+
+    echo -e "${CYAN}Unpublishing from remote repository...${NC}"
+    echo -e "${CYAN}Server: ${YELLOW}$REMOTE_SERVER${NC}"
+    [ -n "${SUDO_USER:-}" ] && echo -e "${CYAN}Using SSH keys from user: ${YELLOW}$SUDO_USER${NC}"
+    echo ""
+
+    # Test connection (using original user's SSH keys)
+    if ! run_ssh_as_user ssh -o ConnectTimeout=5 -o BatchMode=yes "$REMOTE_SERVER" "echo 'Connected'" &>/dev/null; then
+        echo -e "${RED}✖ Cannot connect to $REMOTE_SERVER${NC}"
+        return 1
+    fi
+
+    echo -e "${GREEN}✔ Connection successful${NC}"
+    echo ""
+
+    # Remove each package (using original user's SSH keys)
+    local removed=0
+    local failed=0
+
+    for pkg in "${packages[@]}"; do
+        echo -e "${BLUE}Removing: ${YELLOW}$pkg${NC}"
+
+        if run_ssh_as_user ssh "$REMOTE_SERVER" "cd '$REMOTE_REPO_PATH' && ./repo.sh remove '$pkg'" &>/dev/null; then
+            echo -e "${GREEN}  ✔ Removed from repository${NC}"
+            ((removed++))
+        else
+            echo -e "${YELLOW}  ⚠ Package may not exist or removal failed${NC}"
+            ((failed++))
+        fi
+    done
+
+    echo ""
+    echo -e "${GREEN}✔ Removed $removed package(s)${NC}"
+    [ $failed -gt 0 ] && echo -e "${YELLOW}⚠ Failed: $failed package(s)${NC}"
+
+    return 0
+}
+
+# Funzione per pubblicare nel repository
+publish_to_repository() {
+    local package_dir="$1"
+
+    echo -e "${CYAN}Publishing packages to repository...${NC}"
+    echo ""
+
+    # Conta pacchetti .deb
+    local deb_count=$(find "$package_dir" -name "*.deb" | wc -l)
+
+    if [ $deb_count -eq 0 ]; then
+        echo -e "${YELLOW}No packages to publish.${NC}"
+        return
+    fi
+
+    echo -e "${YELLOW}Found $deb_count package(s) to publish${NC}"
+    echo ""
+
+    # Always copy packages to local staging area
+    local local_packages_dir="$SCRIPT_DIR/packages"
+    mkdir -p "$local_packages_dir"
+    echo -e "${CYAN}Copying packages to staging area: ${BOLD}$local_packages_dir${NC}"
+    find "$package_dir" -name "*.deb" -exec cp -v {} "$local_packages_dir/" \;
+    echo ""
+
+    # Get list of packages
+    local packages=()
+    while IFS= read -r deb_file; do
+        # Extract package name from filename (e.g., manzolo-chroot_3.0.0_all.deb -> manzolo-chroot)
+        local pkg_name=$(basename "$deb_file" | sed 's/_[0-9].*//')
+        packages+=("$pkg_name")
+    done < <(find "$package_dir" -name "*.deb")
+
+    echo -e "${GREEN}✔ Package build complete!${NC}"
+    echo -e "${CYAN}Packages available at: ${BOLD}$local_packages_dir${NC}"
+
+    # Show list of built packages
+    echo ""
+    echo -e "${CYAN}Built packages:${NC}"
+    find "$local_packages_dir" -name "*.deb" -type f -printf "  • %f (%s bytes)\n" 2>/dev/null | sort
+    echo ""
+
+    # Check if auto-deploy is requested (non-interactive mode)
+    local auto_deploy="${AUTO_DEPLOY:-false}"
+
+    if [ "$auto_deploy" = "true" ]; then
+        # Non-interactive mode - automatically deploy
+        echo -e "${CYAN}Auto-deploying to remote repository...${NC}"
+        echo ""
+        deploy_packages_to_remote "${packages[@]}"
+    else
+        # Interactive deployment menu
+        while true; do
+            choice=$(whiptail --title "📦 Package Deployment" \
+                --menu "Package(s) built successfully!\n\nChoose an action:" \
+                18 70 4 \
+                "1" "🚀 Deploy to remote repository" \
+                "2" "💾 Keep local only (done)" \
+                "3" "🗑️  Unpublish from remote" \
+                "4" "❌ Exit" \
+                3>&1 1>&2 2>&3) || choice=2
+
+            case "$choice" in
+                1)
+                    # Deploy to remote
+                    clear
+                    deploy_packages_to_remote "${packages[@]}"
+                    echo ""
+                    read -p "Press Enter to continue..."
+                    ;;
+                2)
+                    # Keep local only
+                    echo -e "${GREEN}Packages are available at: $local_packages_dir${NC}"
+                    break
+                    ;;
+                3)
+                    # Unpublish menu
+                    unpublish_menu
+                    ;;
+                4)
+                    break
+                    ;;
+            esac
+        done
+    fi
+}
+
+# Menu to unpublish packages
+unpublish_menu() {
+    local packages=("$@")
+
+    # Load deploy configuration
+    local REMOTE_SERVER="${REMOTE_SERVER:-root@home-server.lan}"
+    local REMOTE_REPO_PATH="${REMOTE_REPO_PATH:-/root/ubuntu-repo}"
+
+    # Load custom config if exists
+    if [ -f "$SCRIPT_DIR/.deploy-config" ]; then
+        source "$SCRIPT_DIR/.deploy-config"
+    fi
+
+    # If specific packages provided, unpublish them directly (non-interactive)
+    if [ ${#packages[@]} -gt 0 ]; then
+        echo -e "${CYAN}Unpublishing package(s): ${YELLOW}${packages[*]}${NC}"
+        echo ""
+        unpublish_packages_from_remote "${packages[@]}"
+        return $?
+    fi
+
+    # Interactive mode - show checklist
+    # Test connection (using original user's SSH keys)
+    if ! run_ssh_as_user ssh -o ConnectTimeout=5 -o BatchMode=yes "$REMOTE_SERVER" "echo 'Connected'" &>/dev/null; then
+        whiptail --title "Connection Error" \
+            --msgbox "Cannot connect to $REMOTE_SERVER\n\nMake sure SSH key authentication is set up." \
+            10 60
+        return 1
+    fi
+
+    # Get list of packages from remote repository (using original user's SSH keys)
+    local package_list
+    package_list=$(run_ssh_as_user ssh "$REMOTE_SERVER" "cd '$REMOTE_REPO_PATH' && ./repo.sh list" 2>/dev/null)
+
+    if [ -z "$package_list" ]; then
+        whiptail --title "No Packages" \
+            --msgbox "No packages found in remote repository or repository is not accessible." \
+            10 60
+        return 1
+    fi
+
+    # Build menu from package list
+    local menu_items=()
+    while IFS= read -r pkg; do
+        # Extract package name (remove version and architecture)
+        local pkg_name=$(echo "$pkg" | cut -d'_' -f1)
+        [ -n "$pkg_name" ] && menu_items+=("$pkg_name" "$pkg" "OFF")
+    done <<< "$package_list"
+
+    if [ ${#menu_items[@]} -eq 0 ]; then
+        whiptail --title "No Packages" \
+            --msgbox "No packages available to unpublish." \
+            10 60
+        return 1
+    fi
+
+    # Show checklist for package selection
+    local selected
+    selected=$(whiptail --title "🗑️  Unpublish Packages" \
+        --checklist "Select packages to remove from remote repository:\n\nServer: $REMOTE_SERVER" \
+        20 70 12 \
+        "${menu_items[@]}" \
+        3>&1 1>&2 2>&3) || return 0
+
+    if [ -z "$selected" ]; then
+        return 0
+    fi
+
+    # Remove quotes and convert to array
+    selected=$(echo "$selected" | tr -d '"')
+    local packages_to_remove=($selected)
+
+    # Confirm removal
+    if ! whiptail --title "Confirm Removal" \
+        --yesno "Remove ${#packages_to_remove[@]} package(s) from remote repository?\n\n$(printf '%s\n' "${packages_to_remove[@]}")\n\nThis will update the repository index." \
+        15 70; then
+        return 0
+    fi
+
+    # Unpublish packages
+    clear
+    unpublish_packages_from_remote "${packages_to_remove[@]}"
+    echo ""
+    read -p "Press Enter to continue..."
 }
 
 # Funzione principale per gestire gli argomenti
@@ -782,6 +1797,13 @@ main() {
             ;;
         debug)
             debug_exclusions
+            ;;
+        publish)
+            publish_menu "$2"
+            ;;
+        unpublish)
+            shift  # Remove 'unpublish' from arguments
+            unpublish_menu "$@"  # Pass all remaining arguments as package names
             ;;
         update)
             check_root_permissions
@@ -865,26 +1887,45 @@ show_help() {
     echo "Usage: $SCRIPT_NAME [COMMAND] [OPTIONS] [ARGUMENTS]"
     echo ""
     echo -e "${CYAN}COMMANDS:${NC}"
-    echo "  menu             Show interactive menu (default if no command given)"
-    echo "  install          Install all executable scripts to system PATH"
-    echo "  uninstall        Remove all installed scripts"
-    echo "  list             Show available scripts"
-    echo "  run [SCRIPT]     Run a specific script or show selection menu"
-    echo "  debug            Show detailed debug information"
-    echo "  update           Update scripts from git and reinstall"
-    echo "  help             Show this help message"
+    echo "  menu                 Show interactive menu (default if no command given)"
+    echo "  install [SCRIPT]     Install scripts to system PATH"
+    echo "                       - Without SCRIPT: installs all scripts"
+    echo "                       - With SCRIPT: installs only that specific script"
+    echo "  uninstall [SCRIPT]   Remove installed scripts"
+    echo "                       - Without SCRIPT: removes all scripts"
+    echo "                       - With SCRIPT: removes only that specific script"
+    echo "  list                 Show available scripts"
+    echo "  run [SCRIPT]         Run a specific script or show selection menu"
+    echo "  publish [SCRIPT]     Build .deb packages and deploy to remote repository"
+    echo "                       - Without SCRIPT: shows interactive menu"
+    echo "                       - With SCRIPT: builds and auto-deploys to remote"
+    echo "  unpublish [PACKAGE]  Remove packages from remote repository"
+    echo "                       - Without PACKAGE: shows interactive checklist"
+    echo "                       - With PACKAGE: auto-removes specified package(s)"
+    echo "  debug                Show detailed debug information"
+    echo "  update               Update scripts from git and reinstall"
+    echo "  help                 Show this help message"
     echo ""
     echo -e "${CYAN}OPTIONS:${NC}"
-    echo "  --debug          Show detailed output for install/uninstall/list commands"
+    echo "  --debug              Show detailed output for install/uninstall/list commands"
     echo ""
     echo -e "${CYAN}EXAMPLES:${NC}"
-    echo "  $SCRIPT_NAME                    # Show interactive menu"
-    echo "  $SCRIPT_NAME menu               # Show interactive menu"
-    echo "  $SCRIPT_NAME install --debug    # Install with debug output"
-    echo "  $SCRIPT_NAME list               # List available scripts"
-    echo "  $SCRIPT_NAME run                # Show script selection menu"
-    echo "  $SCRIPT_NAME run myscript       # Run 'myscript' directly"
-    echo "  $SCRIPT_NAME run backup --help  # Run 'backup' script with --help"
+    echo "  $SCRIPT_NAME                       # Show interactive menu"
+    echo "  $SCRIPT_NAME menu                  # Show interactive menu"
+    echo "  $SCRIPT_NAME install               # Install all scripts"
+    echo "  $SCRIPT_NAME install mchroot       # Install only mchroot"
+    echo "  $SCRIPT_NAME install mchroot --debug  # Install mchroot with debug output"
+    echo "  $SCRIPT_NAME uninstall             # Uninstall all scripts"
+    echo "  $SCRIPT_NAME uninstall mchroot     # Uninstall only mchroot"
+    echo "  $SCRIPT_NAME list                  # List available scripts"
+    echo "  $SCRIPT_NAME run                   # Show script selection menu"
+    echo "  $SCRIPT_NAME run myscript          # Run 'myscript' directly"
+    echo "  $SCRIPT_NAME run backup --help     # Run 'backup' script with --help"
+    echo "  $SCRIPT_NAME publish               # Show publish menu (interactive)"
+    echo "  $SCRIPT_NAME publish vm-iso-manager  # Build and auto-deploy vm-iso-manager"
+    echo "  $SCRIPT_NAME unpublish             # Show unpublish menu (interactive)"
+    echo "  $SCRIPT_NAME unpublish vm-iso-manager  # Auto-remove vm-iso-manager from remote"
+    echo "  $SCRIPT_NAME unpublish pkg1 pkg2   # Auto-remove multiple packages"
     echo ""
     echo -e "${CYAN}FILE SELECTION RULES:${NC}"
     echo "  • Only executable .sh files in subdirectories are included"

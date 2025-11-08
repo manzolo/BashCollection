@@ -1,5 +1,5 @@
-chroot/manzolo_chroot.sh#mchroot
-chroot/virtual_chroot.sh#vchroot
-cleaner/manzolo_cleaner.sh#mcleaner
-backup/manzolo_backup_home.sh#mbackup
-vm/test_vm_create_disk.sh#mtest
+chroot/manzolo-chroot.sh#mchroot
+cleaner/manzolo-cleaner.sh#mcleaner
+backup/manzolo-backup-home.sh#mbackup
+vm/test-vm-create-disk.sh#mtest
+deploy-to-repo.sh#mdeploy

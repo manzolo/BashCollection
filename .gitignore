@@ -1,2 +1,5 @@
 gparted/
 vm/wget-log
+.deploy-config
+packages/
+utils/ubuntu-repo/

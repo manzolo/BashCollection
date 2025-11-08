@@ -1,4 +1,25 @@
 #!/usr/bin/env bash
+# PKG_NAME: luks-manager
+# PKG_VERSION: 2.0.0
+# PKG_SECTION: admin
+# PKG_PRIORITY: optional
+# PKG_ARCHITECTURE: all
+# PKG_DEPENDS: bash (>= 4.0), whiptail, cryptsetup, sudo, util-linux
+# PKG_RECOMMENDS: e2fsprogs, xfsprogs
+# PKG_MAINTAINER: Manzolo <manzolo@libero.it>
+# PKG_DESCRIPTION: Professional LUKS encrypted container manager
+# PKG_LONG_DESCRIPTION: TUI-based tool for managing LUKS encrypted containers.
+#  .
+#  Features:
+#  - Create encrypted containers with custom sizes
+#  - Mount and unmount LUKS containers
+#  - List all managed containers with status
+#  - Change LUKS passphrases
+#  - Resize containers and filesystems
+#  - Delete containers securely
+#  - Automatic state tracking and management
+#  - Whiptail-based interactive interface
+# PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 # luks-manager.sh
 # Professional LUKS Container Manager using whiptail
 # Version 2.0 - Clean whiptail-based interface

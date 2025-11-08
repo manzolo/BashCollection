@@ -1,4 +1,24 @@
 #!/bin/bash
+# PKG_NAME: mfirewall
+# PKG_VERSION: 1.2.0
+# PKG_SECTION: admin
+# PKG_PRIORITY: optional
+# PKG_ARCHITECTURE: all
+# PKG_DEPENDS: bash (>= 4.0), ufw, whiptail
+# PKG_MAINTAINER: Manzolo <manzolo@libero.it>
+# PKG_DESCRIPTION: Advanced interactive UFW firewall manager
+# PKG_LONG_DESCRIPTION: TUI-based tool for managing UFW firewall with advanced features.
+#  .
+#  Features:
+#  - Interactive whiptail-based interface
+#  - Enable/disable firewall
+#  - Add/remove firewall rules
+#  - Port management (allow/deny)
+#  - Application profiles
+#  - Rule backup and restore
+#  - Status monitoring and logging
+#  - Default policy configuration
+# PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
 # UFW Manager - Advanced Interactive Firewall Management (Whiptail Version)
 # Author: Manzolo
