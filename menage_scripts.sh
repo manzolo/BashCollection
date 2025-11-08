@@ -934,16 +934,60 @@ build_script_package() {
     local script_name="$2"
     local build_dir="$3"
 
-    local version="1.0.0"
+    # === CHIEDE LA VERSIONE CON DEFAULT 1.0.0 ===
+    local version=""
+    while [ -z "$version" ]; do
+        read -p "$(echo -e "${BOLD}Version for $script_name [default: 1.0.0]: ${NC}")" input_version
+        version="${input_version:-1.0.0}"
+        # Validazione minima (almeno x.y.z o x.y)
+        if ! [[ "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-zA-Z0-9]+)?$ ]]; then
+            echo -e "${RED}Formato non valido! Esempi: 1.0.0, 2.1, 1.5.3-beta${NC}"
+            version=""
+        fi
+    done
+
     local package_name=$(echo "$script_name" | tr '_' '-')
     local pkg_dir="$build_dir/${package_name}_${version}"
+    local deb_file="${package_name}_${version}_all.deb"
 
-    # Crea struttura pacchetto
+    # Evita sovrascritture accidentali
+    if [ -f "$build_dir/$deb_file" ]; then
+        echo -e "${YELLOW}Avviso: $deb_file esiste già. Sovrascrivo...${NC}"
+        rm -f "$build_dir/$deb_file"
+    fi
+
+    # === Trova directory base (con lib/, functions/, ecc.) ===
+    local script_dir="$(dirname "$script_path")"
+    local base_dir=""
+    if [ -d "$script_dir/lib" ] || [ -d "$script_dir/functions" ] || [ -d "$script_dir/../lib" ] || [ -d "$script_dir/../functions" ]; then
+        base_dir="$(cd "$script_dir" && pwd)"
+        while [ "$base_dir" != "/" ] && [ ! -d "$base_dir/lib" ] && [ ! -d "$base_dir/functions" ]; do
+            base_dir="$(dirname "$base_dir")"
+        done
+        [ "$base_dir" = "/" ] && base_dir="$script_dir"
+    else
+        base_dir="$script_dir"
+    fi
+
+    # === Crea struttura ===
     mkdir -p "$pkg_dir/DEBIAN"
     mkdir -p "$pkg_dir/usr/local/bin"
+    mkdir -p "$pkg_dir/usr/share/$package_name"
     mkdir -p "$pkg_dir/usr/share/doc/$package_name"
 
-    # Crea file control
+    # === Copia tutto con rsync ===
+    echo -e " ${BLUE}Copia dipendenze da: $base_dir → /usr/share/$package_name/${NC}"
+    rsync -a --exclude='.git' --exclude='__pycache__' --exclude='*.deb' "$base_dir/" "$pkg_dir/usr/share/$package_name/"
+
+    # === Wrapper eseguibile ===
+    cat > "$pkg_dir/usr/local/bin/$script_name" << EOF
+#!/bin/bash
+# BashCollection wrapper - v$version
+exec /usr/share/$package_name/$(basename "$script_path") "\$@"
+EOF
+    chmod 755 "$pkg_dir/usr/local/bin/$script_name"
+
+    # === Control file ===
     cat > "$pkg_dir/DEBIAN/control" << EOF
 Package: $package_name
 Version: $version
@@ -951,58 +995,48 @@ Section: utils
 Priority: optional
 Architecture: all
 Depends: bash (>= 4.0)
-Maintainer: BashCollection <bashcollection@example.com>
-Description: $script_name - BashCollection utility
- Part of the BashCollection suite of system administration
- and management tools for Ubuntu/Debian systems.
-Homepage: https://github.com/yourusername/BashCollection
+Maintainer: BashCollection <manzolo@libero.it>
+Description: $script_name - BashCollection utility (v$version)
+ Part of the BashCollection suite.
+ This package includes all libraries and functions.
+Homepage: https://github.com/manzolo/BashCollection
 EOF
 
-    # Crea script postinst
+    # === postinst ===
     cat > "$pkg_dir/DEBIAN/postinst" << EOF
 #!/bin/bash
 set -e
-chmod +x /usr/local/bin/$script_name
-echo "$package_name installed successfully!"
+echo "$package_name v$version installed successfully!"
+echo "Run: $script_name --help"
 exit 0
 EOF
     chmod 755 "$pkg_dir/DEBIAN/postinst"
 
-    # Copia lo script
-    cp "$script_path" "$pkg_dir/usr/local/bin/$script_name"
-    chmod 755 "$pkg_dir/usr/local/bin/$script_name"
-
-    # Crea copyright
+    # === Copyright & changelog ===
     cat > "$pkg_dir/usr/share/doc/$package_name/copyright" << EOF
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: $package_name
-Source: https://github.com/yourusername/BashCollection
-
+Source: https://github.com/manzolo/BashCollection
 Files: *
-Copyright: 2024 BashCollection
+Copyright: Manzolo 2025
 License: MIT
 EOF
 
-    # Crea changelog
     cat > "$pkg_dir/usr/share/doc/$package_name/changelog" << EOF
-$package_name ($version) stable; urgency=medium
-
-  * Initial package release
-  * Part of BashCollection suite
-
- -- BashCollection <bashcollection@example.com>  $(date -R)
+$package_name ($version) noble; urgency=medium
+  * Build automatico da BashCollection
+  * Versione richiesta dall'utente
+ -- BashCollection <manzolo@libero.it>  $(date -R)
 EOF
     gzip -9 "$pkg_dir/usr/share/doc/$package_name/changelog"
 
-    # Costruisci il pacchetto
-    dpkg-deb --build "$pkg_dir" > /dev/null 2>&1
-
-    if [ $? -eq 0 ]; then
-        echo -e "  ${GREEN}✔ Package built: ${package_name}_${version}.deb${NC}"
+    # === Build finale ===
+    if dpkg-deb --build --root-owner-group "$pkg_dir" "$build_dir/$deb_file" > /dev/null 2>&1; then
+        echo -e " ${GREEN}Pacchetto creato: $deb_file${NC}"
         rm -rf "$pkg_dir"
         return 0
     else
-        echo -e "  ${RED}✖ Failed to build package${NC}"
+        echo -e " ${RED}Errore durante dpkg-deb${NC}"
         return 1
     fi
 }
