@@ -1,4 +1,26 @@
 #!/bin/bash
+# PKG_NAME: manzolo-chroot
+# PKG_VERSION: 3.0.1
+# PKG_SECTION: admin
+# PKG_PRIORITY: optional
+# PKG_ARCHITECTURE: all
+# PKG_DEPENDS: bash (>= 4.0), dialog, qemu-utils, util-linux
+# PKG_RECOMMENDS: cryptsetup, lvm2, kpartx
+# PKG_SUGGESTS: xhost
+# PKG_MAINTAINER: Manzolo <manzolo@libero.it>
+# PKG_DESCRIPTION: Advanced chroot into physical and virtual disks
+# PKG_LONG_DESCRIPTION: Interactive chroot tool for physical disks and virtual disk images.
+#  .
+#  Features:
+#  - Chroot into physical disks and partitions
+#  - Chroot into virtual disk images (qcow2, vdi, vmdk)
+#  - Support for LUKS encrypted partitions
+#  - Support for LVM volumes
+#  - Automatic NBD (Network Block Device) mapping
+#  - GUI/X11 support in chroot environment
+#  - Custom shell and user selection
+#  - Automatic bind mounting of /dev, /proc, /sys
+# PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
 # Advanced Interactive Chroot Script
 # Supports both physical disks/partitions and virtual disk images
@@ -99,7 +121,7 @@ parse_args() {
 
 main() {
     : > "$LOG_FILE"
-    log "Starting Unified Chroot Script v3.0"
+    log "Starting Chroot v3.0.1"
     
     parse_args "$@"
     

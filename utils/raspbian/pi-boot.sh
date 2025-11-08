@@ -1,4 +1,26 @@
 #!/usr/bin/env bash
+# PKG_NAME: pi-boot
+# PKG_VERSION: 1.6.0
+# PKG_SECTION: utils
+# PKG_PRIORITY: optional
+# PKG_ARCHITECTURE: all
+# PKG_DEPENDS: bash (>= 4.0), qemu-utils, qemu-system-arm, qemu-system-aarch64, kpartx, util-linux
+# PKG_RECOMMENDS: qemu-system-gui
+# PKG_SUGGESTS: socat
+# PKG_MAINTAINER: Manzolo <manzolo@libero.it>
+# PKG_DESCRIPTION: Boot Raspberry Pi images in QEMU emulator
+# PKG_LONG_DESCRIPTION: Boot and test Raspberry Pi disk images using QEMU virtualization.
+#  .
+#  Features:
+#  - Boot ARM and AArch64 Raspberry Pi images
+#  - Support for qcow2, img, and raw image formats
+#  - Auto-detect kernel, DTB, and machine type
+#  - SSH port forwarding for headless access
+#  - VNC support for remote display
+#  - Custom kernel and boot parameters
+#  - USB and audio device emulation
+#  - Multiple machine types (raspi3b, versatilepb, virt)
+# PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 set -euo pipefail
 
 # PiBoot - Boot Raspberry Pi images in QEMU

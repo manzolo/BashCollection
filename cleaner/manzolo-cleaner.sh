@@ -1,4 +1,23 @@
 #!/bin/bash
+# PKG_NAME: manzolo-cleaner
+# PKG_VERSION: 2.5.1
+# PKG_SECTION: admin
+# PKG_PRIORITY: optional
+# PKG_ARCHITECTURE: all
+# PKG_DEPENDS: bash (>= 4.0), dialog, bc, sudo
+# PKG_RECOMMENDS: apt, dpkg
+# PKG_MAINTAINER: Manzolo <manzolo@libero.it>
+# PKG_DESCRIPTION: Advanced system cleaning and maintenance tool
+# PKG_LONG_DESCRIPTION: Dialog-based tool for cleaning and maintaining Debian/Ubuntu systems.
+#  .
+#  Features:
+#  - Clean package cache and unused packages
+#  - Remove old kernel versions safely
+#  - Clear system logs and temporary files
+#  - Free disk space analysis
+#  - Configurable cleaning options
+#  - Interactive TUI with progress tracking
+# PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
 # ManzoloCleaner - Advanced System Cleaning Tool
 # Improved version v2.5 with fixed kernel removal, better command execution, and optimizations
@@ -430,7 +449,7 @@ init_script() {
 # Improved main menu (unchanged)
 main_menu() {
     while true; do
-        choice=$(dialog --clear --backtitle "$SCRIPT_NAME v2.5" --title "Main Menu" \
+        choice=$(dialog --clear --backtitle "$SCRIPT_NAME v2.5.1" --title "Main Menu" \
         --menu "Choose an option:" 17 50 6 \
         1 "🐳 Docker Cleanup" \
         2 "🐧 Ubuntu Cleanup" \

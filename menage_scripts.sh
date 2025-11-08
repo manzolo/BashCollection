@@ -460,10 +460,180 @@ install_self() {
     fi
 }
 
+install_single_script() {
+    local script_name="$1"
+    local debug_mode="${2:-false}"
+
+    if [ -z "$script_name" ]; then
+        echo -e "${RED}✖ No script name provided${NC}"
+        return 1
+    fi
+
+    echo -e "${BLUE}>>> Installing single script: ${YELLOW}$script_name${NC}"
+
+    # Load patterns and find the script
+    load_ignore_patterns "$debug_mode"
+    load_name_mappings "$debug_mode"
+    find_executable_scripts "$debug_mode"
+
+    # Find the matching script
+    local found_script=""
+    local found_name=""
+    for script_path in "${INCLUDED_FILES[@]}"; do
+        local cmd_name=$(get_command_name "$script_path")
+        local default_name=$(get_default_command_name "$script_path")
+
+        if [ "$cmd_name" = "$script_name" ] || [ "$default_name" = "$script_name" ]; then
+            found_script="$script_path"
+            found_name="$cmd_name"
+            break
+        fi
+    done
+
+    if [ -z "$found_script" ]; then
+        echo -e "${RED}✖ Script not found: $script_name${NC}"
+        echo -e "${YELLOW}Run './menage_scripts.sh list' to see available scripts${NC}"
+        return 1
+    fi
+
+    echo -e "${GREEN}✔ Found: ${CYAN}$found_name${NC} ${BLUE}(${found_script#$SCRIPT_DIR/})${NC}"
+
+    # Create directories if needed
+    mkdir -p "$SCRIPT_BASE_DIR"
+
+    # Copy the script and its dependencies
+    local script_dir="$(dirname "$found_script")"
+    local relative_dir="${script_dir#$SCRIPT_DIR/}"
+
+    # Copy the entire directory structure for this script
+    if [ "$relative_dir" != "." ]; then
+        mkdir -p "$SCRIPT_BASE_DIR/$relative_dir"
+        cp -r "$script_dir"/* "$SCRIPT_BASE_DIR/$relative_dir/"
+        chmod -R 755 "$SCRIPT_BASE_DIR/$relative_dir"
+        if [ "$debug_mode" = "true" ]; then
+            echo -e "  ${CYAN}Copied directory: $relative_dir${NC}"
+        fi
+    else
+        cp "$found_script" "$SCRIPT_BASE_DIR/"
+        chmod 755 "$SCRIPT_BASE_DIR/$(basename "$found_script")"
+    fi
+
+    # Create symlinks
+    local target_path="$SCRIPT_BASE_DIR/${found_script#$SCRIPT_DIR/}"
+    local default_name=$(get_default_command_name "$found_script")
+    local relative_path="${found_script#$SCRIPT_DIR/}"
+    local has_mapping="${NAME_MAPPINGS[$relative_path]:+1}"
+
+    # Create main symlink (mapped or default)
+    if command -v "$found_name" >/dev/null 2>&1 && [ ! -L "$INSTALL_DIR/$found_name" ]; then
+        echo -e "  ${RED}⚠ Warning: '$found_name' conflicts with system command. Skipping.${NC}"
+    else
+        ln -sf "$target_path" "$INSTALL_DIR/$found_name"
+        echo -e "  ${GREEN}✔ Symlink created:${NC} ${YELLOW}$found_name${NC}"
+    fi
+
+    # Create original name symlink if different
+    if [ -n "$has_mapping" ] && [ "$found_name" != "$default_name" ]; then
+        if command -v "$default_name" >/dev/null 2>&1 && [ ! -L "$INSTALL_DIR/$default_name" ]; then
+            echo -e "  ${RED}⚠ Warning: '$default_name' conflicts with system command. Skipping.${NC}"
+        else
+            ln -sf "$target_path" "$INSTALL_DIR/$default_name"
+            echo -e "  ${GREEN}✔ Symlink created:${NC} ${YELLOW}$default_name${NC} ${CYAN}(original)${NC}"
+        fi
+    fi
+
+    echo -e "\n${GREEN}Installation complete!${NC} ${YELLOW}$script_name${NC} is now available in your PATH."
+    echo -e "Run '${BOLD}$found_name --help${NC}' to get started."
+}
+
+uninstall_single_script() {
+    local script_name="$1"
+    local debug_mode="${2:-false}"
+
+    if [ -z "$script_name" ]; then
+        echo -e "${RED}✖ No script name provided${NC}"
+        return 1
+    fi
+
+    echo -e "${BLUE}>>> Uninstalling single script: ${YELLOW}$script_name${NC}"
+
+    # Load patterns and find the script
+    load_ignore_patterns "$debug_mode"
+    load_name_mappings "$debug_mode"
+    find_executable_scripts "$debug_mode"
+
+    # Find the matching script
+    local found_script=""
+    local found_name=""
+    for script_path in "${INCLUDED_FILES[@]}"; do
+        local cmd_name=$(get_command_name "$script_path")
+        local default_name=$(get_default_command_name "$script_path")
+
+        if [ "$cmd_name" = "$script_name" ] || [ "$default_name" = "$script_name" ]; then
+            found_script="$script_path"
+            found_name="$cmd_name"
+            break
+        fi
+    done
+
+    if [ -z "$found_script" ]; then
+        echo -e "${RED}✖ Script not found: $script_name${NC}"
+        return 1
+    fi
+
+    echo -e "${GREEN}✔ Found: ${CYAN}$found_name${NC} ${BLUE}(${found_script#$SCRIPT_DIR/})${NC}"
+
+    local default_name=$(get_default_command_name "$found_script")
+    local relative_path="${found_script#$SCRIPT_DIR/}"
+    local has_mapping="${NAME_MAPPINGS[$relative_path]:+1}"
+
+    # Remove main symlink
+    if [ -L "$INSTALL_DIR/$found_name" ]; then
+        rm "$INSTALL_DIR/$found_name"
+        echo -e "  ${RED}✖ Symlink removed:${NC} ${YELLOW}$found_name${NC}"
+    else
+        echo -e "  ${YELLOW}→ Symlink not found:${NC} ${YELLOW}$found_name${NC}"
+    fi
+
+    # Remove original name symlink if different
+    if [ -n "$has_mapping" ] && [ "$found_name" != "$default_name" ]; then
+        if [ -L "$INSTALL_DIR/$default_name" ]; then
+            rm "$INSTALL_DIR/$default_name"
+            echo -e "  ${RED}✖ Symlink removed:${NC} ${YELLOW}$default_name${NC} ${CYAN}(original)${NC}"
+        else
+            echo -e "  ${YELLOW}→ Symlink not found:${NC} ${YELLOW}$default_name${NC}"
+        fi
+    fi
+
+    echo -e "\n${GREEN}Uninstallation complete!${NC} ${YELLOW}$script_name${NC} has been removed."
+}
+
 install_scripts() {
     local debug_mode="false"
-    if [ "$1" = "--debug" ]; then
-        debug_mode="true"
+    local package_name=""
+
+    # Parse arguments
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --debug)
+                debug_mode="true"
+                shift
+                ;;
+            *)
+                package_name="$1"
+                shift
+                ;;
+        esac
+    done
+
+    # If a specific package is requested, install only that
+    if [ -n "$package_name" ]; then
+        install_single_script "$package_name" "$debug_mode"
+        return $?
+    fi
+
+    # Otherwise, install all scripts (original behavior)
+    if [ "$debug_mode" = "true" ]; then
         echo -e "${BLUE}>>> Installing scripts with debug output${NC}"
     else
         echo -e "${BLUE}>>> Installing executable scripts into: $SCRIPT_BASE_DIR and $INSTALL_DIR${NC}"
@@ -540,8 +710,30 @@ install_scripts() {
 
 uninstall_scripts() {
     local debug_mode="false"
-    if [ "$1" = "--debug" ]; then
-        debug_mode="true"
+    local package_name=""
+
+    # Parse arguments
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --debug)
+                debug_mode="true"
+                shift
+                ;;
+            *)
+                package_name="$1"
+                shift
+                ;;
+        esac
+    done
+
+    # If a specific package is requested, uninstall only that
+    if [ -n "$package_name" ]; then
+        uninstall_single_script "$package_name" "$debug_mode"
+        return $?
+    fi
+
+    # Otherwise, uninstall all scripts (original behavior)
+    if [ "$debug_mode" = "true" ]; then
         echo -e "${BLUE}>>> Uninstalling scripts with debug output${NC}"
     else
         echo -e "${BLUE}>>> Uninstalling scripts from: $INSTALL_DIR and $SCRIPT_BASE_DIR${NC}"
@@ -832,7 +1024,8 @@ publish_specific_script() {
 
     # Publish to repository if successful
     if [ $success -eq 1 ]; then
-        publish_to_repository "$PACKAGE_BUILD_DIR"
+        # Enable auto-deploy for non-interactive publish
+        AUTO_DEPLOY=true publish_to_repository "$PACKAGE_BUILD_DIR"
     fi
 
     # Cleanup
@@ -849,12 +1042,9 @@ publish_menu() {
     echo -e "${YELLOW}This will build .deb packages and publish them to your Ubuntu repository.${NC}"
     echo ""
 
-    # Check if repository exists
-    if [ ! -d "$SCRIPT_DIR/utils/ubuntu-repo" ]; then
-        echo -e "${RED}✖ Ubuntu repository not found at utils/ubuntu-repo${NC}"
-        echo -e "${YELLOW}Please set up the repository first.${NC}"
-        return 1
-    fi
+    # Note: Remote deployment is optional
+    # If deploy-to-repo.sh exists, packages will be deployed to remote repository
+    # Otherwise, packages will just be built and staged in packages/ directory
 
     # If a target script is specified, publish it directly
     if [ -n "$target_script" ]; then
@@ -1149,12 +1339,28 @@ build_script_package() {
     rsync -a --exclude='.git' --exclude='__pycache__' --exclude='*.deb' "$base_dir/" "$pkg_dir/usr/share/$package_name/"
 
     # === Wrapper eseguibile ===
+    # Create wrapper for the alias/mapped name
     cat > "$pkg_dir/usr/local/bin/$script_name" << EOF
 #!/bin/bash
 # BashCollection wrapper - v$version
 exec /usr/share/$package_name/$(basename "$script_path") "\$@"
 EOF
     chmod 755 "$pkg_dir/usr/local/bin/$script_name"
+
+    # Also create wrapper for the original name (if different from alias)
+    local original_name=$(basename "$script_path" .sh)
+    if [ "$script_name" != "$original_name" ] && [ "$script_name" != "$package_name" ]; then
+        # The package_name is the canonical original name, use it
+        if [ "$script_name" != "$package_name" ]; then
+            cat > "$pkg_dir/usr/local/bin/$package_name" << EOF
+#!/bin/bash
+# BashCollection wrapper - v$version
+exec /usr/share/$package_name/$(basename "$script_path") "\$@"
+EOF
+            chmod 755 "$pkg_dir/usr/local/bin/$package_name"
+            echo -e " ${CYAN}Created both executables: ${YELLOW}$script_name${CYAN} and ${YELLOW}$package_name${NC}"
+        fi
+    fi
 
     # === Control file with metadata ===
     local description="${PKG_META[DESCRIPTION]}"
@@ -1249,6 +1455,150 @@ EOF
     fi
 }
 
+# Function to run SSH commands with the original user's credentials
+run_ssh_as_user() {
+    if [ -n "${SUDO_USER:-}" ]; then
+        # Running under sudo, use the original user's SSH credentials
+        sudo -u "$SUDO_USER" "$@"
+    else
+        # Not running under sudo, execute normally
+        "$@"
+    fi
+}
+
+# Function to deploy packages to remote repository
+deploy_packages_to_remote() {
+    local packages=("$@")
+
+    if [ ${#packages[@]} -eq 0 ]; then
+        echo -e "${RED}No packages specified for deployment${NC}"
+        return 1
+    fi
+
+    # Load deploy configuration
+    local REMOTE_SERVER="${REMOTE_SERVER:-root@home-server.lan}"
+    local REMOTE_REPO_PATH="${REMOTE_REPO_PATH:-/root/ubuntu-repo}"
+    local REMOTE_PACKAGES_DIR="$REMOTE_REPO_PATH/packages"
+    local LOCAL_PACKAGES_DIR="$SCRIPT_DIR/packages"
+
+    # Load custom config if exists
+    if [ -f "$SCRIPT_DIR/.deploy-config" ]; then
+        source "$SCRIPT_DIR/.deploy-config"
+    fi
+
+    echo -e "${CYAN}Deploying to remote repository...${NC}"
+    echo -e "${CYAN}Server: ${YELLOW}$REMOTE_SERVER${NC}"
+    [ -n "${SUDO_USER:-}" ] && echo -e "${CYAN}Using SSH keys from user: ${YELLOW}$SUDO_USER${NC}"
+    echo ""
+
+    # Test connection
+    if ! run_ssh_as_user ssh -o ConnectTimeout=5 -o BatchMode=yes "$REMOTE_SERVER" "echo 'Connected'" &>/dev/null; then
+        echo -e "${RED}✖ Cannot connect to $REMOTE_SERVER${NC}"
+        echo -e "${YELLOW}Make sure SSH key authentication is set up${NC}"
+        if [ -n "${SUDO_USER:-}" ]; then
+            echo -e "${YELLOW}Trying to connect as user: $SUDO_USER${NC}"
+        fi
+        return 1
+    fi
+
+    echo -e "${GREEN}✔ Connection successful${NC}"
+    echo ""
+
+    # Deploy each package
+    local deployed=0
+    local failed=0
+
+    for pkg in "${packages[@]}"; do
+        echo -e "${BLUE}Deploying: ${YELLOW}$pkg${NC}"
+
+        # Find .deb file
+        local deb_file=$(find "$LOCAL_PACKAGES_DIR" -name "${pkg}_*.deb" -type f | head -1)
+
+        if [ -z "$deb_file" ]; then
+            echo -e "${RED}  ✖ Package file not found${NC}"
+            ((failed++))
+            continue
+        fi
+
+        # Copy to remote (using original user's SSH keys)
+        if run_ssh_as_user scp "$deb_file" "$REMOTE_SERVER:$REMOTE_PACKAGES_DIR/" &>/dev/null; then
+            echo -e "${GREEN}  ✔ Uploaded to remote server${NC}"
+            ((deployed++))
+        else
+            echo -e "${RED}  ✖ Upload failed${NC}"
+            ((failed++))
+        fi
+    done
+
+    echo ""
+
+    # Import packages on remote (using original user's SSH keys)
+    if [ $deployed -gt 0 ]; then
+        echo -e "${CYAN}Importing packages on remote repository...${NC}"
+        if run_ssh_as_user ssh "$REMOTE_SERVER" "cd '$REMOTE_REPO_PATH' && ./repo.sh import" &>/dev/null; then
+            echo -e "${GREEN}✔ Repository index updated${NC}"
+        else
+            echo -e "${YELLOW}⚠ Import may have failed, check remote server${NC}"
+        fi
+    fi
+
+    echo ""
+    echo -e "${GREEN}✔ Deployed $deployed package(s)${NC}"
+    [ $failed -gt 0 ] && echo -e "${YELLOW}⚠ Failed: $failed package(s)${NC}"
+
+    return 0
+}
+
+# Function to unpublish packages from remote repository
+unpublish_packages_from_remote() {
+    local packages=("$@")
+
+    # Load deploy configuration
+    local REMOTE_SERVER="${REMOTE_SERVER:-root@home-server.lan}"
+    local REMOTE_REPO_PATH="${REMOTE_REPO_PATH:-/root/ubuntu-repo}"
+
+    # Load custom config if exists
+    if [ -f "$SCRIPT_DIR/.deploy-config" ]; then
+        source "$SCRIPT_DIR/.deploy-config"
+    fi
+
+    echo -e "${CYAN}Unpublishing from remote repository...${NC}"
+    echo -e "${CYAN}Server: ${YELLOW}$REMOTE_SERVER${NC}"
+    [ -n "${SUDO_USER:-}" ] && echo -e "${CYAN}Using SSH keys from user: ${YELLOW}$SUDO_USER${NC}"
+    echo ""
+
+    # Test connection (using original user's SSH keys)
+    if ! run_ssh_as_user ssh -o ConnectTimeout=5 -o BatchMode=yes "$REMOTE_SERVER" "echo 'Connected'" &>/dev/null; then
+        echo -e "${RED}✖ Cannot connect to $REMOTE_SERVER${NC}"
+        return 1
+    fi
+
+    echo -e "${GREEN}✔ Connection successful${NC}"
+    echo ""
+
+    # Remove each package (using original user's SSH keys)
+    local removed=0
+    local failed=0
+
+    for pkg in "${packages[@]}"; do
+        echo -e "${BLUE}Removing: ${YELLOW}$pkg${NC}"
+
+        if run_ssh_as_user ssh "$REMOTE_SERVER" "cd '$REMOTE_REPO_PATH' && ./repo.sh remove '$pkg'" &>/dev/null; then
+            echo -e "${GREEN}  ✔ Removed from repository${NC}"
+            ((removed++))
+        else
+            echo -e "${YELLOW}  ⚠ Package may not exist or removal failed${NC}"
+            ((failed++))
+        fi
+    done
+
+    echo ""
+    echo -e "${GREEN}✔ Removed $removed package(s)${NC}"
+    [ $failed -gt 0 ] && echo -e "${YELLOW}⚠ Failed: $failed package(s)${NC}"
+
+    return 0
+}
+
 # Funzione per pubblicare nel repository
 publish_to_repository() {
     local package_dir="$1"
@@ -1265,36 +1615,161 @@ publish_to_repository() {
     fi
 
     echo -e "${YELLOW}Found $deb_count package(s) to publish${NC}"
+    echo ""
 
-    # Check se esiste il repository Docker
-    if [ -f "$SCRIPT_DIR/utils/ubuntu-repo/repo.sh" ]; then
-        echo -e "${CYAN}Using Docker repository manager...${NC}"
+    # Always copy packages to local staging area
+    local local_packages_dir="$SCRIPT_DIR/packages"
+    mkdir -p "$local_packages_dir"
+    echo -e "${CYAN}Copying packages to staging area: ${BOLD}$local_packages_dir${NC}"
+    find "$package_dir" -name "*.deb" -exec cp -v {} "$local_packages_dir/" \;
+    echo ""
 
-        # Copia pacchetti nella directory packages del repo
-        find "$package_dir" -name "*.deb" -exec cp {} "$SCRIPT_DIR/utils/ubuntu-repo/packages/" \;
+    # Get list of packages
+    local packages=()
+    while IFS= read -r deb_file; do
+        # Extract package name from filename (e.g., manzolo-chroot_3.0.0_all.deb -> manzolo-chroot)
+        local pkg_name=$(basename "$deb_file" | sed 's/_[0-9].*//')
+        packages+=("$pkg_name")
+    done < <(find "$package_dir" -name "*.deb")
 
-        # Usa il repo manager per importare
-        cd "$SCRIPT_DIR/utils/ubuntu-repo"
+    echo -e "${GREEN}✔ Package build complete!${NC}"
+    echo -e "${CYAN}Packages available at: ${BOLD}$local_packages_dir${NC}"
 
-        # Check se il container è in esecuzione
-        if docker ps | grep -q ubuntu-repo; then
-            echo -e "${GREEN}✔ Repository container is running${NC}"
-            ./repo.sh import
-        else
-            echo -e "${YELLOW}! Repository container is not running${NC}"
-            echo -e "${CYAN}Packages copied to utils/ubuntu-repo/packages/${NC}"
-            echo -e "${CYAN}Start the repository and run: ./repo.sh import${NC}"
-        fi
+    # Show list of built packages
+    echo ""
+    echo -e "${CYAN}Built packages:${NC}"
+    find "$local_packages_dir" -name "*.deb" -type f -printf "  • %f (%s bytes)\n" 2>/dev/null | sort
+    echo ""
 
-        cd "$SCRIPT_DIR"
+    # Check if auto-deploy is requested (non-interactive mode)
+    local auto_deploy="${AUTO_DEPLOY:-false}"
+
+    if [ "$auto_deploy" = "true" ]; then
+        # Non-interactive mode - automatically deploy
+        echo -e "${CYAN}Auto-deploying to remote repository...${NC}"
+        echo ""
+        deploy_packages_to_remote "${packages[@]}"
     else
-        echo -e "${YELLOW}! Repository manager not found${NC}"
-        echo -e "${CYAN}Packages are available in: $package_dir${NC}"
-        echo -e "${CYAN}You can manually add them to your repository.${NC}"
+        # Interactive deployment menu
+        while true; do
+            choice=$(whiptail --title "📦 Package Deployment" \
+                --menu "Package(s) built successfully!\n\nChoose an action:" \
+                18 70 4 \
+                "1" "🚀 Deploy to remote repository" \
+                "2" "💾 Keep local only (done)" \
+                "3" "🗑️  Unpublish from remote" \
+                "4" "❌ Exit" \
+                3>&1 1>&2 2>&3) || choice=2
+
+            case "$choice" in
+                1)
+                    # Deploy to remote
+                    clear
+                    deploy_packages_to_remote "${packages[@]}"
+                    echo ""
+                    read -p "Press Enter to continue..."
+                    ;;
+                2)
+                    # Keep local only
+                    echo -e "${GREEN}Packages are available at: $local_packages_dir${NC}"
+                    break
+                    ;;
+                3)
+                    # Unpublish menu
+                    unpublish_menu
+                    ;;
+                4)
+                    break
+                    ;;
+            esac
+        done
+    fi
+}
+
+# Menu to unpublish packages
+unpublish_menu() {
+    local packages=("$@")
+
+    # Load deploy configuration
+    local REMOTE_SERVER="${REMOTE_SERVER:-root@home-server.lan}"
+    local REMOTE_REPO_PATH="${REMOTE_REPO_PATH:-/root/ubuntu-repo}"
+
+    # Load custom config if exists
+    if [ -f "$SCRIPT_DIR/.deploy-config" ]; then
+        source "$SCRIPT_DIR/.deploy-config"
     fi
 
+    # If specific packages provided, unpublish them directly (non-interactive)
+    if [ ${#packages[@]} -gt 0 ]; then
+        echo -e "${CYAN}Unpublishing package(s): ${YELLOW}${packages[*]}${NC}"
+        echo ""
+        unpublish_packages_from_remote "${packages[@]}"
+        return $?
+    fi
+
+    # Interactive mode - show checklist
+    # Test connection (using original user's SSH keys)
+    if ! run_ssh_as_user ssh -o ConnectTimeout=5 -o BatchMode=yes "$REMOTE_SERVER" "echo 'Connected'" &>/dev/null; then
+        whiptail --title "Connection Error" \
+            --msgbox "Cannot connect to $REMOTE_SERVER\n\nMake sure SSH key authentication is set up." \
+            10 60
+        return 1
+    fi
+
+    # Get list of packages from remote repository (using original user's SSH keys)
+    local package_list
+    package_list=$(run_ssh_as_user ssh "$REMOTE_SERVER" "cd '$REMOTE_REPO_PATH' && ./repo.sh list" 2>/dev/null)
+
+    if [ -z "$package_list" ]; then
+        whiptail --title "No Packages" \
+            --msgbox "No packages found in remote repository or repository is not accessible." \
+            10 60
+        return 1
+    fi
+
+    # Build menu from package list
+    local menu_items=()
+    while IFS= read -r pkg; do
+        # Extract package name (remove version and architecture)
+        local pkg_name=$(echo "$pkg" | cut -d'_' -f1)
+        [ -n "$pkg_name" ] && menu_items+=("$pkg_name" "$pkg" "OFF")
+    done <<< "$package_list"
+
+    if [ ${#menu_items[@]} -eq 0 ]; then
+        whiptail --title "No Packages" \
+            --msgbox "No packages available to unpublish." \
+            10 60
+        return 1
+    fi
+
+    # Show checklist for package selection
+    local selected
+    selected=$(whiptail --title "🗑️  Unpublish Packages" \
+        --checklist "Select packages to remove from remote repository:\n\nServer: $REMOTE_SERVER" \
+        20 70 12 \
+        "${menu_items[@]}" \
+        3>&1 1>&2 2>&3) || return 0
+
+    if [ -z "$selected" ]; then
+        return 0
+    fi
+
+    # Remove quotes and convert to array
+    selected=$(echo "$selected" | tr -d '"')
+    local packages_to_remove=($selected)
+
+    # Confirm removal
+    if ! whiptail --title "Confirm Removal" \
+        --yesno "Remove ${#packages_to_remove[@]} package(s) from remote repository?\n\n$(printf '%s\n' "${packages_to_remove[@]}")\n\nThis will update the repository index." \
+        15 70; then
+        return 0
+    fi
+
+    # Unpublish packages
+    clear
+    unpublish_packages_from_remote "${packages_to_remove[@]}"
     echo ""
-    echo -e "${GREEN}✔ Publish process complete!${NC}"
+    read -p "Press Enter to continue..."
 }
 
 # Funzione principale per gestire gli argomenti
@@ -1325,6 +1800,10 @@ main() {
             ;;
         publish)
             publish_menu "$2"
+            ;;
+        unpublish)
+            shift  # Remove 'unpublish' from arguments
+            unpublish_menu "$@"  # Pass all remaining arguments as package names
             ;;
         update)
             check_root_permissions
@@ -1408,31 +1887,45 @@ show_help() {
     echo "Usage: $SCRIPT_NAME [COMMAND] [OPTIONS] [ARGUMENTS]"
     echo ""
     echo -e "${CYAN}COMMANDS:${NC}"
-    echo "  menu             Show interactive menu (default if no command given)"
-    echo "  install          Install all executable scripts to system PATH"
-    echo "  uninstall        Remove all installed scripts"
-    echo "  list             Show available scripts"
-    echo "  run [SCRIPT]     Run a specific script or show selection menu"
-    echo "  publish [SCRIPT] Build .deb packages and publish to repository"
-    echo "                   - Without SCRIPT: shows interactive menu"
-    echo "                   - With SCRIPT: builds and publishes that specific script"
-    echo "  debug            Show detailed debug information"
-    echo "  update           Update scripts from git and reinstall"
-    echo "  help             Show this help message"
+    echo "  menu                 Show interactive menu (default if no command given)"
+    echo "  install [SCRIPT]     Install scripts to system PATH"
+    echo "                       - Without SCRIPT: installs all scripts"
+    echo "                       - With SCRIPT: installs only that specific script"
+    echo "  uninstall [SCRIPT]   Remove installed scripts"
+    echo "                       - Without SCRIPT: removes all scripts"
+    echo "                       - With SCRIPT: removes only that specific script"
+    echo "  list                 Show available scripts"
+    echo "  run [SCRIPT]         Run a specific script or show selection menu"
+    echo "  publish [SCRIPT]     Build .deb packages and deploy to remote repository"
+    echo "                       - Without SCRIPT: shows interactive menu"
+    echo "                       - With SCRIPT: builds and auto-deploys to remote"
+    echo "  unpublish [PACKAGE]  Remove packages from remote repository"
+    echo "                       - Without PACKAGE: shows interactive checklist"
+    echo "                       - With PACKAGE: auto-removes specified package(s)"
+    echo "  debug                Show detailed debug information"
+    echo "  update               Update scripts from git and reinstall"
+    echo "  help                 Show this help message"
     echo ""
     echo -e "${CYAN}OPTIONS:${NC}"
-    echo "  --debug          Show detailed output for install/uninstall/list commands"
+    echo "  --debug              Show detailed output for install/uninstall/list commands"
     echo ""
     echo -e "${CYAN}EXAMPLES:${NC}"
-    echo "  $SCRIPT_NAME                    # Show interactive menu"
-    echo "  $SCRIPT_NAME menu               # Show interactive menu"
-    echo "  $SCRIPT_NAME install --debug    # Install with debug output"
-    echo "  $SCRIPT_NAME list               # List available scripts"
-    echo "  $SCRIPT_NAME run                # Show script selection menu"
-    echo "  $SCRIPT_NAME run myscript       # Run 'myscript' directly"
-    echo "  $SCRIPT_NAME run backup --help  # Run 'backup' script with --help"
-    echo "  $SCRIPT_NAME publish            # Show publish menu (interactive)"
-    echo "  $SCRIPT_NAME publish disk-usage # Build and publish disk-usage only"
+    echo "  $SCRIPT_NAME                       # Show interactive menu"
+    echo "  $SCRIPT_NAME menu                  # Show interactive menu"
+    echo "  $SCRIPT_NAME install               # Install all scripts"
+    echo "  $SCRIPT_NAME install mchroot       # Install only mchroot"
+    echo "  $SCRIPT_NAME install mchroot --debug  # Install mchroot with debug output"
+    echo "  $SCRIPT_NAME uninstall             # Uninstall all scripts"
+    echo "  $SCRIPT_NAME uninstall mchroot     # Uninstall only mchroot"
+    echo "  $SCRIPT_NAME list                  # List available scripts"
+    echo "  $SCRIPT_NAME run                   # Show script selection menu"
+    echo "  $SCRIPT_NAME run myscript          # Run 'myscript' directly"
+    echo "  $SCRIPT_NAME run backup --help     # Run 'backup' script with --help"
+    echo "  $SCRIPT_NAME publish               # Show publish menu (interactive)"
+    echo "  $SCRIPT_NAME publish vm-iso-manager  # Build and auto-deploy vm-iso-manager"
+    echo "  $SCRIPT_NAME unpublish             # Show unpublish menu (interactive)"
+    echo "  $SCRIPT_NAME unpublish vm-iso-manager  # Auto-remove vm-iso-manager from remote"
+    echo "  $SCRIPT_NAME unpublish pkg1 pkg2   # Auto-remove multiple packages"
     echo ""
     echo -e "${CYAN}FILE SELECTION RULES:${NC}"
     echo "  • Only executable .sh files in subdirectories are included"

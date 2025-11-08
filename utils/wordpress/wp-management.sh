@@ -1,4 +1,25 @@
 #!/bin/bash
+# PKG_NAME: wp-management
+# PKG_VERSION: 1.5.0
+# PKG_SECTION: web
+# PKG_PRIORITY: optional
+# PKG_ARCHITECTURE: all
+# PKG_DEPENDS: bash (>= 4.0), tar, gzip
+# PKG_RECOMMENDS: docker.io | docker-ce, docker-compose | docker-compose-plugin, mysql-client | mariadb-client
+# PKG_SUGGESTS: rsync
+# PKG_MAINTAINER: Manzolo <manzolo@libero.it>
+# PKG_DESCRIPTION: WordPress site backup and dockerization tool
+# PKG_LONG_DESCRIPTION: Manage WordPress backups and convert sites to Docker containers.
+#  .
+#  Features:
+#  - Backup WordPress sites with files and database
+#  - Convert existing WordPress to Docker Compose
+#  - Automatic database export and import
+#  - Docker network creation and configuration
+#  - Support for both MySQL and MariaDB
+#  - Preserve file permissions and ownership
+#  - Interactive site selection and configuration
+# PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 # wp-management - Enhanced script to manage backups and dockerization of WordPress sites
 # Usage:
 # ./wp-management backup <site_name>

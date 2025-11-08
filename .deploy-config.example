@@ -1,0 +1,22 @@
+# Deploy to Repository - Configuration File
+# Copy this file to .deploy-config and customize your settings
+# This file is loaded by deploy-to-repo.sh if it exists
+
+# Remote server configuration
+REMOTE_SERVER="root@home-server.lan"
+
+# Remote repository path (where repo.sh is located)
+REMOTE_REPO_PATH="/root/ubuntu-repo"
+
+# Remote packages directory (usually $REMOTE_REPO_PATH/packages)
+REMOTE_PACKAGES_DIR="$REMOTE_REPO_PATH/packages"
+
+# Local packages directory (relative to BashCollection root)
+LOCAL_PACKAGES_DIR="packages"
+
+# SSH options (optional)
+# SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=no"
+
+# Default behavior
+# DRY_RUN=false
+# SKIP_IMPORT=false

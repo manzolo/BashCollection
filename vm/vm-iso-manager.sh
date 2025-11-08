@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: vm-iso-manager
-# PKG_VERSION: 1.0.0
+# PKG_VERSION: 1.0.1
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all

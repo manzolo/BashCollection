@@ -1,11 +1,11 @@
 #!/bin/bash
 # PKG_NAME: nvidia-manager
-# PKG_VERSION: 1.0.0
+# PKG_VERSION: 1.0.1
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
 # PKG_DEPENDS: bash (>= 4.0), whiptail
-# PKG_RECOMMENDS: nvidia-driver-535 | nvidia-driver-525
+# PKG_RECOMMENDS: 
 # PKG_MAINTAINER: Manzolo <manzolo@libero.it>
 # PKG_DESCRIPTION: Interactive NVIDIA driver and GPU management tool
 # PKG_LONG_DESCRIPTION: TUI-based tool for managing NVIDIA drivers and GPU settings.

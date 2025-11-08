@@ -1,4 +1,25 @@
 #!/bin/bash
+# PKG_NAME: manzolo-disk-clone
+# PKG_VERSION: 2.4.0
+# PKG_SECTION: admin
+# PKG_PRIORITY: optional
+# PKG_ARCHITECTURE: all
+# PKG_DEPENDS: bash (>= 4.0), dialog, partclone, qemu-utils, parted
+# PKG_RECOMMENDS: cryptsetup, lvm2
+# PKG_SUGGESTS: pv
+# PKG_MAINTAINER: Manzolo <manzolo@libero.it>
+# PKG_DESCRIPTION: Clone disks between physical and virtual formats
+# PKG_LONG_DESCRIPTION: Advanced disk cloning tool with dry-run mode and smart cloning.
+#  .
+#  Features:
+#  - Clone virtual to physical disks
+#  - Clone physical to virtual images
+#  - Virtual to virtual conversion with compression
+#  - LUKS encryption support with UUID preservation
+#  - GPT and MBR partition table support
+#  - Dry-run mode for testing
+#  - Uses partclone for efficient space usage
+# PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 set -euo pipefail
 
 # ╔══════════════════════════════════════════════╗
