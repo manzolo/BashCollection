@@ -96,7 +96,7 @@ Virtual machine disk operations and management.
 Advanced chroot utilities for physical and virtual disks.
 - **manzolo-chroot (mchroot)**: Chroot into disks with NBD, LUKS, and LVM support
 
-**📖 [Full Documentation](chroot/Readme.md)**
+**📖 [Full Documentation](chroot/README.md)**
 
 ### Disk Operations
 Advanced disk cloning between physical and virtual formats.
