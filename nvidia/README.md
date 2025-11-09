@@ -164,11 +164,11 @@ Runs comprehensive diagnostics and generates a troubleshooting report.
 
 <img width="949" height="489" alt="Available NVIDIA drivers list" src="https://github.com/user-attachments/assets/c4c298c9-d0f7-4c55-91a2-65eee5f7adfb" />
 
-### Driver Installation
+### Container Toolkit Configuration
 
 <img width="949" height="489" alt="Driver installation progress" src="https://github.com/user-attachments/assets/af37ec52-ba6a-4de1-8a2d-8966f8efdfb7" />
 
-### Container Toolkit Configuration
+### System information
 
 <img width="949" height="489" alt="NVIDIA Container Toolkit setup" src="https://github.com/user-attachments/assets/482e16ca-0ed3-4b37-b2e2-00079c7dd58e" />
 
