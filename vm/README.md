@@ -74,83 +74,83 @@ The script will:
 
 <img width="1416" height="664" alt="NBD mounting interface" src="https://github.com/user-attachments/assets/a4d15e67-9aa5-40e0-b684-6ee131013765" />
 
-**Partition Management:**
+**Chroot (Linux only):**
 
 <img width="1416" height="664" alt="Partition management" src="https://github.com/user-attachments/assets/c056f891-ca43-4c91-b4d1-8b7f36e1acec" />
 
-**GParted Integration:**
+**Entering Chroot:**
 
 <img width="1416" height="664" alt="GParted integration" src="https://github.com/user-attachments/assets/dc4179d5-6586-4ef1-a5d4-73830aa4501e" />
 
-**Format Conversion:**
+**Disk partitions analysis:**
 
 <img width="1416" height="664" alt="Format conversion" src="https://github.com/user-attachments/assets/d5dab6e9-e16e-4dd8-ad6b-6ec632a83f2f" />
 
-**Snapshot Management:**
+**Disk File informations:**
 
 <img width="1416" height="664" alt="Snapshot operations" src="https://github.com/user-attachments/assets/5c94ccf8-75b5-4c4f-911c-2e684c92e1c9" />
 
-**Disk Optimization:**
+**Disk Operatins:**
 
 <img width="1416" height="664" alt="Disk optimization" src="https://github.com/user-attachments/assets/b4806afb-3ff7-46cf-8c26-5fc4e3ad7d47" />
 
-**File Browser in Mounted Image:**
+**Disk increase operation (resize):**
 
 <img width="1416" height="664" alt="File browser" src="https://github.com/user-attachments/assets/3e15eba3-4647-4a3a-aa06-8d9bda53bdda" />
 
-**LUKS Encryption Support:**
+**Manual resize value:**
 
 <img width="1416" height="664" alt="LUKS support" src="https://github.com/user-attachments/assets/a7c1d292-8f05-4b1b-8938-5f7d6d296000" />
 
-**LVM Management:**
+**Confirmation resize:**
 
 <img width="1416" height="664" alt="LVM management" src="https://github.com/user-attachments/assets/cb1a1387-1ab3-43ad-8175-0d80465f2491" />
 
-**QEMU Testing - UEFI Boot:**
+**Backup operation before resize:**
 
 <img width="1416" height="664" alt="UEFI boot testing" src="https://github.com/user-attachments/assets/d7bcb3c6-1669-4c1f-b565-bc9928e0093d" />
 
-**QEMU Testing - BIOS Boot:**
+**Partition choice to resize:**
 
 <img width="1416" height="664" alt="BIOS boot testing" src="https://github.com/user-attachments/assets/bb6eba42-5a02-4ad8-83c9-1faf9ff35f5a" />
 
-**Resize Operations:**
+**Resize confirmation:**
 
 <img width="1416" height="664" alt="Resize operations" src="https://github.com/user-attachments/assets/2cc2350b-aa79-4509-9523-271e3151376f" />
 
-**Advanced Options:**
+**Resize information:**
 
 <img width="1416" height="664" alt="Advanced options" src="https://github.com/user-attachments/assets/256066bd-1279-4000-bfcb-93dda4352d4b" />
 
-**Compression Settings:**
+**GParted Integration:**
 
 <img width="1416" height="664" alt="Compression settings" src="https://github.com/user-attachments/assets/e4eb3405-f0b2-44d7-af10-d62ea2e2ee85" />
 
-**Filesystem Operations:**
+**QEMU Testing - UEFI Boot:**
 
 <img width="1416" height="664" alt="Filesystem operations" src="https://github.com/user-attachments/assets/4ee42089-3ad1-480e-bdc3-4e4383540c68" />
 
-**Disk Analysis:**
+**MBR - UEFI boot choice:**
 
 <img width="1416" height="664" alt="Disk analysis" src="https://github.com/user-attachments/assets/4907e8d1-00e8-4bfc-8915-41cb4f448d08" />
 
-**Status and Progress:**
+**Memory configuration:**
 
 <img width="1416" height="664" alt="Status display" src="https://github.com/user-attachments/assets/890b5d8b-30e3-4d8f-9046-2f1e6f82d63e" />
 
-**Cleanup Operations:**
+**Network configuration:**
 
 <img width="1416" height="664" alt="Cleanup operations" src="https://github.com/user-attachments/assets/5901b872-6eaf-4254-8bb5-b102c865d103" />
 
-**Error Handling:**
+**Audio configuration:**
 
 <img width="1416" height="664" alt="Error handling" src="https://github.com/user-attachments/assets/e139bd18-8e65-4cd1-9176-174b8e396ea9" />
 
-**Success Messages:**
+**QEMU boot:**
 
 <img width="1416" height="664" alt="Success confirmation" src="https://github.com/user-attachments/assets/102b31ec-6eae-42ab-afaf-347a4be6cf50" />
 
-**Final Menu:**
+**QEMU resize screenshot:**
 
 <img width="1416" height="664" alt="Final menu" src="https://github.com/user-attachments/assets/c4e7d798-a43c-45b8-a8d4-436ac63445fd" />
 
