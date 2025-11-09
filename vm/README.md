@@ -473,10 +473,6 @@ sudo apt install qemu-system-x86 qemu-utils whiptail gparted \
 - Run with sudo
 - Check file permissions on disk images
 
-**GParted Won't Launch:**
-- Install: `sudo apt install gparted`
-- Ensure X11 forwarding if SSH
-
 ## Architecture
 
 Most scripts follow the modular pattern:
