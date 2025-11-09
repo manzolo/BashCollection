@@ -1,11 +1,12 @@
 #!/bin/bash
 # PKG_NAME: mprocmon
-# PKG_VERSION: 2.0.0
+# PKG_VERSION: 2.0.1
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
 # PKG_DEPENDS: bash (>= 4.0), inotify-tools, net-tools, lsof
 # PKG_RECOMMENDS: iftop, nethogs, iotop
+# PKG_ALIASES: manzolo-process-monitor
 # PKG_MAINTAINER: Manzolo <manzolo@libero.it>
 # PKG_DESCRIPTION: Advanced network and file system monitor
 # PKG_LONG_DESCRIPTION: Interactive tool for monitoring network connections

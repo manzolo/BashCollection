@@ -1,10 +1,11 @@
 #!/bin/bash
 # PKG_NAME: mfirewall
-# PKG_VERSION: 1.2.0
+# PKG_VERSION: 1.2.1
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
 # PKG_DEPENDS: bash (>= 4.0), ufw, whiptail
+# PKG_ALIASES: manzolo-firewall
 # PKG_MAINTAINER: Manzolo <manzolo@libero.it>
 # PKG_DESCRIPTION: Advanced interactive UFW firewall manager
 # PKG_LONG_DESCRIPTION: TUI-based tool for managing UFW firewall with advanced features.
