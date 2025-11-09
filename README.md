@@ -90,7 +90,7 @@ Virtual machine disk operations and management.
 - **vm-iso-manager**: ISO management for VMs
 - **vm-helper**: VM utility functions
 
-**📖 [Full Documentation](vm/Readme.md)**
+**📖 [Full Documentation](vm/README.md)**
 
 ### Chroot Tools
 Advanced chroot utilities for physical and virtual disks.
