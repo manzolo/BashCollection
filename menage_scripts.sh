@@ -1530,8 +1530,8 @@ deploy_packages_to_remote() {
     for pkg in "${packages[@]}"; do
         echo -e "${BLUE}Deploying: ${YELLOW}$pkg${NC}"
 
-        # Find .deb file
-        local deb_file=$(find "$LOCAL_PACKAGES_DIR" -name "${pkg}_*.deb" -type f | head -1)
+        # Find .deb file (select latest version)
+        local deb_file=$(find "$LOCAL_PACKAGES_DIR" -name "${pkg}_*.deb" -type f | sort -V | tail -1)
 
         if [ -z "$deb_file" ]; then
             echo -e "${RED}  ✖ Package file not found${NC}"

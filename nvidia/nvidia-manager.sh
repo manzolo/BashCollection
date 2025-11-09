@@ -1,11 +1,11 @@
 #!/bin/bash
 # PKG_NAME: nvidia-manager
-# PKG_VERSION: 1.0.1
+# PKG_VERSION: 1.0.4
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
 # PKG_DEPENDS: bash (>= 4.0), whiptail
-# PKG_RECOMMENDS: 
+# PKG_RECOMMENDS:
 # PKG_MAINTAINER: Manzolo <manzolo@libero.it>
 # PKG_DESCRIPTION: Interactive NVIDIA driver and GPU management tool
 # PKG_LONG_DESCRIPTION: TUI-based tool for managing NVIDIA drivers and GPU settings.
@@ -16,6 +16,7 @@
 #  - Configure GPU settings
 #  - Monitor GPU usage and temperature
 #  - Interactive whiptail-based interface
+#  - Graceful Ctrl+C handling in status and troubleshoot screens
 # PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
 # Colori per output
@@ -59,14 +60,25 @@ error() {
 
 # Function to check NVIDIA driver status
 check_driver_status() {
+    # Set up trap to catch Ctrl+C and return to menu gracefully
+    trap 'echo -e "\n${YELLOW}Returning to main menu...${NC}"; return 0' INT
+
     clear
     echo "Checking NVIDIA driver status..."
+    echo -e "${GRAY}Press Ctrl+C to return to main menu${NC}"
+    echo ""
+
     if command -v nvidia-smi &> /dev/null; then
         nvidia-smi
+        echo ""
+        echo -e "${CYAN}Press Enter to return to main menu...${NC}"
         read -p ""
     else
         whiptail --title "NVIDIA Driver Status" --msgbox "NVIDIA driver not detected or not working correctly." 10 60
     fi
+
+    # Remove trap when done
+    trap - INT
 }
 
 # Function to clean NVIDIA drivers
@@ -91,10 +103,13 @@ search_drivers() {
         whiptail --title "Driver Search" --msgbox "Could not update repositories. Check your connection." 10 60
         return
     fi
-    
+
     local DRIVER_LIST
-    DRIVER_LIST=$(apt-cache search --names-only '^nvidia-driver-[0-9]+' | awk '{print $1}')
-    
+    # Search and sort by version number (descending - newest first)
+    DRIVER_LIST=$(apt-cache search --names-only '^nvidia-driver-[0-9]+' | \
+                  awk '{print $1}' | \
+                  sort -t'-' -k3 -rn)
+
     if [ -z "$DRIVER_LIST" ]; then
         whiptail --title "Driver Search" --msgbox "No NVIDIA drivers found." 10 60
         return
@@ -103,7 +118,9 @@ search_drivers() {
     # Create proper whiptail menu format (tag description pairs)
     local DRIVERS_MENU=()
     while IFS= read -r driver; do
-        DRIVERS_MENU+=("$driver" "NVIDIA Driver $driver")
+        # Extract version number for better description
+        local version=$(echo "$driver" | grep -oP 'nvidia-driver-\K[0-9]+')
+        DRIVERS_MENU+=("$driver" "Version $version (NVIDIA Driver)")
     done <<< "$DRIVER_LIST"
     
     CHOICE=$(whiptail --title "Available NVIDIA Drivers" --menu "Select a driver to install" 25 78 15 "${DRIVERS_MENU[@]}" 3>&1 1>&2 2>&3)
@@ -229,10 +246,15 @@ check_and_install_toolkit() {
 
 # Troubleshooting NVIDIA
 troubleshoot_nvidia() {
+    # Set up trap to catch Ctrl+C and return to menu gracefully
+    trap 'echo -e "\n${YELLOW}Returning to main menu...${NC}"; return 0' INT
+
     log "Running NVIDIA troubleshooting..."
-    
+
+    clear
     echo "=== NVIDIA Troubleshooting Report ==="
     echo "Generated: $(date)"
+    echo -e "${GRAY}Press Ctrl+C to return to main menu${NC}"
     echo
     
     # 1. Verifica presenza driver host
@@ -291,7 +313,12 @@ troubleshoot_nvidia() {
     
     echo
     log "Troubleshooting completed"
+    echo ""
+    echo -e "${CYAN}Press Enter to return to main menu...${NC}"
     read -p ""
+
+    # Remove trap when done
+    trap - INT
 }
 
 # Rileva driver NVIDIA host
