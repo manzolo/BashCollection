@@ -2,6 +2,22 @@
 
 A curated collection of Bash scripts for system administration, backups, cleaning, Docker management, and utilities. These scripts are designed for Linux environments (primarily Ubuntu/Debian) and include tools for tasks like VM backups, system monitoring, Docker maintenance, and more. The main management script (`menage_scripts.sh`) handles installation/uninstallation by creating symlinks in `/usr/local/bin` for easy access.
 
+## Table of Contents
+
+- [Installation](#installation)
+- [Script Categories](#script-categories)
+  - [Backup Scripts](backup/) - VM and system backups
+  - [VM Management](vm/) - Virtual machine operations
+  - [Chroot Tools](chroot/) - Advanced chroot utilities
+  - [Disk Operations](disk-cloner/) - Disk cloning tools
+  - [Docker Management](docker/) - Docker and Compose tools
+  - [System Cleaner](cleaner/) - System maintenance
+  - [QEMU Utilities](qemu/) - QEMU image tools
+  - [Utilities](utils/) - Various admin tools
+- [Requirements](#requirements)
+- [Contributing](#contributing)
+- [License](#license)
+
 ## Features
 - **Modular Structure**: Scripts organized into directories like `backup/`, `cleaner/`, `docker/`, `utils/`.
 - **Easy Installation**: Symlinks make scripts executable as global commands (without `.sh` extension).
@@ -41,31 +57,66 @@ sudo ./menage_scripts.sh uninstall
 
 After installation, run scripts directly from the terminal (e.g., `docker-manager`). Most scripts include help messages or TUIs (text-based UIs via `whiptail`).
 
-### Brief Overview of Commands
+## Script Categories
 
-- **backup-qemu-vms**: Backs up QEMU virtual machines, including XML configs and disk images. Usage: `backup-qemu-vms <backup_dir>`. Includes shutdown, copy, and MD5 verification.
-  
-- **manzolo-backup-home**: Backs up multiple directories (e.g., `/home`, `/etc`) using `rsync` with incremental support, exclusions, and sudo for root files. Usage: `manzolo-backup-home <dest_disk> [username] [options]`. Options: `--dry-run`, `--verbose`.
+All scripts are organized into categories. Click on each category to see detailed documentation:
 
-- **update-docker-compose**: Scans subdirectories for Docker Compose files, pulls updates, and optionally restarts projects. Interactive prompts for confirmation.
+### [Backup Scripts](backup/)
+Tools for backing up QEMU VMs and system directories.
+- **backup-qemu-vms**: Backup QEMU/KVM virtual machines
+- **manzolo-backup-home (mbackup)**: Professional rsync-based backup solution
 
-- **docker-manager**: TUI-based Docker management: containers, images, volumes, networks, cleanup, stats, backups, and Compose integration. Requires `whiptail`.
+### [VM Management](vm/)
+Virtual machine disk operations and management.
+- **vm-disk-manager**: Interactive VM disk operations (resize, partition, NBD mounting, QEMU testing)
+- **vm-create-disk**: Create new VM disk images
+- **vm-clone**: Clone VM images
+- **vm-iso-manager**: ISO management for VMs
+- **vm-helper**: VM utility functions
 
-- **one2code**: Extracts and restores individual files from a merged code file (e.g., `code_merged.txt`). Usage: `one2code <cumulative_file>`.
+### [Chroot Tools](chroot/)
+Advanced chroot utilities for physical and virtual disks.
+- **manzolo-chroot (mchroot)**: Chroot into disks with NBD, LUKS, and LVM support
 
-- **server-monitor**: Displays a colorful system dashboard with CPU/memory/disk usage, processes, Docker stats, and more. Run without arguments for a one-time report.
+### [Disk Operations](disk-cloner/)
+Advanced disk cloning between physical and virtual formats.
+- **manzolo-disk-clone**: Clone disks with UUID preservation, LUKS support, and multiple format options
 
-- **systemd-manager**: TUI for managing systemd services: list, view, start/stop/restart, enable/disable, delete. Requires `whiptail`.
+### [Docker Management](docker/)
+Docker container and compose management tools.
+- **docker-manager**: TUI for container/image/volume/network management
+- **update-docker-compose**: Update and restart Docker Compose projects
 
-- **manzolo-cleaner**: Advanced cleaner with TUI for Docker/Ubuntu: prune resources, remove packages/logs/caches, show stats. Run without arguments to start the menu.
+### [System Cleaner](cleaner/)
+System cleaning and maintenance utilities.
+- **manzolo-cleaner (mcleaner)**: Advanced system cleaning tool with TUI
 
-- **ventoy_tester**: (From utils) Tests Ventoy USB boot in QEMU with UEFI/BIOS modes, diagnostics, and configs. Requires QEMU and related deps.
+### [QEMU Utilities](qemu/)
+QEMU disk image utilities.
+- **compress-qemu-hd-folder**: Batch compress QEMU disk images
 
-- **[vm_image_manager](https://github.com/manzolo/BashCollection/blob/main/vm/Readme.md )**: An interactive shell script for advanced VM disk image operations. Use it to resize disks, manage partitions, and extend filesystems directly via the NBD protocol. It also includes an option to test the image with QEMU and a dedicated GParted Live boot feature for manual resizing.
+### [Utilities](utils/)
+Various system administration and specialized tools.
+- **code2one/one2code**: Merge and extract code files
+- **luks-manager**: LUKS encryption management
+- **disk-usage**: Disk usage analysis
+- **dns-info**: DNS information tool
+- **gnome-backup**: GNOME settings backup
+- **pi-boot/pi-emulate**: Raspberry Pi tools
+- **server-monitor**: System monitoring dashboard
+- **ssh-manager**: SSH connection manager
+- **systemd-manager**: Systemd service management TUI
+- **mprocmon**: Process monitoring
+- **ubuntu-usb-installer**: Create Ubuntu USB drives
+- **mfirewall**: UFW firewall management
+- **usb-inspector**: USB device inspection
+- **ventoy-usb-test**: Test Ventoy USB in QEMU
+- **wp-management**: WordPress management
 
-- **menage_scripts**: The installer itself (symlinked as `menage_scripts`). Use for install/uninstall/list.
+### NVIDIA Tools
+- **nvidia-manager**: NVIDIA GPU and driver management
 
-For detailed usage, run each script with `--help` (if supported) or check the source code. Scripts may require sudo for privileged operations.
+For detailed usage of each category, click on the category links above or check the README in each subdirectory.
 
 ## Requirements
 - Bash 4+
