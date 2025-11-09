@@ -26,7 +26,21 @@ A curated collection of Bash scripts for system administration, backups, cleanin
 
 ## Installation
 
-1. **Clone the Repository** (assuming it's hosted on GitHub or similar):
+### Method 1: Install from PPA Repository (Recommended)
+
+You can now install these utilities directly from the Manzolo PPA repository for easier installation and automatic updates.
+
+**📦 [Install from Manzolo PPA](https://www.manzolo.it/2025/11/manzolo-ppa-my-own-ubuntu-repository/)**
+
+This method provides:
+- Easy installation via `apt install`
+- Automatic dependency resolution
+- Automatic updates with system updates
+- No manual symlink management
+
+### Method 2: Manual Installation from Source
+
+1. **Clone the Repository**:
    ```bash
    git clone https://github.com/manzolo/BashCollection.git
    cd BashCollection
