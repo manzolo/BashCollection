@@ -59,14 +59,16 @@ After installation, run scripts directly from the terminal (e.g., `docker-manage
 
 ## Script Categories
 
-All scripts are organized into categories. Click on each category to see detailed documentation:
+All scripts are organized into categories. Click on the 📖 links below to see detailed documentation for each category.
 
-### [Backup Scripts](backup/)
+### Backup Scripts
 Tools for backing up QEMU VMs and system directories.
 - **backup-qemu-vms**: Backup QEMU/KVM virtual machines
 - **manzolo-backup-home (mbackup)**: Professional rsync-based backup solution
 
-### [VM Management](vm/)
+**📖 [Full Documentation](backup/README.md)**
+
+### VM Management
 Virtual machine disk operations and management.
 - **vm-disk-manager**: Interactive VM disk operations (resize, partition, NBD mounting, QEMU testing)
 - **vm-create-disk**: Create new VM disk images
@@ -74,28 +76,40 @@ Virtual machine disk operations and management.
 - **vm-iso-manager**: ISO management for VMs
 - **vm-helper**: VM utility functions
 
-### [Chroot Tools](chroot/)
+**📖 [Full Documentation](vm/Readme.md)**
+
+### Chroot Tools
 Advanced chroot utilities for physical and virtual disks.
 - **manzolo-chroot (mchroot)**: Chroot into disks with NBD, LUKS, and LVM support
 
-### [Disk Operations](disk-cloner/)
+**📖 [Full Documentation](chroot/Readme.md)**
+
+### Disk Operations
 Advanced disk cloning between physical and virtual formats.
 - **manzolo-disk-clone**: Clone disks with UUID preservation, LUKS support, and multiple format options
 
-### [Docker Management](docker/)
+**📖 [Full Documentation](disk-cloner/README.md)**
+
+### Docker Management
 Docker container and compose management tools.
 - **docker-manager**: TUI for container/image/volume/network management
 - **update-docker-compose**: Update and restart Docker Compose projects
 
-### [System Cleaner](cleaner/)
+**📖 [Full Documentation](docker/README.md)**
+
+### System Cleaner
 System cleaning and maintenance utilities.
 - **manzolo-cleaner (mcleaner)**: Advanced system cleaning tool with TUI
 
-### [QEMU Utilities](qemu/)
+**📖 [Full Documentation](cleaner/README.md)**
+
+### QEMU Utilities
 QEMU disk image utilities.
 - **compress-qemu-hd-folder**: Batch compress QEMU disk images
 
-### [Utilities](utils/)
+**📖 [Full Documentation](qemu/README.md)**
+
+### Utilities
 Various system administration and specialized tools.
 - **code2one/one2code**: Merge and extract code files
 - **luks-manager**: LUKS encryption management
@@ -113,10 +127,12 @@ Various system administration and specialized tools.
 - **ventoy-usb-test**: Test Ventoy USB in QEMU
 - **wp-management**: WordPress management
 
+**📖 [Full Documentation](utils/README.md)**
+
 ### NVIDIA Tools
 - **nvidia-manager**: NVIDIA GPU and driver management
 
-For detailed usage of each category, click on the category links above or check the README in each subdirectory.
+**📖 [Full Documentation](nvidia/Readme.md)**
 
 ## Requirements
 - Bash 4+
