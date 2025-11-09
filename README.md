@@ -146,7 +146,7 @@ Various system administration and specialized tools.
 ### NVIDIA Tools
 - **nvidia-manager**: NVIDIA GPU and driver management
 
-**📖 [Full Documentation](nvidia/Readme.md)**
+**📖 [Full Documentation](nvidia/README.md)**
 
 ## Requirements
 - Bash 4+
