@@ -314,34 +314,49 @@ usb-inspector
 
 ### ventoy
 
-**Script:** ventoy-usb-test
+**Script:** usb-boot-test (formerly ventoy-usb-test)
 
-Test Ventoy USB drives in QEMU without rebooting.
+Test bootable USB drives and disk images in QEMU without rebooting. Works with Ventoy, Ubuntu ISOs, Windows installers, and any bootable media.
+
+**📖 [Full Documentation](ventoy/README.md)**
 
 **Features:**
-- Boot Ventoy USB in QEMU
-- UEFI and BIOS mode support
-- Multiple boot configurations
-- USB device passthrough testing
-- Diagnostic information
+- Test physical USB devices and disk images
+- UEFI and BIOS/Legacy boot modes
+- Dual mode testing (test both UEFI+BIOS sequentially)
+- Interactive TUI configuration
+- RAM, CPU, VGA, USB configuration
+- Format auto-detection
+- OVMF firmware management
+- Configuration profiles
+- Diagnostic tools
 
 **Usage:**
 ```bash
-sudo ventoy-usb-test <usb_device>
+# Interactive mode
+sudo usb-boot-test
 
-# Example
-sudo ventoy-usb-test /dev/sdb
+# Legacy command (still works)
+sudo ventoy-usb-test
 ```
 
+**Supported Media:**
+- Ventoy USB drives
+- Ubuntu/Debian ISOs
+- Windows installers
+- Rescue disks (SystemRescue, GParted, etc.)
+- Any bootable USB or disk image
+
 **Boot Modes:**
-- UEFI mode
-- Legacy BIOS mode
-- Secure Boot testing
-- Custom QEMU parameters
+- UEFI mode (modern systems)
+- Legacy BIOS/MBR mode (older systems)
+- Auto-detection from partition table
+- Dual testing (both modes)
 
 **Requirements:**
-- QEMU
+- QEMU (qemu-system-x86)
 - OVMF (for UEFI support)
+- whiptail (TUI interface)
 
 ---
 

@@ -3,3 +3,4 @@ cleaner/manzolo-cleaner.sh#mcleaner
 backup/manzolo-backup-home.sh#mbackup
 vm/test-vm-create-disk.sh#mtest
 deploy-to-repo.sh#mdeploy
+utils/ventoy/ventoy-usb-test.sh#usb-boot-test

@@ -1,29 +1,40 @@
 #!/bin/bash
-# PKG_NAME: ventoy-usb-test
-# PKG_VERSION: 2.0.0
+# PKG_NAME: usb-boot-test
+# PKG_VERSION: 2.1.1
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
-# PKG_DEPENDS: bash (>= 4.0), qemu-system-x86
+# PKG_DEPENDS: bash (>= 4.0), qemu-system-x86, whiptail
 # PKG_RECOMMENDS: ovmf
+# PKG_PROVIDES: ventoy-usb-test
+# PKG_REPLACES: ventoy-usb-test
+# PKG_CONFLICTS: ventoy-usb-test
+# PKG_ALIASES: ventoy-usb-test
 # PKG_MAINTAINER: Manzolo <manzolo@libero.it>
-# PKG_DESCRIPTION: Test Ventoy USB drives in QEMU
-# PKG_LONG_DESCRIPTION: Tool for testing Ventoy USB boot drives in QEMU
-#  virtual machine with UEFI/BIOS mode support.
+# PKG_DESCRIPTION: Test bootable USB drives and disk images in QEMU
+# PKG_LONG_DESCRIPTION: Interactive tool for testing any bootable USB device
+#  or disk image (ISO, qcow2, raw) in QEMU virtual machine without rebooting.
+#  Works with Ventoy, Ubuntu, Windows, and any bootable media.
 #  .
 #  Features:
-#  - UEFI and BIOS/MBR boot mode testing
-#  - Interactive whiptail-based configuration
-#  - Configurable RAM, CPU, and hardware settings
-#  - USB device passthrough simulation
+#  - Test physical USB devices and disk images
+#  - UEFI and BIOS/Legacy boot mode testing
+#  - Dual mode testing (UEFI+BIOS sequentially)
+#  - Interactive whiptail-based TUI configuration
+#  - Configurable RAM, CPU, VGA, and hardware settings
+#  - Auto-detection of disk format and boot mode
+#  - OVMF firmware management
+#  - Configuration profiles (save/load)
 #  - Network and sound device emulation
-#  - Format detection and validation
-#  - Configuration save/load
-#  - Diagnostic tools integration
+#  - Diagnostic tools and troubleshooting
+#  - KVM acceleration support
+#  .
+#  Legacy name: ventoy-usb-test (still supported for backward compatibility)
 # PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
-# Interactive script for testing Ventoy USB boot with a whiptail-based TUI
-# Supports UEFI and MBR/BIOS Legacy with a graphical interface
+# Interactive script for testing bootable USB drives and disk images in QEMU
+# Supports any bootable media: Ventoy, Ubuntu ISOs, Windows installers, etc.
+# Supports UEFI and MBR/BIOS Legacy boot modes with interactive TUI
 
 set -euo pipefail
 
@@ -33,8 +44,8 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # Configuration
-readonly SCRIPT_NAME="Ventoy USB Boot Tester"
-readonly VERSION="2.0"
+readonly SCRIPT_NAME="USB Boot Tester"
+readonly VERSION="2.1.1"
 readonly LOG_DIR="/tmp/ventoy_test_logs"
 readonly CONFIG_FILE="$HOME/.ventoy_test_config"
 # Determine the directory where the script is located (resolving symlinks)
@@ -133,12 +144,14 @@ main_menu() {
 
 # Help system
 show_help() {
-    local help_text="VENTOY BOOT TESTER GUIDE\n\n"
+    local help_text="USB BOOT TESTER GUIDE\n\n"
+    help_text+="Test any bootable USB/disk in QEMU without rebooting!\n"
+    help_text+="Works with: Ventoy, Ubuntu ISOs, Windows, rescue disks, etc.\n\n"
     help_text+="USAGE:\n"
-    help_text+="1. Select a USB device or image file\n"
-    help_text+="2. Configure boot mode (UEFI/BIOS)\n"
-    help_text+="3. Adjust system parameters if needed\n"
-    help_text+="4. Start the test\n\n"
+    help_text+="1. Select a USB device or image file (ISO, qcow2, raw, etc.)\n"
+    help_text+="2. Configure boot mode (UEFI/BIOS/Auto)\n"
+    help_text+="3. Adjust system parameters if needed (RAM, CPU, VGA)\n"
+    help_text+="4. Start the test (single mode or dual UEFI+BIOS)\n\n"
     help_text+="BOOT MODES:\n"
     help_text+="• UEFI: Modern, requires OVMF\n"
     help_text+="• BIOS: Legacy, for older systems\n"

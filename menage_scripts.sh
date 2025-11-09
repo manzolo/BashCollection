@@ -1362,6 +1362,25 @@ EOF
         fi
     fi
 
+    # === Create aliases for backward compatibility ===
+    if [ -n "${PKG_META[ALIASES]}" ]; then
+        IFS=',' read -ra aliases <<< "${PKG_META[ALIASES]}"
+        for alias_name in "${aliases[@]}"; do
+            # Trim whitespace
+            alias_name=$(echo "$alias_name" | xargs)
+            # Skip if it's the same as script_name or package_name
+            if [ "$alias_name" != "$script_name" ] && [ "$alias_name" != "$package_name" ]; then
+                cat > "$pkg_dir/usr/local/bin/$alias_name" << EOF
+#!/bin/bash
+# BashCollection wrapper - v$version (alias for backward compatibility)
+exec /usr/share/$package_name/$(basename "$script_path") "\$@"
+EOF
+                chmod 755 "$pkg_dir/usr/local/bin/$alias_name"
+                echo -e " ${CYAN}Created alias: ${YELLOW}$alias_name${CYAN} → ${YELLOW}$script_name${NC}"
+            fi
+        done
+    fi
+
     # === Control file with metadata ===
     local description="${PKG_META[DESCRIPTION]}"
     if [ -z "$description" ]; then

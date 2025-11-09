@@ -138,7 +138,7 @@ Various system administration and specialized tools.
 - **ubuntu-usb-installer**: Create Ubuntu USB drives
 - **mfirewall**: UFW firewall management
 - **usb-inspector**: USB device inspection
-- **ventoy-usb-test**: Test Ventoy USB in QEMU
+- **usb-boot-test**: Test bootable USB/disks in QEMU (formerly ventoy-usb-test)
 - **wp-management**: WordPress management
 
 **📖 [Full Documentation](utils/README.md)**
