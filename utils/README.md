@@ -19,7 +19,7 @@ The utils directory contains subdirectories organized by functionality:
 - **[ubuntu-usb-installer](#ubuntu-usb-installer)**: Ubuntu USB creation
 - **[ufw](#ufw-firewall)**: Firewall management
 - **[usb](#usb)**: USB device inspection
-- **[ventoy](#ventoy)**: Ventoy USB testing
+- **[usb-boot-test](#usb-boot-test)**: USB boot testing
 - **[wordpress](#wordpress)**: WordPress management
 
 ---
@@ -312,7 +312,7 @@ usb-inspector
 
 ---
 
-### ventoy
+### usb-boot-test
 
 **Script:** usb-boot-test (formerly ventoy-usb-test)
 
