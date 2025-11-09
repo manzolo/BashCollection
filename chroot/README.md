@@ -109,7 +109,7 @@ sudo mchroot
 
 <img width="762" height="675" alt="Disk type selection menu" src="https://github.com/user-attachments/assets/56798454-85d1-4c34-a9a2-ef6804d88fbd" />
 
-### File Browser - Virtual Disk Selection
+### Physical - Virtual Disk Selection
 
 <img width="768" height="439" alt="Virtual disk file browser" src="https://github.com/user-attachments/assets/275dc13b-f6fd-4d01-9958-685b68db1577" />
 
@@ -117,39 +117,39 @@ sudo mchroot
 
 <img width="923" height="530" alt="Root partition selection" src="https://github.com/user-attachments/assets/78bc91b9-7b5c-4ae0-ab95-393eb3217038" />
 
-### Boot Partition Selection
+### X11/Wayland GUI support (experimental)
 
 <img width="923" height="530" alt="Boot partition selection" src="https://github.com/user-attachments/assets/fce5c910-a081-4c28-87aa-ffe133b88fc9" />
 
-### EFI Partition Selection
+### Root partition selection
 
 <img width="923" height="530" alt="EFI partition selection" src="https://github.com/user-attachments/assets/512ff885-3dc7-4e1f-8535-37a5dcbaad2b" />
 
-### Additional Mount Points
+### EFI partition selection
 
 <img width="923" height="530" alt="Additional mount configuration" src="https://github.com/user-attachments/assets/a307c1e5-97dd-4394-8168-a2bd83dc9368" />
 
-### GUI Support Configuration
+### Boot partition selection
 
 <img width="923" height="530" alt="GUI support enable" src="https://github.com/user-attachments/assets/7a20c75b-77fa-40fc-8248-9ca2bcd10a30" />
 
-### User Selection
+### Additiona mount Selection
 
 <img width="923" height="530" alt="User selection for chroot" src="https://github.com/user-attachments/assets/4a50c7bc-6738-47a9-b43c-1671adad3fc4" />
 
-### NBD Device Mounting
+### Entering chroot session ...
 
 <img width="923" height="530" alt="NBD device mapping" src="https://github.com/user-attachments/assets/418a6c33-7d51-4a6a-9426-de3330877caa" />
 
-### LUKS Partition Handling
+### Inside Chroot
 
 <img width="923" height="530" alt="LUKS encrypted partition" src="https://github.com/user-attachments/assets/9f0ce6d9-b80e-4ab2-85a5-03a8a2762d15" />
 
-### LVM Volume Detection
+### Launch command inside chroot
 
 <img width="923" height="530" alt="LVM volume activation" src="https://github.com/user-attachments/assets/b38d7365-7153-4dec-b0d9-2e919f1124d6" />
 
-### Successful Chroot Entry
+### Launch graphical apps from chroot
 
 <img width="923" height="530" alt="Inside chroot environment" src="https://github.com/user-attachments/assets/51517bc1-bfd0-4965-9c50-d537b46b60c0" />
 
