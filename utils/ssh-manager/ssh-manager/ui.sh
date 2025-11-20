@@ -6,7 +6,7 @@
 main_menu() {
     while true; do
         local choice
-        choice=$(dialog --clear --title "🔧 SSH Manager v2.4.2" --menu \
+        choice=$(dialog --clear --title "🔧 SSH Manager v$VERSION" --menu \
             "Select an option:\n(ESC to exit)" \
             22 60 12 \
             "1" "🚀 Connect via SSH" \

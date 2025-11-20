@@ -72,7 +72,7 @@ execute_ssh_action() {
         "ssh")
             print_message "$BLUE" "🚀 Connecting to: $user@$host:$port ($name)..."
             log_message "INFO" "SSH connection to $user@$host:$port"
-            ssh $ssh_options -p "$port" -t "$user@$host" 2> ssh_error.log
+            ssh $ssh_options -p "$port" -t "$user@$host" 2> "$CONFIG_DIR/ssh_error.log"
             local status=$?
             ;;
         "ssh-copy-id")
@@ -82,13 +82,13 @@ execute_ssh_action() {
             fi
             print_message "$BLUE" "🔑 Copying SSH key to: $user@$host:$port ($name)..."
             log_message "INFO" "Copying SSH key to $user@$host:$port"
-            ssh-copy-id $ssh_options -p "$port" "$user@$host" 2> ssh_error.log
+            ssh-copy-id $ssh_options -p "$port" "$user@$host" 2> "$CONFIG_DIR/ssh_error.log"
             local status=$?
             ;;
         "sftp")
             print_message "$BLUE" "📁 Starting SFTP with: $user@$host:$port ($name)..."
             log_message "INFO" "SFTP connection to $user@$host:$port"
-            sftp $ssh_options -P "$port" "$user@$host" 2> ssh_error.log
+            sftp $ssh_options -P "$port" "$user@$host" 2> "$CONFIG_DIR/ssh_error.log"
             local status=$?
             ;;
         "sshfs-mc")
@@ -105,9 +105,9 @@ execute_ssh_action() {
     esac
 
     if [[ $status -ne 0 ]]; then
-        print_message "$RED" "❌ Error during $action: $(cat ssh_error.log 2>/dev/null || echo 'Unknown error')"
-        log_message "ERROR" "$action failed on $user@$host:$port - $(cat ssh_error.log 2>/dev/null || echo 'Unknown error')"
-        rm -f ssh_error.log
+        print_message "$RED" "❌ Error during $action: $(cat "$CONFIG_DIR/ssh_error.log" 2>/dev/null || echo 'Unknown error')"
+        log_message "ERROR" "$action failed on $user@$host:$port - $(cat "$CONFIG_DIR/ssh_error.log" 2>/dev/null || echo 'Unknown error')"
+        rm -f "$CONFIG_DIR/ssh_error.log"
     else
         case "$action" in
             "ssh") print_message "$GREEN" "✅ SSH connection terminated successfully" ;;
@@ -152,7 +152,7 @@ execute_sshfs_mc() {
     sshfs_options="$sshfs_options -o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3"
 
     # Mount the remote filesystem
-    if sshfs $sshfs_options "$user@$host:/" "$mount_point" 2> sshfs_error.log; then
+    if sshfs $sshfs_options "$user@$host:/" "$mount_point" 2> "$CONFIG_DIR/sshfs_error.log"; then
         print_message "$GREEN" "✅ Remote filesystem mounted successfully"
         log_message "INFO" "SSHFS mount successful: $user@$host:/ -> $mount_point"
 
@@ -163,17 +163,17 @@ execute_sshfs_mc() {
         sleep 2
 
         # Start Midnight Commander
-        mc "$mount_point" 2> mc_error.log
+        mc "$mount_point" 2> "$CONFIG_DIR/mc_error.log"
         local mc_status=$?
 
         # Unmount the filesystem
         print_message "$BLUE" "🔌 Unmounting remote filesystem..."
-        if fusermount -u "$mount_point" 2> unmount_error.log; then
+        if fusermount -u "$mount_point" 2> "$CONFIG_DIR/unmount_error.log"; then
             print_message "$GREEN" "✅ Remote filesystem unmounted successfully"
             log_message "INFO" "SSHFS unmount successful: $mount_point"
         else
-            print_message "$YELLOW" "⚠️  Warning during unmount: $(cat unmount_error.log)"
-            log_message "WARNING" "SSHFS unmount warning: $(cat unmount_error.log)"
+            print_message "$YELLOW" "⚠️  Warning during unmount: $(cat "$CONFIG_DIR/unmount_error.log")"
+            log_message "WARNING" "SSHFS unmount warning: $(cat "$CONFIG_DIR/unmount_error.log")"
             # Try force unmount
             if fusermount -uz "$mount_point" 2>/dev/null; then
                 print_message "$GREEN" "✅ Force unmount successful"
@@ -184,7 +184,7 @@ execute_sshfs_mc() {
         rmdir "$mount_point" 2>/dev/null
 
         # Clean up error logs
-        rm -f sshfs_error.log mc_error.log unmount_error.log
+        rm -f "$CONFIG_DIR/sshfs_error.log" "$CONFIG_DIR/mc_error.log" "$CONFIG_DIR/unmount_error.log"
 
         if [[ $mc_status -eq 0 ]]; then
             return 0
@@ -194,12 +194,12 @@ execute_sshfs_mc() {
         fi
 
     else
-        print_message "$RED" "❌ Failed to mount remote filesystem: $(cat sshfs_error.log)"
-        log_message "ERROR" "SSHFS mount failed: $user@$host:/ -> $mount_point - $(cat sshfs_error.log)"
+        print_message "$RED" "❌ Failed to mount remote filesystem: $(cat "$CONFIG_DIR/sshfs_error.log")"
+        log_message "ERROR" "SSHFS mount failed: $user@$host:/ -> $mount_point - $(cat "$CONFIG_DIR/sshfs_error.log")"
 
         # Clean up
         rmdir "$mount_point" 2>/dev/null
-        rm -f sshfs_error.log
+        rm -f "$CONFIG_DIR/sshfs_error.log"
 
         print_message "$YELLOW" "\nPress ENTER to continue..."
         read -r

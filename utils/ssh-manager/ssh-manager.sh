@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: ssh-manager
-# PKG_VERSION: 2.4.2
+# PKG_VERSION: 2.4.3
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -24,7 +24,7 @@
 # PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
 # Enhanced SSH Manager
-# Version: 2.4.2 - Port Forwarding & Tunnel Management (grep compatibility fix)
+# Version: 2.4.3 - Log file location fix
 
 # Get script directory for module loading
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,6 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="$HOME/.config/manzolo-ssh-manager"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 LOG_FILE="$CONFIG_DIR/ssh-manager.log"
+VERSION="2.4.3"
 
 # Source all modules
 for module in "$SCRIPT_DIR/ssh-manager/"*.sh; do

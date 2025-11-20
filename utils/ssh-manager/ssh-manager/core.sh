@@ -46,14 +46,21 @@ test_ssh_connection() {
 
     print_message "$BLUE" "🔍 Testing connectivity to $user@$host:$port..."
 
-    if timeout 5 ssh -o ConnectTimeout=3 -p "$port" "$user@$host" exit 2> ssh_error.log; then
+    local error_log="$CONFIG_DIR/ssh_error.log"
+    
+    if timeout 5 ssh -o ConnectTimeout=3 -p "$port" "$user@$host" exit 2> "$error_log"; then
         print_message "$GREEN" "✅ Connection successful"
-        rm -f ssh_error.log
+        rm -f "$error_log"
         return 0
     else
-        print_message "$RED" "❌ Connection failed: $(cat ssh_error.log)"
-        log_message "ERROR" "Connection test failed for $user@$host:$port - $(cat ssh_error.log)"
-        rm -f ssh_error.log
+        if [[ -f "$error_log" ]]; then
+            print_message "$RED" "❌ Connection failed: $(cat "$error_log")"
+            log_message "ERROR" "Connection test failed for $user@$host:$port - $(cat "$error_log")"
+            rm -f "$error_log"
+        else
+            print_message "$RED" "❌ Connection failed (no error log)"
+            log_message "ERROR" "Connection test failed for $user@$host:$port"
+        fi
         return 1
     fi
 }
