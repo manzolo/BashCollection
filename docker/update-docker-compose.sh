@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: update-docker-compose
-# PKG_VERSION: 1.0.1
+# PKG_VERSION: 1.0.2
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -115,8 +115,12 @@ for dir in */; do
     fi
 
     # Check if any images were actually downloaded (updated)
+    # Look for signs of actual download activity:
+    # - Progress bars like [==>]
+    # - "Downloading" or "Download complete" messages
+    # - "Pull complete" messages (indicates layers were downloaded)
     IMAGES_UPDATED=false
-    if echo "$PULL_OUTPUT" | grep -qE "(Downloaded newer image|Downloading|Status: Downloaded)"; then
+    if echo "$PULL_OUTPUT" | grep -qE "(Downloaded newer image|Downloading|Download complete|Pull complete|\[=+\>])"; then
         IMAGES_UPDATED=true
     fi
 
