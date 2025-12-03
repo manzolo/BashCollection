@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: update-docker-compose
-# PKG_VERSION: 1.0.2
+# PKG_VERSION: 1.0.3
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -30,6 +30,7 @@ NC='\033[0m' # No Color
 
 # Default mode: non-interactive (auto-execute)
 INTERACTIVE_MODE=false
+FORCE_RESTART=false
 
 # Parse command line arguments
 show_help() {
@@ -37,8 +38,9 @@ show_help() {
     echo "Usage: $(basename "$0") [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  -i, --interactive    Interactive mode (prompt for confirmation)"
-    echo "  -h, --help          Show this help message"
+    echo "  -i, --interactive      Interactive mode (prompt for confirmation)"
+    echo "  -f, --force-restart    Force restart all containers even without updates"
+    echo "  -h, --help            Show this help message"
     echo ""
     echo "Default behavior: Automatically update all Docker Compose projects without prompts"
     exit 0
@@ -48,6 +50,10 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         -i|--interactive)
             INTERACTIVE_MODE=true
+            shift
+            ;;
+        -f|--force-restart)
+            FORCE_RESTART=true
             shift
             ;;
         -h|--help)
@@ -159,8 +165,12 @@ for dir in */; do
         else
             echo -e "${YELLOW}ℹ No new images - all images are up to date.${NC}"
 
+            # Check if force restart is enabled
+            if [ "$FORCE_RESTART" = true ]; then
+                choice="Y"
+                echo -e "${BLUE}→ Force restart enabled - restarting anyway...${NC}"
             # In interactive mode, ask for confirmation; otherwise skip
-            if [ "$INTERACTIVE_MODE" = true ]; then
+            elif [ "$INTERACTIVE_MODE" = true ]; then
                 read -p "Do you want to restart this project anyway? (y/N) " choice
                 choice=${choice:-N}  # Default to 'N' if input is empty
             else
