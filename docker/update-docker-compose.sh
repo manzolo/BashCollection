@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: update-docker-compose
-# PKG_VERSION: 1.0.3
+# PKG_VERSION: 1.0.4
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -107,6 +107,9 @@ for dir in */; do
         continue
     fi
     
+    # Capture image IDs before pulling
+    IMAGES_BEFORE=$(docker compose images -q 2>/dev/null | sort)
+    
     # Execute docker compose pull and capture the output
     PULL_OUTPUT=$(docker compose pull 2>&1)
     PULL_EXIT_CODE=$?
@@ -120,14 +123,29 @@ for dir in */; do
         continue
     fi
 
+    # Capture image IDs after pulling
+    IMAGES_AFTER=$(docker compose images -q 2>/dev/null | sort)
+    
     # Check if any images were actually downloaded (updated)
-    # Look for signs of actual download activity:
-    # - Progress bars like [==>]
-    # - "Downloading" or "Download complete" messages
-    # - "Pull complete" messages (indicates layers were downloaded)
+    # Method 1: Compare image IDs before and after
     IMAGES_UPDATED=false
+    if [ "$IMAGES_BEFORE" != "$IMAGES_AFTER" ]; then
+        IMAGES_UPDATED=true
+    fi
+    
+    # Method 2: Look for signs of actual download activity in the output
+    # This catches cases where new layers were downloaded even if image ID didn't change
     if echo "$PULL_OUTPUT" | grep -qE "(Downloaded newer image|Downloading|Download complete|Pull complete|\[=+\>])"; then
         IMAGES_UPDATED=true
+    fi
+    
+    # Method 3: Check for "Pulled" status with hexadecimal IDs (layer downloads)
+    # Pattern: lines with hex IDs (like "014e56e61396") indicate layers were processed
+    if echo "$PULL_OUTPUT" | grep -qE "Pulled" && echo "$PULL_OUTPUT" | grep -qE "^[[:space:]]*[0-9a-f]{12}"; then
+        # Additional check: make sure it's not just "already exists"
+        if ! echo "$PULL_OUTPUT" | grep -q "Already exists"; then
+            IMAGES_UPDATED=true
+        fi
     fi
 
     # Check if there was any pulling activity
