@@ -6,3 +6,5 @@ deploy-to-repo.sh#mdeploy
 utils/ventoy/ventoy-usb-test.sh#usb-boot-test
 utils/ufw/mfirewall.sh#manzolo-firewall
 utils/system-tools/mprocmon.sh#manzolo-process-monitor
+utils/email/dmarc-report.sh#dmarc-report
+utils/email/email-domain-check.sh#email-domain-check
