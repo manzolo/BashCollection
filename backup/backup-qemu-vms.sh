@@ -88,22 +88,13 @@ for vm in $VMS; do
     # virsh start "$vm" &>/dev/null
 done
 
----
-
-## Integrity Check
-
-The script now includes an integrity check using MD5 checksums to verify that the copied files are identical to the originals.
-
-
-
-```bash
 # MD5 checksum verification
 echo "Starting MD5 checksum verification..."
 for ((i=0; i<${#src_files[@]}; i++)); do
     echo "Verifying ${src_files[$i]}..."
     src_md5=$(md5sum "${src_files[$i]}" | awk '{print $1}')
     dst_md5=$(md5sum "${dst_files[$i]}" | awk '{print $1}')
-    
+
     if [ "$src_md5" == "$dst_md5" ]; then
         echo "Checksum MD5 for ${src_files[$i]} and ${dst_files[$i]} match. ✅"
     else
