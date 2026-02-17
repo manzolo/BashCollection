@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: nvidia-manager
-# PKG_VERSION: 1.0.4
+# PKG_VERSION: 1.0.5
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -395,7 +395,7 @@ detect_container_nvidia() {
 
 # Main menu
 while true; do
-    CHOICE=$(whiptail --title "NVIDIA Driver Manager" --menu "Choose an option" 17 60 5 \
+    CHOICE=$(whiptail --title "NVIDIA Driver Manager" --menu "Choose an option" 17 60 6 \
         "1" "Check Driver Status" \
         "2" "Clean Drivers" \
         "3" "Search and Install Drivers" \

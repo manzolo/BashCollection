@@ -1,4 +1,16 @@
 #!/bin/bash
+# PKG_NAME: gnome-backup
+# PKG_VERSION: 1.0.0
+# PKG_SECTION: utils
+# PKG_PRIORITY: optional
+# PKG_ARCHITECTURE: all
+# PKG_DEPENDS: bash (>= 4.0), dconf-cli
+# PKG_MAINTAINER: Manzolo <manzolo@libero.it>
+# PKG_DESCRIPTION: GNOME settings backup, restore and reset tool
+# PKG_LONG_DESCRIPTION: Manages GNOME desktop configuration via dconf.
+#  Supports full backup, restore from a specific snapshot, and factory reset
+#  of desktop, shell, terminal, Nautilus and Gedit settings.
+# PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
 # GNOME Settings Backup/Restore/Reset Script for Ubuntu
 # Author: GNOME Configuration Management Script

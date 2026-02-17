@@ -1,4 +1,16 @@
 #!/bin/bash
+# PKG_NAME: backup-qemu-vms
+# PKG_VERSION: 1.0.0
+# PKG_SECTION: admin
+# PKG_PRIORITY: optional
+# PKG_ARCHITECTURE: all
+# PKG_DEPENDS: bash (>= 4.0), libvirt-clients
+# PKG_MAINTAINER: Manzolo <manzolo@libero.it>
+# PKG_DESCRIPTION: Backup QEMU/libvirt VMs with MD5 integrity check
+# PKG_LONG_DESCRIPTION: Shuts down running VMs gracefully, copies disk images
+#  and XML configurations to a backup directory, then verifies integrity
+#  with MD5 checksums.
+# PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
 # Check if script is run as root
 if [ "$EUID" -ne 0 ]; then

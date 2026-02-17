@@ -1,4 +1,16 @@
 #!/usr/bin/env bash
+# PKG_NAME: vm-helper
+# PKG_VERSION: 1.0.0
+# PKG_SECTION: utils
+# PKG_PRIORITY: optional
+# PKG_ARCHITECTURE: all
+# PKG_DEPENDS: bash (>= 4.0), qemu-utils, whiptail
+# PKG_MAINTAINER: Manzolo <manzolo@libero.it>
+# PKG_DESCRIPTION: Interactive TUI helper for VM and disk image operations
+# PKG_LONG_DESCRIPTION: Whiptail-based menu to launch and manage VMs, clone
+#  disks, convert image formats, test Ventoy USB drives, and run chroot
+#  operations — without memorizing command-line arguments.
+# PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 # VM Helper Script - whiptail/dialog version
 # Author: Manzolo
 # Description: Utility to manage VMs, disks, and ISOs interactively.

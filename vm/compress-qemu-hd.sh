@@ -1,4 +1,16 @@
 #!/bin/bash
+# PKG_NAME: compress-qemu-hd
+# PKG_VERSION: 1.0.0
+# PKG_SECTION: utils
+# PKG_PRIORITY: optional
+# PKG_ARCHITECTURE: all
+# PKG_DEPENDS: bash (>= 4.0), qemu-utils
+# PKG_MAINTAINER: Manzolo <manzolo@libero.it>
+# PKG_DESCRIPTION: Compress QEMU disk images in a folder to qcow2 format
+# PKG_LONG_DESCRIPTION: Converts all disk images (.img, .qcow2, .raw) in a
+#  given directory to compressed qcow2 format using qemu-img.
+#  Optionally replaces the originals after compression.
+# PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
 # Abilita il tracciamento degli errori. Lo script terminerà immediatamente se un comando fallisce.
 set -e
@@ -73,7 +85,7 @@ process_directory() {
         echo "No image files (.img, .qcow2, .raw) found in '$directory'."
         return
     fi
-    
+
     for input_file in "${files[@]}"; do
         # Determina il nome del file di output
         local output_file=""
@@ -134,5 +146,3 @@ fi
 
 # Esegui il processing della directory
 process_directory "$TARGET_DIR" "$DELETE_ORIGINAL"
-
-#./compress-qemu-hd-folder "/home/manzolo/Workspaces/qemu/storage/hd" --delete-original
