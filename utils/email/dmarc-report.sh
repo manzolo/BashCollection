@@ -205,6 +205,10 @@ collect_xml_files() {
 
 # --- XML parsing ---
 
+# Global date range tracking (Unix timestamps)
+GLOBAL_DATE_MIN=""
+GLOBAL_DATE_MAX=""
+
 parse_xml_file() {
     local xmlfile="$1"
 
@@ -216,7 +220,25 @@ parse_xml_file() {
         return
     fi
 
-    echo -e "  ${BLUE}--- Report from: ${BOLD}$org_name${NC} ${BLUE}($(basename "$xmlfile"))${NC}"
+    # Extract date range (Unix timestamps)
+    local begin_ts end_ts date_begin date_end period_str=""
+    begin_ts=$(xmllint --xpath "string(//date_range/begin)" "$xmlfile" 2>/dev/null) || true
+    end_ts=$(xmllint   --xpath "string(//date_range/end)"   "$xmlfile" 2>/dev/null) || true
+
+    if [[ "$begin_ts" =~ ^[0-9]+$ ]]; then
+        date_begin=$(date -d "@$begin_ts" '+%Y-%m-%d' 2>/dev/null) || date_begin=""
+        [[ -z "$GLOBAL_DATE_MIN" || "$begin_ts" -lt "$GLOBAL_DATE_MIN" ]] && GLOBAL_DATE_MIN="$begin_ts"
+    fi
+    if [[ "$end_ts" =~ ^[0-9]+$ ]]; then
+        date_end=$(date -d "@$end_ts" '+%Y-%m-%d' 2>/dev/null) || date_end=""
+        [[ -z "$GLOBAL_DATE_MAX" || "$end_ts" -gt "$GLOBAL_DATE_MAX" ]] && GLOBAL_DATE_MAX="$end_ts"
+    fi
+
+    if [[ -n "${date_begin:-}" && -n "${date_end:-}" ]]; then
+        period_str=" | Period: $date_begin → $date_end"
+    fi
+
+    echo -e "  ${BLUE}--- Report from: ${BOLD}$org_name${NC}${BLUE}$period_str ($(basename "$xmlfile"))${NC}"
 
     local record_count
     record_count=$(xmllint --xpath "count(//record)" "$xmlfile" 2>/dev/null) || true
@@ -256,6 +278,14 @@ print_header() {
     echo ""
     echo -e "  ${BOLD}Analysis date:${NC}   $(date '+%Y-%m-%d %H:%M:%S')"
     echo -e "  ${BOLD}Files parsed:${NC}    $file_count"
+
+    if [[ -n "$GLOBAL_DATE_MIN" && -n "$GLOBAL_DATE_MAX" ]]; then
+        local d_min d_max
+        d_min=$(date -d "@$GLOBAL_DATE_MIN" '+%Y-%m-%d' 2>/dev/null) || d_min="$GLOBAL_DATE_MIN"
+        d_max=$(date -d "@$GLOBAL_DATE_MAX" '+%Y-%m-%d' 2>/dev/null) || d_max="$GLOBAL_DATE_MAX"
+        echo -e "  ${BOLD}Report period:${NC}   $d_min → $d_max"
+    fi
+
     echo ""
 }
 
@@ -386,13 +416,16 @@ main() {
 
     declare -gA ip_data
 
-    print_header "$file_count"
+    ensure_tmpdir
+    local parse_log="$TMPDIR_WORK/parse_output.txt"
 
     while IFS= read -r xmlfile; do
-        [[ -n "$xmlfile" ]] && parse_xml_file "$xmlfile"
+        [[ -n "$xmlfile" ]] && parse_xml_file "$xmlfile" >> "$parse_log"
     done <<< "$xml_list"
 
-    echo ""
+    print_header "$file_count"
+
+    [[ -s "$parse_log" ]] && cat "$parse_log"
 
     if (( ${#ip_data[@]} == 0 )); then
         msg_warn "No DMARC records found in the analyzed files."
