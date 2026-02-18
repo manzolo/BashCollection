@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: dmarc-report
-# PKG_VERSION: 1.0.1
+# PKG_VERSION: 1.0.2
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -39,6 +39,9 @@ readonly CYAN='\033[0;36m'
 readonly NC='\033[0m'
 readonly BOLD='\033[1m'
 
+# --- Options ---
+OPT_DETAIL=false
+
 # --- Temporary directory with auto-cleanup ---
 TMPDIR_WORK=""
 
@@ -49,9 +52,9 @@ trap cleanup EXIT
 
 # --- Utility functions ---
 
-msg_info()  { echo -e "  ${BLUE}[i]${NC} $*"; }
-msg_ok()    { echo -e "  ${GREEN}[+]${NC} $*"; }
-msg_warn()  { echo -e "  ${YELLOW}[!]${NC} $*"; }
+msg_info()  { echo -e "  ${BLUE}[i]${NC} $*" >&2; }
+msg_ok()    { echo -e "  ${GREEN}[+]${NC} $*" >&2; }
+msg_warn()  { echo -e "  ${YELLOW}[!]${NC} $*" >&2; }
 msg_err()   { echo -e "  ${RED}[x]${NC} $*" >&2; }
 
 usage() {
@@ -59,7 +62,10 @@ usage() {
 
 ${BOLD}DMARC Report Analyzer${NC}
 
-Usage: $0 <file|folder> [file|folder] ...
+Usage: $0 [options] <file|folder> [file|folder] ...
+
+Options:
+  --detail              Show detailed issue analysis for failed records
 
 Arguments:
   file.xml              DMARC XML report file
@@ -70,7 +76,7 @@ Arguments:
 
 Examples:
   $0 report_google.xml
-  $0 /path/to/dmarc/
+  $0 --detail /path/to/dmarc/
   $0 report.zip *.xml.gz reports_folder/
 
 EOF
@@ -200,7 +206,8 @@ collect_xml_files() {
         fi
     done
 
-    printf '%s\n' "${xml_files[@]}"
+    (( ${#xml_files[@]} > 0 )) && printf '%s\n' "${xml_files[@]}"
+    return 0
 }
 
 # --- XML parsing ---
@@ -235,10 +242,18 @@ parse_xml_file() {
     fi
 
     if [[ -n "${date_begin:-}" && -n "${date_end:-}" ]]; then
-        period_str=" | Period: $date_begin → $date_end"
+        period_str="$date_begin → $date_end"
     fi
 
-    echo -e "  ${BLUE}--- Report from: ${BOLD}$org_name${NC}${BLUE}$period_str ($(basename "$xmlfile"))${NC}"
+    local fname
+    fname=$(basename "$xmlfile")
+    if [[ -n "$period_str" ]]; then
+        printf "  ${BLUE}%-14s${NC} %-20s ${CYAN}%-23s${NC} %s\n" \
+            "[Report]" "$org_name" "$period_str" "$fname"
+    else
+        printf "  ${BLUE}%-14s${NC} %-20s ${CYAN}%-23s${NC} %s\n" \
+            "[Report]" "$org_name" "" "$fname"
+    fi
 
     local record_count
     record_count=$(xmllint --xpath "count(//record)" "$xmlfile" 2>/dev/null) || true
@@ -272,9 +287,9 @@ parse_xml_file() {
 print_header() {
     local file_count="$1"
     echo ""
-    echo -e "${BOLD}${CYAN}+================================================================================+${NC}"
-    echo -e "${BOLD}${CYAN}|                          DMARC REPORT ANALYSIS                                |${NC}"
-    echo -e "${BOLD}${CYAN}+================================================================================+${NC}"
+    echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}${CYAN}║                           DMARC REPORT ANALYSIS                                  ║${NC}"
+    echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${BOLD}Analysis date:${NC}   $(date '+%Y-%m-%d %H:%M:%S')"
     echo -e "  ${BOLD}Files parsed:${NC}    $file_count"
@@ -287,14 +302,20 @@ print_header() {
     fi
 
     echo ""
+    echo -e "  ${BOLD}Parsed reports:${NC}"
+    printf "  %-14s %-20s %-23s %s\n" "TYPE" "ORGANIZATION" "PERIOD" "FILE"
+    echo "  ────────────── ──────────────────── ─────────────────────── ──────────────────────"
 }
 
 print_table() {
     local total_ok=0 total_fail=0 total_emails=0
 
-    echo "+------------------+----------------+--------+----------+----------+------------------+"
-    echo "| IP               | Server         | Emails | SPF      | DKIM     | Status           |"
-    echo "+------------------+----------------+--------+----------+----------+------------------+"
+    echo ""
+    echo -e "  ${BOLD}Results:${NC}"
+    echo ""
+    echo "  ┌──────────────────┬────────────────┬────────┬──────────┬──────────┬──────────────────┐"
+    echo "  │ IP               │ Server         │ Emails │ SPF      │ DKIM     │ Status           │"
+    echo "  ├──────────────────┼────────────────┼────────┼──────────┼──────────┼──────────────────┤"
 
     for ip in $(echo "${!ip_data[@]}" | tr ' ' '\n' | sort); do
         local data="${ip_data[$ip]}"
@@ -335,32 +356,46 @@ print_table() {
             esac
         fi
 
-        printf "| %-16s | %-14s | %6s | ${spf_col}%-8s${NC} | ${dkim_col}%-8s${NC} | ${stato_col}%-16s${NC} |\n" \
+        printf "  │ %-16s │ %-14s │ %6s │ ${spf_col}%-8s${NC} │ ${dkim_col}%-8s${NC} │ ${stato_col}%-16s${NC} │\n" \
             "$ip" "$server" "$count" "$spf_txt" "$dkim_txt" "$stato_icon $stato_txt"
     done
 
-    echo "+------------------+----------------+--------+----------+----------+------------------+"
+    echo "  └──────────────────┴────────────────┴────────┴──────────┴──────────┴──────────────────┘"
 
     echo ""
-    echo -e "${BOLD}--- STATISTICS ---${NC}"
+    echo -e "  ${BOLD}Statistics:${NC}"
     echo ""
-    echo -e "  Total emails:      ${BOLD}$total_emails${NC}"
-    echo -e "  Emails OK:         ${GREEN}$total_ok${NC}"
-    echo -e "  Emails with errors: ${RED}$total_fail${NC}"
 
-    if (( total_emails > 0 )); then
-        local perc_ok=$(( total_ok * 100 / total_emails ))
-        echo -e "  OK percentage:     ${BOLD}$perc_ok%${NC}"
-    fi
+    local perc_ok=0
+    (( total_emails > 0 )) && perc_ok=$(( total_ok * 100 / total_emails ))
+
+    local bar_len=30
+    local filled=$(( perc_ok * bar_len / 100 ))
+    local empty=$(( bar_len - filled ))
+    local bar="${GREEN}"
+    for ((b = 0; b < filled; b++)); do bar+="█"; done
+    bar+="${RED}"
+    for ((b = 0; b < empty; b++)); do bar+="░"; done
+    bar+="${NC}"
+
+    echo -e "  Total emails:       ${BOLD}$total_emails${NC}"
+    echo -e "  Passed:             ${GREEN}$total_ok${NC}"
+    echo -e "  Failed:             ${RED}$total_fail${NC}"
+    echo -e "  Success rate:       ${BOLD}${perc_ok}%${NC}  ${bar}"
     echo ""
 
     if (( total_fail > 0 )); then
-        print_problems
+        if $OPT_DETAIL; then
+            print_problems
+        else
+            echo -e "  ${YELLOW}$total_fail email(s) with issues.${NC} Use ${BOLD}--detail${NC} for analysis."
+            echo ""
+        fi
     fi
 }
 
 print_problems() {
-    echo -e "${BOLD}--- ISSUES DETECTED ---${NC}"
+    echo -e "  ${BOLD}${YELLOW}Issues detected:${NC}"
     echo ""
 
     for ip in $(echo "${!ip_data[@]}" | tr ' ' '\n' | sort); do
@@ -374,47 +409,58 @@ print_problems() {
         [[ "$spf" == "pass" && "$dkim" == "pass" ]] && continue
 
         echo -e "  ${YELLOW}[!]${NC} IP ${BOLD}$ip${NC} ($server)"
-        [[ "$spf"  != "pass" ]] && echo "      - SPF failed"
-        [[ "$dkim" != "pass" ]] && echo "      - DKIM failed"
+        [[ "$spf"  != "pass" ]] && echo -e "      ${RED}✗${NC} SPF failed"
+        [[ "$dkim" != "pass" ]] && echo -e "      ${RED}✗${NC} DKIM failed"
 
         case "$server" in
             "SiteGround")
-                echo -e "      ${CYAN}-> Configure SMTP relay or add SiteGround to SPF${NC}" ;;
+                echo -e "      ${CYAN}→ Configure SMTP relay or add SiteGround to SPF${NC}" ;;
             "Mailchimp")
-                echo -e "      ${CYAN}-> Check Mailchimp domain configuration${NC}" ;;
+                echo -e "      ${CYAN}→ Check Mailchimp domain configuration${NC}" ;;
             *)
-                echo -e "      ${CYAN}-> Verify whether this server is authorized${NC}" ;;
+                echo -e "      ${CYAN}→ Verify whether this server is authorized${NC}" ;;
         esac
         echo ""
     done
 }
 
 print_footer() {
-    echo "+================================================================================+"
+    echo -e "${CYAN}──────────────────────────────────────────────────────────────────────────────────${NC}"
     echo -e "  ${CYAN}Analysis complete${NC}"
-    echo "+================================================================================+"
     echo ""
 }
 
 # --- Main ---
 
 main() {
-    [[ $# -eq 0 ]] && usage
+    # Parse options
+    local args=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --detail) OPT_DETAIL=true; shift ;;
+            --help|-h) usage ;;
+            *)  args+=("$1"); shift ;;
+        esac
+    done
+
+    [[ ${#args[@]} -eq 0 ]] && usage
 
     check_dependencies
 
     local xml_list
-    xml_list=$(collect_xml_files "$@")
+    xml_list=$(collect_xml_files "${args[@]}")
 
-    local file_count
-    file_count=$(echo "$xml_list" | grep -c '.' 2>/dev/null || echo 0)
+    local file_count=0
+    if [[ -n "$xml_list" ]]; then
+        file_count=$(echo "$xml_list" | wc -l)
+    fi
 
     if (( file_count == 0 )); then
         msg_err "No XML files found."
         exit 1
     fi
 
-    declare -gA ip_data
+    declare -gA ip_data=()
 
     ensure_tmpdir
     local parse_log="$TMPDIR_WORK/parse_output.txt"
@@ -427,7 +473,8 @@ main() {
 
     [[ -s "$parse_log" ]] && cat "$parse_log"
 
-    if (( ${#ip_data[@]} == 0 )); then
+    if [[ ${#ip_data[@]} -eq 0 ]]; then
+        echo ""
         msg_warn "No DMARC records found in the analyzed files."
     else
         print_table
