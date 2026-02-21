@@ -10,6 +10,7 @@ The utils directory contains subdirectories organized by functionality:
 - **[crypt](#crypt-luks)**: LUKS encryption management
 - **[disk-usage](#disk-usage)**: Disk usage analysis
 - **[dns](#dns)**: DNS information tools
+- **[firefox](#firefox)**: Firefox session recovery
 - **[gnome](#gnome)**: GNOME desktop backup
 - **[raspbian](#raspbian-raspberry-pi)**: Raspberry Pi tools
 - **[server-monitor](#server-monitor)**: System monitoring dashboard
@@ -106,6 +107,40 @@ DNS information and diagnostics tool.
 ```bash
 dns-info <domain>
 ```
+
+---
+
+### firefox
+
+**Script:** firefox-session-recover
+
+Interactive Firefox session recovery tool. Restores corrupted or broken sessions from available backups in the `sessionstore-backups/` directory.
+
+**Features:**
+- Auto-detect Firefox installation (Snap, APT, Flatpak)
+- Profile discovery with size, date, and backup count
+- Select from available backup files (recovery, previous, upgrade)
+- Safety backup created before every restore
+- Checks that Firefox is not running before restoring
+- Dialog TUI interface
+
+**Usage:**
+```bash
+firefox-session-recover
+```
+
+**Backup types recognized:**
+- `recovery.jsonlz4` - Most recent auto-save
+- `recovery.baklz4` - Previous auto-save
+- `previous.jsonlz4` - Previous session
+- `upgrade.jsonlz4-*` - Pre-upgrade backups
+- `sessionstore.jsonlz4` - Current session file
+
+**Requirements:**
+- dialog
+- coreutils (numfmt, stat)
+- procps (pgrep)
+- Does **not** require root
 
 ---
 

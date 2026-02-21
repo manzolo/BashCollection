@@ -139,6 +139,7 @@ Various system administration and specialized tools.
 - **mfirewall**: UFW firewall management
 - **usb-inspector**: USB device inspection
 - **usb-boot-test**: Test bootable USB/disks in QEMU (formerly ventoy-usb-test)
+- **firefox-session-recover**: Restore Firefox sessions from sessionstore-backups
 - **wp-management**: WordPress management
 
 **📖 [Full Documentation](utils/README.md)**

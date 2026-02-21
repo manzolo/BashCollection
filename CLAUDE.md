@@ -93,6 +93,7 @@ When modifying these scripts, always check the subdirectory for the actual imple
 - `systemd/systemd-manager.sh`: Manage systemd services via TUI
 - `server-monitor/server-monitor.sh`: System dashboard with Docker stats
 - `ventoy/ventoy-usb-test.sh`: Test Ventoy USB in QEMU (UEFI/BIOS modes)
+- `firefox/firefox-session-recover.sh`: Restore Firefox sessions from sessionstore-backups (Snap/APT/Flatpak)
 - `code2one/`: Merge/extract files to/from single files
 
 ### Common Patterns
