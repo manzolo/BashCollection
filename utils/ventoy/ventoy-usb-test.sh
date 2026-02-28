@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: usb-boot-test
-# PKG_VERSION: 2.1.3
+# PKG_VERSION: 2.1.4
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -45,7 +45,7 @@ fi
 
 # Configuration
 readonly SCRIPT_NAME="USB Boot Tester"
-readonly VERSION="2.1.1"
+readonly VERSION="2.1.4"
 readonly LOG_DIR="/tmp/ventoy_test_logs"
 readonly CONFIG_FILE="$HOME/.ventoy_test_config"
 # Determine the directory where the script is located (resolving symlinks)

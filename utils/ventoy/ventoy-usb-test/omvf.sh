@@ -150,8 +150,8 @@ EOF
             sleep 2
         done
 
-        wait "$compilation_pid"
-        local exit_status=$?
+        local exit_status=0
+        wait "$compilation_pid" || exit_status=$?
 
         if [[ $exit_status -eq 0 ]] && [[ -f "$progress_dir/result" ]]; then
             echo "100"; echo "# Compilation completed successfully!"
@@ -218,7 +218,7 @@ download_ovmf_prebuilt() {
 
         if command -v apt >/dev/null; then
             echo "20" > "$progress_dir/pct"; echo "Updating apt package database..." > "$progress_dir/msg"
-            sudo apt update >"$temp_log" 2>&1
+            sudo apt update >"$temp_log" 2>&1 || true
             echo "50" > "$progress_dir/pct"; echo "Installing OVMF with apt..." > "$progress_dir/msg"
             sudo apt install -y ovmf >>"$temp_log" 2>&1 && installed=true
 
@@ -260,7 +260,7 @@ download_ovmf_prebuilt() {
             fi
             sleep 1
         done
-        wait "$install_pid"
+        wait "$install_pid" || true
         echo "100"; echo "# Download completed"
     } | whiptail --gauge "Downloading OVMF..." 8 60 0
 
