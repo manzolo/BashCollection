@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: usb-boot-test
-# PKG_VERSION: 2.1.1
+# PKG_VERSION: 2.1.3
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
