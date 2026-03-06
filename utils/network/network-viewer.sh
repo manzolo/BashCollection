@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: network-viewer
-# PKG_VERSION: 1.0.1
+# PKG_VERSION: 1.0.2
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
