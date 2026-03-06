@@ -1,7 +1,7 @@
 #!/bin/bash
 # interfaces.sh — Network interface listing with IP, state, MAC, speed, type
 
-# Detect interface type from sysfs
+# Detect interface type from sysfs flags and naming conventions
 _iface_type() {
     local iface="$1"
     local sys="/sys/class/net/${iface}"
@@ -15,8 +15,12 @@ _iface_type() {
         echo "wifi"
     elif [[ -f "${sys}/bridge" ]] || [[ -d "${sys}/bridge" ]]; then
         echo "bridge"
+    elif [[ "$iface" == wg* ]]; then
+        echo "wireguard"
     elif [[ "$iface" == veth* ]]; then
         echo "veth"
+    elif [[ "$iface" == ppp* ]]; then
+        echo "ppp"
     elif [[ "$iface" == tun* ]] || [[ "$iface" == tap* ]] || [[ "$type_id" == "65534" ]]; then
         echo "tun/tap"
     else
@@ -44,42 +48,62 @@ _iface_speed() {
 _IF_FMT="%-16s  %-7s  %-30s  %-17s  %-9s  %s\n"
 _IF_SEP=97
 
+# Print one interface row (called once per address, or once with "-" if no address)
+_print_iface_row() {
+    local iface="$1" state="$2" addr="$3" mac="$4" speed="$5" itype="$6"
+
+    [[ ${#iface} -gt 16 ]] && iface="${iface:0:13}..."
+    [[ ${#addr}  -gt 30 ]] && addr="${addr:0:27}..."
+
+    local state_color="$NC"
+    [[ "$state" == "UP"      ]] && state_color="$GREEN"
+    [[ "$state" == "DOWN"    ]] && state_color="$RED"
+
+    printf "%-16s  ${state_color}%-7s${NC}  %-30s  %-17s  %-9s  %s\n" \
+        "$iface" "$state" "$addr" "$mac" "$speed" "$itype"
+}
+
 # Show network interfaces table
+# Enumerates ALL interfaces via "ip -br link show" (includes VPN, no-IP ifaces),
+# then looks up addresses per interface so nothing is missed.
 show_interfaces() {
     print_header "Network Interfaces" $_IF_SEP
 
     printf "$_IF_FMT" "Interface" "State" "Address" "MAC" "Speed" "Type"
     print_separator "─" $_IF_SEP
 
-    # Parse ip -o addr show
-    while IFS= read -r line; do
-        local iface state addr mac speed itype
+    # ip -br link show columns: IFACE  STATE  MAC  [flags...]
+    while IFS= read -r linkline; do
+        local iface state mac speed itype
 
-        iface=$(echo "$line" | awk '{print $2}')
-        addr=$(echo "$line"  | awk '{print $4}')
-        [[ -z "$addr" ]] && addr="-"
+        iface=$(echo "$linkline" | awk '{gsub(/@[^@]*$/, "", $1); print $1}')
+        state=$(echo "$linkline" | awk '{print $2}')
+        mac=$(echo "$linkline"   | awk '{print $3}')
 
-        # Get state and MAC from ip link
-        local link_info
-        link_info=$(run_cmd ip link show "$iface" 2>/dev/null)
-        state=$(echo "$link_info" | grep -oP '(?<=state )\S+' | head -1 || true)
-        mac=$(echo "$link_info"   | awk '/ether/{print $2}' | head -1 || true)
         [[ -z "$state" ]] && state="UNKNOWN"
-        [[ -z "$mac"   ]] && mac="00:00:00:00:00:00"
+        # Virtual/tunnel interfaces report "(none)" as MAC
+        [[ "$mac" == "(none)" || -z "$mac" ]] && mac="-"
 
         speed=$(_iface_speed "$iface")
         itype=$(_iface_type  "$iface")
 
-        # Truncate values that exceed their column width
-        [[ ${#iface} -gt 16 ]] && iface="${iface:0:13}..."
-        [[ ${#addr}  -gt 30 ]] && addr="${addr:0:27}..."
+        # Collect addresses for this interface (respecting the IPv6 filter)
+        local -a addrs=()
+        while IFS= read -r aline; do
+            local addr
+            addr=$(echo "$aline" | awk '{print $4}')
+            [[ -n "$addr" ]] && addrs+=("$addr")
+        done < <(run_cmd ip -o addr show dev "$iface" 2>/dev/null \
+                 | awk -v ipv6="$SHOW_IPV6" '($3=="inet" || ipv6=="true")')
 
-        local state_color="$NC"
-        [[ "$state" == "UP"   ]] && state_color="$GREEN"
-        [[ "$state" == "DOWN" ]] && state_color="$RED"
+        if [[ ${#addrs[@]} -eq 0 ]]; then
+            # Interface exists but has no addresses matching the current filter
+            _print_iface_row "$iface" "$state" "-" "$mac" "$speed" "$itype"
+        else
+            for addr in "${addrs[@]}"; do
+                _print_iface_row "$iface" "$state" "$addr" "$mac" "$speed" "$itype"
+            done
+        fi
 
-        printf "%-16s  ${state_color}%-7s${NC}  %-30s  %-17s  %-9s  %s\n" \
-            "$iface" "$state" "$addr" "$mac" "$speed" "$itype"
-
-    done < <(run_cmd ip -o addr show | awk -v ipv6="$SHOW_IPV6" '($3=="inet" || ipv6=="true") && !seen[$2$4]++')
+    done < <(run_cmd ip -br link show)
 }
