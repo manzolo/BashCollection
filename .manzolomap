@@ -9,3 +9,4 @@ utils/system-tools/mprocmon.sh#manzolo-process-monitor
 utils/email/dmarc-report.sh#dmarc-report
 utils/email/email-domain-check.sh#email-domain-check
 utils/firefox/firefox-session-recover.sh#firefox-session-recover
+utils/network/network-viewer.sh#network-viewer
