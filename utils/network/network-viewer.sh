@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: network-viewer
-# PKG_VERSION: 1.0.0
+# PKG_VERSION: 1.0.1
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -29,13 +29,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # --- Colors ---
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly CYAN='\033[0;36m'
-readonly NC='\033[0m'
-readonly BOLD='\033[1m'
+readonly RED=$'\033[0;31m'
+readonly GREEN=$'\033[0;32m'
+readonly YELLOW=$'\033[1;33m'
+readonly BLUE=$'\033[0;34m'
+readonly CYAN=$'\033[0;36m'
+readonly NC=$'\033[0m'
+readonly BOLD=$'\033[1m'
 
 # --- Utility messages ---
 msg_info() { echo -e "  ${BLUE}[i]${NC} $*" >&2; }
