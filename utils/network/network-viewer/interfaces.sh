@@ -81,8 +81,8 @@ show_interfaces() {
         mac=$(echo "$linkline"   | awk '{print $3}')
 
         [[ -z "$state" ]] && state="UNKNOWN"
-        # Virtual/tunnel interfaces report "(none)" as MAC
-        [[ "$mac" == "(none)" || -z "$mac" ]] && mac="-"
+        # Tunnel/virtual interfaces have no MAC: ip -br shows "(none)" or flags "<...>"
+        [[ "$mac" == "(none)" || "$mac" == "<"* || -z "$mac" ]] && mac="-"
 
         speed=$(_iface_speed "$iface")
         itype=$(_iface_type  "$iface")

@@ -7,7 +7,7 @@ show_full_map() {
 
     echo -e "${CYAN}${BOLD}"
     echo "  ╔══════════════════════════════════════════════════════╗"
-    printf "  ║  %-52s║\n" "Network Map — ${hostname}"
+    printf "  ║  %-52s║\n" "Network Map: ${hostname}"
     printf "  ║  %-52s║\n" "Generated: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "  ╚══════════════════════════════════════════════════════╝"
     echo -e "${NC}"
