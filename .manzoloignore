@@ -1,3 +1,4 @@
 #vm/test-vm-create-disk.sh
 chroot/manzolo-chroot/*
 utils/ventoy/ventoy-usb-test/*
+utils/share-manager/share-manager/*
