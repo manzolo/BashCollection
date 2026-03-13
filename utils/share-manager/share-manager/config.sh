@@ -84,16 +84,18 @@ init_config() {
     fi
 }
 
-# Rotate config backups — keeps the last 3 copies as shares.conf.1 / .2 / .3
+# Rotate config backups — keeps the last 10 copies as shares.conf.1 … .10
 rotate_config_backup() {
     local file="${1:-$CONFIG_FILE}"
     [ ! -f "$file" ] && return
 
-    # Shift existing backups: .2 → .3, .1 → .2, current → .1
-    [ -f "${file}.2" ] && mv "${file}.2" "${file}.3"
-    [ -f "${file}.1" ] && mv "${file}.1" "${file}.2"
+    # Shift existing backups: .9 → .10, .8 → .9, … .1 → .2, current → .1
+    local i
+    for i in 9 8 7 6 5 4 3 2 1; do
+        [ -f "${file}.${i}" ] && mv "${file}.${i}" "${file}.$((i + 1))"
+    done
     cp "$file" "${file}.1"
-    chmod 600 "${file}.1" "${file}.2" "${file}.3" 2>/dev/null || true
+    chmod 600 "${file}".{1..10} 2>/dev/null || true
 }
 
 # Get all section names
