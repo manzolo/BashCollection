@@ -309,6 +309,7 @@ dialog_edit_form() {
         fi
     fi
 
+    rotate_config_backup
     [ -n "$edit_name" ] && delete_section "$edit_name" "$CONFIG_FILE"
 
     add_section "$new_name" "$type" "$new_host" "$new_share" "$new_username" "$new_password" "$new_options" "$new_mountpoint" "$CONFIG_FILE"
@@ -368,6 +369,7 @@ dialog_menu_bookmark() {
                 fi
 
                 if dialog --yesno "Delete share '$del_name'?" 7 50; then
+                    rotate_config_backup
                     delete_section "$del_name" "$CONFIG_FILE"
                     dialog --msgbox "Share deleted successfully" 6 50
                 fi
@@ -435,6 +437,7 @@ dialog_edit_config() {
         backup=$(mktemp "${CONFIG_FILE}.bak.XXXXXX")
         cp "$CONFIG_FILE" "$backup"
 
+        rotate_config_backup
         nano "$CONFIG_FILE"
 
         # Validate after nano exits
@@ -455,6 +458,7 @@ dialog_edit_config() {
         if [ $rc -eq 0 ]; then
             # Validate before overwriting
             if _validate_and_report "$temp_out"; then
+                rotate_config_backup
                 chmod 600 "$temp_out"
                 mv "$temp_out" "$CONFIG_FILE"
                 dialog --msgbox "Configuration saved successfully." 6 50
