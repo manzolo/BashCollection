@@ -240,21 +240,35 @@ dialog_edit_form() {
         return 1
     fi
 
-    local form_data
-    form_data=$(cat "$temp_file")
+    local -a _fields
+    mapfile -t _fields < "$temp_file"
     rm -f "$temp_file"
 
     local new_name new_host new_share new_username new_options new_mountpoint
     case "$type" in
         cifs)
-            IFS=$'\n' read -r new_name new_host new_share new_username new_options new_mountpoint <<< "$form_data"
+            new_name="${_fields[0]:-}"
+            new_host="${_fields[1]:-}"
+            new_share="${_fields[2]:-}"
+            new_username="${_fields[3]:-}"
+            new_options="${_fields[4]:-}"
+            new_mountpoint="${_fields[5]:-}"
             ;;
         nfs)
-            IFS=$'\n' read -r new_name new_host new_share new_options new_mountpoint <<< "$form_data"
+            new_name="${_fields[0]:-}"
+            new_host="${_fields[1]:-}"
+            new_share="${_fields[2]:-}"
+            new_options="${_fields[3]:-}"
+            new_mountpoint="${_fields[4]:-}"
             new_username=""
             ;;
         sshfs)
-            IFS=$'\n' read -r new_name new_host new_share new_username new_options new_mountpoint <<< "$form_data"
+            new_name="${_fields[0]:-}"
+            new_host="${_fields[1]:-}"
+            new_share="${_fields[2]:-}"
+            new_username="${_fields[3]:-}"
+            new_options="${_fields[4]:-}"
+            new_mountpoint="${_fields[5]:-}"
             ;;
     esac
 
