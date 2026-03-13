@@ -15,13 +15,14 @@ CONFIG_TEMPLATE='# manzolo-share-manager configuration
 # Format: INI sections — one [section] per share
 #
 # Available fields:
-#   type       - Protocol: cifs | nfs | sshfs  (default: cifs)
-#   host       - Hostname or IP address of the remote server
-#   share      - Share name (CIFS), export path (NFS), or remote path (SSHFS)
-#   username   - Login username  (CIFS and SSHFS only; ignored for NFS)
-#   password   - Login password  (CIFS only; ignored for NFS and SSHFS)
-#   options    - Extra mount options, comma-separated (optional)
-#   mountpoint - Local directory where the share will be mounted
+#   description - Free-text label for this share (optional)
+#   type        - Protocol: cifs | nfs | sshfs  (default: cifs)
+#   host        - Hostname or IP address of the remote server
+#   share       - Share name (CIFS), export path (NFS), or remote path (SSHFS)
+#   username    - Login username  (CIFS and SSHFS only; ignored for NFS)
+#   password    - Login password  (CIFS only; ignored for NFS and SSHFS)
+#   options     - Extra mount options, comma-separated (optional)
+#   mountpoint  - Local directory where the share will be mounted
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # CIFS (Windows / Samba) example
@@ -29,6 +30,7 @@ CONFIG_TEMPLATE='# manzolo-share-manager configuration
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # [myshare]
+# description=Software repository on the office NAS
 # type=cifs
 # host=fileserver.lan
 # share=documents
@@ -44,6 +46,7 @@ CONFIG_TEMPLATE='# manzolo-share-manager configuration
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # [backup]
+# description=NAS backup volume
 # type=nfs
 # host=192.168.1.100
 # share=/volume1/backup
@@ -57,6 +60,7 @@ CONFIG_TEMPLATE='# manzolo-share-manager configuration
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # [docs]
+# description=Remote documents folder via SSH
 # type=sshfs
 # host=192.168.1.100
 # share=/home/user/docs
@@ -176,7 +180,8 @@ add_section() {
     local password="$6"
     local options="${7:-}"
     local mountpoint="${8:-}"
-    local file="${9:-$CONFIG_FILE}"
+    local description="${9:-}"
+    local file="${10:-$CONFIG_FILE}"
 
     [ ! -f "$file" ] && return 1
     [ -z "$mountpoint" ] && mountpoint=$(get_mountpoint "$name" "$file")
@@ -188,6 +193,7 @@ add_section() {
     {
         echo ""
         echo "[$name]"
+        [ -n "$description" ] && echo "description=$description"
         echo "type=$type"
         echo "host=$host"
         echo "share=$share"

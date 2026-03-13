@@ -17,10 +17,11 @@ list_shares() {
     while read -r name; do
         [ -z "$name" ] && continue
 
-        local mp type
+        local mp type description
         mp=$(get_mountpoint "$name")
         type=$(get_field "$name" "type" "$CONFIG_FILE")
         type="${type:-cifs}"
+        description=$(get_field "$name" "description" "$CONFIG_FILE")
 
         local status
         if is_mounted "$mp"; then
@@ -29,7 +30,7 @@ list_shares() {
             status="✗ Not mounted"
         fi
 
-        printf "%-20s %-6s %s\n" "$name" "[$type]" "$status"
+        printf "%-20s %-6s %-14s %s\n" "$name" "[$type]" "$status" "${description:+— $description}"
     done <<< "$sections"
 }
 

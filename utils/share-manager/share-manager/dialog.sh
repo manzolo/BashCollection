@@ -17,6 +17,8 @@ build_shares_menu() {
         mp=$(get_mountpoint "$name")
         type=$(get_field "$name" "type" "$CONFIG_FILE")
         type="${type:-cifs}"
+        local desc
+        desc=$(get_field "$name" "description" "$CONFIG_FILE")
 
         case "$filter" in
             mounted)   is_mounted "$mp" || continue ;;
@@ -25,7 +27,9 @@ build_shares_menu() {
 
         local status
         status=$(get_status "$mp")
-        printf '%s\n' "$index" "$name [$type] $status"
+        local label="$name [$type] $status"
+        [ -n "$desc" ] && label="$label — $desc"
+        printf '%s\n' "$index" "$label"
         ((index++)) || true
     done <<< "$sections"
 }
@@ -150,17 +154,19 @@ dialog_show_status() {
     while read -r name; do
         [ -z "$name" ] && continue
 
-        local mp host share type
+        local mp host share type desc
         mp=$(get_mountpoint "$name")
         host=$(get_field "$name" "host" "$CONFIG_FILE")
         share=$(get_field "$name" "share" "$CONFIG_FILE")
         type=$(get_field "$name" "type" "$CONFIG_FILE")
         type="${type:-cifs}"
+        desc=$(get_field "$name" "description" "$CONFIG_FILE")
 
         local icon
         if is_mounted "$mp"; then icon="✓"; else icon="✗"; fi
 
         status_text+="[$icon] $name ($type)\n"
+        [ -n "$desc" ] && status_text+="    Description: $desc\n"
         status_text+="    Host: $host\n"
         status_text+="    Share: $share\n"
         status_text+="    Mount: $mp\n\n"
@@ -173,10 +179,11 @@ dialog_show_status() {
 dialog_edit_form() {
     local edit_name="$1"
 
-    local name="" type="cifs" host="" share="" username="" password="" options="" mountpoint=""
+    local name="" description="" type="cifs" host="" share="" username="" password="" options="" mountpoint=""
 
     if [ -n "$edit_name" ]; then
         name="$edit_name"
+        description=$(get_field "$name" "description" "$CONFIG_FILE")
         type=$(get_field "$name" "type" "$CONFIG_FILE"); type="${type:-cifs}"
         host=$(get_field "$name" "host" "$CONFIG_FILE")
         share=$(get_field "$name" "share" "$CONFIG_FILE")
@@ -204,32 +211,35 @@ dialog_edit_form() {
 
     case "$type" in
         cifs)
-            dialog --form "$title" 20 70 6 \
-                "Name:"        1 1 "$name"       1 20 30 0 \
-                "Host:"        2 1 "$host"       2 20 30 0 \
-                "Share:"       3 1 "$share"      3 20 30 0 \
-                "Username:"    4 1 "$username"   4 20 30 0 \
-                "Options:"     5 1 "$options"    5 20 30 0 \
-                "Mount point:" 6 1 "$mountpoint" 6 20 40 0 \
+            dialog --form "$title" 22 70 7 \
+                "Name:"        1 1 "$name"        1 20 30 0 \
+                "Description:" 2 1 "$description" 2 20 40 0 \
+                "Host:"        3 1 "$host"        3 20 30 0 \
+                "Share:"       4 1 "$share"       4 20 30 0 \
+                "Username:"    5 1 "$username"    5 20 30 0 \
+                "Options:"     6 1 "$options"     6 20 30 0 \
+                "Mount point:" 7 1 "$mountpoint"  7 20 40 0 \
                 2> "$temp_file"
             ;;
         nfs)
-            dialog --form "$title" 20 70 5 \
-                "Name:"        1 1 "$name"       1 20 30 0 \
-                "Host:"        2 1 "$host"       2 20 30 0 \
-                "Export path:" 3 1 "$share"      3 20 30 0 \
-                "Options:"     4 1 "$options"    4 20 30 0 \
-                "Mount point:" 5 1 "$mountpoint" 5 20 40 0 \
+            dialog --form "$title" 20 70 6 \
+                "Name:"        1 1 "$name"        1 20 30 0 \
+                "Description:" 2 1 "$description" 2 20 40 0 \
+                "Host:"        3 1 "$host"        3 20 30 0 \
+                "Export path:" 4 1 "$share"       4 20 30 0 \
+                "Options:"     5 1 "$options"     5 20 30 0 \
+                "Mount point:" 6 1 "$mountpoint"  6 20 40 0 \
                 2> "$temp_file"
             ;;
         sshfs)
-            dialog --form "$title" 20 70 6 \
-                "Name:"        1 1 "$name"       1 20 30 0 \
-                "Host:"        2 1 "$host"       2 20 30 0 \
-                "Remote path:" 3 1 "$share"      3 20 30 0 \
-                "Username:"    4 1 "$username"   4 20 30 0 \
-                "Options:"     5 1 "$options"    5 20 30 0 \
-                "Mount point:" 6 1 "$mountpoint" 6 20 40 0 \
+            dialog --form "$title" 22 70 7 \
+                "Name:"        1 1 "$name"        1 20 30 0 \
+                "Description:" 2 1 "$description" 2 20 40 0 \
+                "Host:"        3 1 "$host"        3 20 30 0 \
+                "Remote path:" 4 1 "$share"       4 20 30 0 \
+                "Username:"    5 1 "$username"    5 20 30 0 \
+                "Options:"     6 1 "$options"     6 20 30 0 \
+                "Mount point:" 7 1 "$mountpoint"  7 20 40 0 \
                 2> "$temp_file"
             ;;
     esac
@@ -244,31 +254,34 @@ dialog_edit_form() {
     mapfile -t _fields < "$temp_file"
     rm -f "$temp_file"
 
-    local new_name new_host new_share new_username new_options new_mountpoint
+    local new_name new_description new_host new_share new_username new_options new_mountpoint
     case "$type" in
         cifs)
             new_name="${_fields[0]:-}"
-            new_host="${_fields[1]:-}"
-            new_share="${_fields[2]:-}"
-            new_username="${_fields[3]:-}"
-            new_options="${_fields[4]:-}"
-            new_mountpoint="${_fields[5]:-}"
+            new_description="${_fields[1]:-}"
+            new_host="${_fields[2]:-}"
+            new_share="${_fields[3]:-}"
+            new_username="${_fields[4]:-}"
+            new_options="${_fields[5]:-}"
+            new_mountpoint="${_fields[6]:-}"
             ;;
         nfs)
             new_name="${_fields[0]:-}"
-            new_host="${_fields[1]:-}"
-            new_share="${_fields[2]:-}"
-            new_options="${_fields[3]:-}"
-            new_mountpoint="${_fields[4]:-}"
+            new_description="${_fields[1]:-}"
+            new_host="${_fields[2]:-}"
+            new_share="${_fields[3]:-}"
+            new_options="${_fields[4]:-}"
+            new_mountpoint="${_fields[5]:-}"
             new_username=""
             ;;
         sshfs)
             new_name="${_fields[0]:-}"
-            new_host="${_fields[1]:-}"
-            new_share="${_fields[2]:-}"
-            new_username="${_fields[3]:-}"
-            new_options="${_fields[4]:-}"
-            new_mountpoint="${_fields[5]:-}"
+            new_description="${_fields[1]:-}"
+            new_host="${_fields[2]:-}"
+            new_share="${_fields[3]:-}"
+            new_username="${_fields[4]:-}"
+            new_options="${_fields[5]:-}"
+            new_mountpoint="${_fields[6]:-}"
             ;;
     esac
 
@@ -312,7 +325,7 @@ dialog_edit_form() {
     rotate_config_backup
     [ -n "$edit_name" ] && delete_section "$edit_name" "$CONFIG_FILE"
 
-    add_section "$new_name" "$type" "$new_host" "$new_share" "$new_username" "$new_password" "$new_options" "$new_mountpoint" "$CONFIG_FILE"
+    add_section "$new_name" "$type" "$new_host" "$new_share" "$new_username" "$new_password" "$new_options" "$new_mountpoint" "$new_description" "$CONFIG_FILE"
 
     local action
     action=$([ -z "$edit_name" ] && echo "added" || echo "updated")
