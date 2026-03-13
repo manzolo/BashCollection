@@ -300,8 +300,16 @@ dialog_edit_form() {
 
     local new_password=""
     if [ "$type" = "cifs" ]; then
-        new_password=$(dialog --passwordbox "Password for '$new_name':" 8 50 2>&1 >/dev/tty)
+        local pw_prompt
+        if [ -n "$edit_name" ] && [ -n "$password" ]; then
+            pw_prompt="Password for '$new_name':\n(leave empty to keep current password)"
+        else
+            pw_prompt="Password for '$new_name':"
+        fi
+        new_password=$(dialog --passwordbox "$pw_prompt" 9 55 2>&1 >/dev/tty)
         [ $? -ne 0 ] && return 1
+        # Empty input on edit → reuse existing password
+        [ -z "$new_password" ] && [ -n "$edit_name" ] && new_password="$password"
     fi
 
     # If the user cleared the mountpoint field, fall back to the bare default
