@@ -141,7 +141,7 @@ Various system administration and specialized tools.
 - **usb-boot-test**: Test bootable USB/disks in QEMU (formerly ventoy-usb-test)
 - **firefox-session-recover**: Restore Firefox sessions from sessionstore-backups
 - **wp-management**: WordPress management
-- **share-manager**: CIFS/NFS/SSHFS share management with interactive dialog TUI
+- **share-manager**: CIFS/NFS/SSHFS share management with interactive dialog TUI (supports per-share descriptions)
 
 **📖 [Full Documentation](utils/README.md)**
 

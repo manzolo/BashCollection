@@ -404,6 +404,7 @@ Manage CIFS, NFS, and SSHFS network shares with an interactive dialog TUI or fro
 
 **Features:**
 - Multi-protocol support: CIFS (Windows/Samba), NFS, SSHFS
+- Optional `description` field per share — shown in menus, status view and `list` output
 - Interactive dialog TUI: mount/unmount, status, bookmark management
 - Per-user configuration in `~/.config/manzolo-share-manager/shares.conf`
   (auto-created with commented examples on first run; `$SUDO_USER`-aware)
@@ -432,6 +433,7 @@ share-manager ui
 **Configuration** (`~/.config/manzolo-share-manager/shares.conf`):
 ```ini
 [myshare]
+description=Software repository on the office NAS
 type=cifs
 host=fileserver.lan
 share=documents
@@ -441,6 +443,7 @@ options=vers=3.0
 mountpoint=/mnt/shares/myshare
 
 [backup]
+description=NAS backup volume
 type=nfs
 host=192.168.1.100
 share=/volume1/backup
@@ -448,6 +451,7 @@ options=vers=4,rw
 mountpoint=/mnt/shares/backup
 
 [docs]
+description=Remote documents folder via SSH
 type=sshfs
 host=192.168.1.100
 share=/home/user/docs
