@@ -115,6 +115,15 @@ get_field() {
     ' "$file"
 }
 
+# Get the mountpoint for a share, falling back to /mnt/shares/<name>
+get_mountpoint() {
+    local name="$1"
+    local file="${2:-$CONFIG_FILE}"
+    local mp
+    mp=$(get_field "$name" "mountpoint" "$file")
+    echo "${mp:-/mnt/shares/$name}"
+}
+
 # Set a field value in a section (atomic write)
 set_field() {
     local section="$1"
@@ -156,7 +165,7 @@ add_section() {
     local file="${9:-$CONFIG_FILE}"
 
     [ ! -f "$file" ] && return 1
-    [ -z "$mountpoint" ] && mountpoint="/mnt/shares/$name"
+    [ -z "$mountpoint" ] && mountpoint=$(get_mountpoint "$name" "$file")
 
     local tmpfile
     tmpfile=$(mktemp "${file}.XXXXXX") || return 1

@@ -14,8 +14,7 @@ build_shares_menu() {
         [ -z "$name" ] && continue
 
         local mp type
-        mp=$(get_field "$name" "mountpoint" "$CONFIG_FILE")
-        [ -z "$mp" ] && mp="/mnt/shares/$name"
+        mp=$(get_mountpoint "$name")
         type=$(get_field "$name" "type" "$CONFIG_FILE")
         type="${type:-cifs}"
 
@@ -44,8 +43,7 @@ get_section_by_index() {
         [ -z "$name" ] && continue
 
         local mp
-        mp=$(get_field "$name" "mountpoint" "$CONFIG_FILE")
-        [ -z "$mp" ] && mp="/mnt/shares/$name"
+        mp=$(get_mountpoint "$name")
 
         case "$filter" in
             mounted)   is_mounted "$mp" || continue ;;
@@ -72,8 +70,7 @@ dialog_mount() {
     fi
 
     local mp
-    mp=$(get_field "$name" "mountpoint" "$CONFIG_FILE")
-    [ -z "$mp" ] && mp="/mnt/shares/$name"
+    mp=$(get_mountpoint "$name")
 
     if is_mounted "$mp"; then
         dialog --msgbox "Share '$name' is already mounted at:\n\n$mp" 8 60
@@ -111,8 +108,7 @@ dialog_umount() {
     fi
 
     local mp
-    mp=$(get_field "$name" "mountpoint" "$CONFIG_FILE")
-    [ -z "$mp" ] && mp="/mnt/shares/$name"
+    mp=$(get_mountpoint "$name")
 
     if ! is_mounted "$mp"; then
         dialog --msgbox "Share '$name' is not mounted" 7 50
@@ -155,8 +151,7 @@ dialog_show_status() {
         [ -z "$name" ] && continue
 
         local mp host share type
-        mp=$(get_field "$name" "mountpoint" "$CONFIG_FILE")
-        [ -z "$mp" ] && mp="/mnt/shares/$name"
+        mp=$(get_mountpoint "$name")
         host=$(get_field "$name" "host" "$CONFIG_FILE")
         share=$(get_field "$name" "share" "$CONFIG_FILE")
         type=$(get_field "$name" "type" "$CONFIG_FILE")
@@ -188,8 +183,7 @@ dialog_edit_form() {
         username=$(get_field "$name" "username" "$CONFIG_FILE")
         password=$(get_field "$name" "password" "$CONFIG_FILE")
         options=$(get_field "$name" "options" "$CONFIG_FILE")
-        mountpoint=$(get_field "$name" "mountpoint" "$CONFIG_FILE")
-        [ -z "$mountpoint" ] && mountpoint="/mnt/shares/$name"
+        mountpoint=$(get_mountpoint "$name")
     fi
 
     # Choose type first
@@ -275,13 +269,12 @@ dialog_edit_form() {
         [ $? -ne 0 ] && return 1
     fi
 
-    [ -z "$new_mountpoint" ] && new_mountpoint="/mnt/shares/$new_name"
+    [ -z "$new_mountpoint" ] && new_mountpoint=$(get_mountpoint "$new_name")
 
     # Handle rename: unmount old share if needed
     if [ -n "$edit_name" ] && [ "$new_name" != "$edit_name" ]; then
         local old_mp
-        old_mp=$(get_field "$edit_name" "mountpoint" "$CONFIG_FILE")
-        [ -z "$old_mp" ] && old_mp="/mnt/shares/$edit_name"
+        old_mp=$(get_mountpoint "$edit_name")
 
         if is_mounted "$old_mp"; then
             if ! dialog --yesno "Share '$edit_name' is currently mounted.\nUnmount it before renaming?" 8 60; then
@@ -343,8 +336,7 @@ dialog_menu_bookmark() {
                 del_name=$(get_section_by_index "$del_choice") || continue
 
                 local del_mp
-                del_mp=$(get_field "$del_name" "mountpoint" "$CONFIG_FILE")
-                [ -z "$del_mp" ] && del_mp="/mnt/shares/$del_name"
+                del_mp=$(get_mountpoint "$del_name")
 
                 if is_mounted "$del_mp"; then
                     dialog --msgbox "Error: '$del_name' is currently mounted.\nUnmount it before deleting." 8 60

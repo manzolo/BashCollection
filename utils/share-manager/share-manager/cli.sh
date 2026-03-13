@@ -18,8 +18,7 @@ list_shares() {
         [ -z "$name" ] && continue
 
         local mp type
-        mp=$(get_field "$name" "mountpoint" "$CONFIG_FILE")
-        [ -z "$mp" ] && mp="/mnt/shares/$name"
+        mp=$(get_mountpoint "$name")
         type=$(get_field "$name" "type" "$CONFIG_FILE")
         type="${type:-cifs}"
 
@@ -91,8 +90,7 @@ check_status() {
     fi
 
     local mp
-    mp=$(get_field "$share_name" "mountpoint" "$CONFIG_FILE")
-    [ -z "$mp" ] && mp="/mnt/shares/$share_name"
+    mp=$(get_mountpoint "$share_name")
 
     if is_mounted "$mp"; then
         echo "Share '$share_name' is mounted at $mp"

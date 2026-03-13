@@ -41,8 +41,7 @@ do_mount() {
     username=$(get_field "$name" "username" "$CONFIG_FILE")
     password=$(get_field "$name" "password" "$CONFIG_FILE")
     options=$(get_field "$name" "options" "$CONFIG_FILE")
-    mp=$(get_field "$name" "mountpoint" "$CONFIG_FILE")
-    [ -z "$mp" ] && mp="/mnt/shares/$name"
+    mp=$(get_mountpoint "$name")
 
     if [ ! -d "$mp" ]; then
         echo "Creating mount directory: $mp"
@@ -75,8 +74,7 @@ do_umount() {
     local name="$1"
 
     local mp
-    mp=$(get_field "$name" "mountpoint" "$CONFIG_FILE")
-    [ -z "$mp" ] && mp="/mnt/shares/$name"
+    mp=$(get_mountpoint "$name")
 
     if ! is_mounted "$mp"; then
         echo "Share '$name' is not mounted"
