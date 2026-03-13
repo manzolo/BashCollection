@@ -21,6 +21,7 @@ The utils directory contains subdirectories organized by functionality:
 - **[ufw](#ufw-firewall)**: Firewall management
 - **[usb](#usb)**: USB device inspection
 - **[usb-boot-test](#usb-boot-test)**: USB boot testing
+- **[share-manager](#share-manager)**: CIFS/NFS/SSHFS share management
 - **[wordpress](#wordpress)**: WordPress management
 
 ---
@@ -392,6 +393,75 @@ sudo ventoy-usb-test
 - QEMU (qemu-system-x86)
 - OVMF (for UEFI support)
 - whiptail (TUI interface)
+
+---
+
+### share-manager
+
+**Script:** share-manager
+
+Manage CIFS, NFS, and SSHFS network shares with an interactive dialog TUI or from the command line.
+
+**Features:**
+- Multi-protocol support: CIFS (Windows/Samba), NFS, SSHFS
+- Interactive dialog TUI: mount/unmount, status, bookmark management
+- Per-user configuration in `~/.config/manzolo-share-manager/shares.conf`
+  (auto-created with commented examples on first run; `$SUDO_USER`-aware)
+- Automatic mountpoint default (`/mnt/shares/<name>`) when not specified
+- Config validation: duplicate names, missing required fields, invalid type
+- Duplicate share name prevention in add/rename
+- Rolling backup of the last 10 config snapshots (`shares.conf.1` … `.10`)
+- Direct config file editing via nano (if installed) or `dialog --editbox`,
+  with post-edit validation and restore-from-backup on error
+- Modular architecture: `config.sh`, `utils.sh`, `mount.sh`, `cli.sh`, `dialog.sh`
+
+**Usage:**
+```bash
+# Interactive TUI (default when no arguments)
+share-manager
+
+# CLI commands
+share-manager list
+share-manager mount <name>
+share-manager umount <name>
+share-manager status <name>
+share-manager info
+share-manager ui
+```
+
+**Configuration** (`~/.config/manzolo-share-manager/shares.conf`):
+```ini
+[myshare]
+type=cifs
+host=fileserver.lan
+share=documents
+username=myuser
+password=mypassword
+options=vers=3.0
+mountpoint=/mnt/shares/myshare
+
+[backup]
+type=nfs
+host=192.168.1.100
+share=/volume1/backup
+options=vers=4,rw
+mountpoint=/mnt/shares/backup
+
+[docs]
+type=sshfs
+host=192.168.1.100
+share=/home/user/docs
+username=user
+mountpoint=/mnt/shares/docs
+```
+
+**Requirements:**
+- `util-linux` (findmnt)
+- `cifs-utils` — for CIFS mounts (`sudo apt install cifs-utils`)
+- `nfs-common` — for NFS mounts (`sudo apt install nfs-common`)
+- `sshfs` — for SSHFS mounts (`sudo apt install sshfs`)
+- `dialog` — for TUI interface
+- `nano` — optional, used as config editor if available
 
 ---
 
