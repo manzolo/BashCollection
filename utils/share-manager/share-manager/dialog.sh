@@ -283,7 +283,9 @@ dialog_edit_form() {
         [ $? -ne 0 ] && return 1
     fi
 
-    [ -z "$new_mountpoint" ] && new_mountpoint=$(get_mountpoint "$new_name")
+    # If the user cleared the mountpoint field, fall back to the bare default
+    # (do NOT read from config here — the section still exists at this point)
+    [ -z "$new_mountpoint" ] && new_mountpoint="/mnt/shares/$new_name"
 
     # Handle rename: unmount old share if needed
     if [ -n "$edit_name" ] && [ "$new_name" != "$edit_name" ]; then
@@ -405,17 +407,37 @@ dialog_menu_umount() {
     dialog_umount "$umount_name"
 }
 
+# Dialog: Edit config file directly (nano if available, otherwise dialog --editbox)
+dialog_edit_config() {
+    if command -v nano &>/dev/null; then
+        nano "$CONFIG_FILE"
+    else
+        local temp_out
+        temp_out=$(mktemp)
+        dialog --editbox "$CONFIG_FILE" 0 0 2> "$temp_out"
+        local rc=$?
+        if [ $rc -eq 0 ]; then
+            chmod 600 "$temp_out"
+            mv "$temp_out" "$CONFIG_FILE"
+            dialog --msgbox "Configuration file saved." 6 50
+        else
+            rm -f "$temp_out"
+        fi
+    fi
+}
+
 # Dialog: Main menu loop
 dialog_main_menu() {
     check_dialog
     while true; do
         local choice
-        choice=$(dialog --menu "Share Manager - CIFS/NFS/SSHFS" 20 60 5 \
+        choice=$(dialog --menu "Share Manager - CIFS/NFS/SSHFS" 20 60 6 \
             1 "Mount share" \
             2 "Unmount share" \
             3 "Share status" \
             4 "Manage bookmarks" \
-            5 "Exit" \
+            5 "Edit configuration file" \
+            6 "Exit" \
             2>&1 >/dev/tty)
 
         case $choice in
@@ -423,7 +445,8 @@ dialog_main_menu() {
             2) dialog_menu_umount ;;
             3) dialog_show_status ;;
             4) dialog_menu_bookmark ;;
-            5|"") clear; exit 0 ;;
+            5) dialog_edit_config ;;
+            6|"") clear; exit 0 ;;
         esac
     done
 }
