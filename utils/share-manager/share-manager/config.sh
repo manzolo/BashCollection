@@ -215,3 +215,54 @@ section_exists() {
     [ ! -f "$file" ] && return 1
     get_sections "$file" | grep -qx "$section"
 }
+
+# Validate config file — returns 0 if OK, prints errors and returns 1 if not
+validate_config() {
+    local file="${1:-$CONFIG_FILE}"
+    local -a errors=()
+
+    [ ! -f "$file" ] && { echo "File not found: $file"; return 1; }
+
+    # Duplicate section names
+    local dupes
+    dupes=$(get_sections "$file" | sort | uniq -d)
+    if [ -n "$dupes" ]; then
+        while read -r d; do
+            errors+=("Duplicate section: [$d]")
+        done <<< "$dupes"
+    fi
+
+    # Per-section field checks
+    while read -r name; do
+        [ -z "$name" ] && continue
+
+        local host share type username
+        host=$(get_field "$name" "host" "$file")
+        share=$(get_field "$name" "share" "$file")
+        type=$(get_field "$name" "type" "$file"); type="${type:-cifs}"
+        username=$(get_field "$name" "username" "$file")
+
+        [ -z "$host" ]  && errors+=("[$name]: missing required field 'host'")
+        [ -z "$share" ] && errors+=("[$name]: missing required field 'share'")
+
+        case "$type" in
+            cifs|nfs|sshfs) ;;
+            *) errors+=("[$name]: invalid type '$type' (must be cifs, nfs, or sshfs)") ;;
+        esac
+
+        if [ "$type" = "cifs" ] && [ -z "$username" ]; then
+            errors+=("[$name]: missing required field 'username' (required for CIFS)")
+        fi
+        if [ "$type" = "sshfs" ] && [ -z "$username" ]; then
+            errors+=("[$name]: missing required field 'username' (required for SSHFS)")
+        fi
+
+    done < <(get_sections "$file")
+
+    if [ ${#errors[@]} -gt 0 ]; then
+        printf '%s\n' "${errors[@]}"
+        return 1
+    fi
+
+    return 0
+}

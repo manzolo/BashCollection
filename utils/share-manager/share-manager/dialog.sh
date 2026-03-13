@@ -277,6 +277,14 @@ dialog_edit_form() {
         return 1
     fi
 
+    # Duplicate name check: block if name already exists (add) or clashes with another section (rename)
+    if [ -z "$edit_name" ] || [ "$new_name" != "$edit_name" ]; then
+        if section_exists "$new_name" "$CONFIG_FILE"; then
+            dialog --msgbox "Error: a share named '$new_name' already exists.\nChoose a different name." 8 60
+            return 1
+        fi
+    fi
+
     local new_password=""
     if [ "$type" = "cifs" ]; then
         new_password=$(dialog --passwordbox "Password for '$new_name':" 8 50 2>&1 >/dev/tty)
@@ -407,19 +415,52 @@ dialog_menu_umount() {
     dialog_umount "$umount_name"
 }
 
+# Validate file and show errors in a dialog; return 0 if valid
+_validate_and_report() {
+    local file="$1"
+    local errors
+    errors=$(validate_config "$file" 2>&1)
+    if [ -n "$errors" ]; then
+        dialog --msgbox "Configuration errors found:\n\n$errors" 20 70
+        return 1
+    fi
+    return 0
+}
+
 # Dialog: Edit config file directly (nano if available, otherwise dialog --editbox)
 dialog_edit_config() {
     if command -v nano &>/dev/null; then
+        # Make a backup before letting the user edit freely
+        local backup
+        backup=$(mktemp "${CONFIG_FILE}.bak.XXXXXX")
+        cp "$CONFIG_FILE" "$backup"
+
         nano "$CONFIG_FILE"
+
+        # Validate after nano exits
+        if ! _validate_and_report "$CONFIG_FILE"; then
+            if dialog --yesno "The configuration has errors.\nRestore the previous backup?" 8 60; then
+                cp "$backup" "$CONFIG_FILE"
+                dialog --msgbox "Previous configuration restored." 6 50
+            fi
+        else
+            dialog --msgbox "Configuration saved successfully." 6 50
+        fi
+        rm -f "$backup"
     else
         local temp_out
         temp_out=$(mktemp)
         dialog --editbox "$CONFIG_FILE" 0 0 2> "$temp_out"
         local rc=$?
         if [ $rc -eq 0 ]; then
-            chmod 600 "$temp_out"
-            mv "$temp_out" "$CONFIG_FILE"
-            dialog --msgbox "Configuration file saved." 6 50
+            # Validate before overwriting
+            if _validate_and_report "$temp_out"; then
+                chmod 600 "$temp_out"
+                mv "$temp_out" "$CONFIG_FILE"
+                dialog --msgbox "Configuration saved successfully." 6 50
+            else
+                rm -f "$temp_out"
+            fi
         else
             rm -f "$temp_out"
         fi
