@@ -5,7 +5,12 @@
 _mount_cifs() {
     local name="$1" host="$2" share="$3" username="$4" password="$5" options="$6" mp="$7"
 
-    local opts="username=$username,password=$password"
+    local opts=""
+    if [ -n "$username" ]; then
+        opts="username=$username,password=$password"
+    else
+        opts="guest"
+    fi
     [ -n "$options" ] && opts="$opts,$options"
 
     sudo mount -t cifs "//${host}/${share}" "$mp" -o "$opts" || return 1
