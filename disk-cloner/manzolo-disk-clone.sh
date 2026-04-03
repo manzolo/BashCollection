@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: manzolo-disk-clone
-# PKG_VERSION: 2.5.5
+# PKG_VERSION: 2.5.6
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -37,6 +37,7 @@ TEMP_PREFIX="/tmp/manzolo_clone_$$"
 
 readonly SCRIPT_NAME=$(basename "$0")
 readonly SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+readonly SCRIPT_VERSION=$(grep '^# PKG_VERSION:' "$0" | awk '{print $3}')
 
 # ───────────────────────────────
 # Load helper scripts
@@ -59,7 +60,7 @@ load_modules
 # ───────────────────────────────
 main_menu() {
     while true; do
-        local menu_title="⚡ Manzolo Disk Cloner v2.4 ✨"
+        local menu_title="⚡ Manzolo Disk Cloner v${SCRIPT_VERSION} ✨"
         [ "$DRY_RUN" = true ] && menu_title="🧪 $menu_title - DRY RUN"
 
         local choice
@@ -93,7 +94,7 @@ main_menu() {
 show_about() {
     local text="🚀 FEATURES:\n\n✓ Smart Cloning: Copies only used space\n✓ Physical to Physical: Direct device cloning\n✓ UUID Preservation\n✓ Proportional Resize\n✓ LUKS Support\n✓ DRY RUN Mode\n..."
     [ "$DRY_RUN" = true ] && text="$text\n\n🧪 DRY RUN MODE ACTIVE"
-    dialog --title "About Manzolo Disk Cloner v2.4" --msgbox "$text" 26 85
+    dialog --title "About Manzolo Disk Cloner v${SCRIPT_VERSION}" --msgbox "$text" 26 85
 }
 
 # ───────────────────────────────
