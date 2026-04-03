@@ -55,7 +55,11 @@ select_physical_device() {
                 status_info="${part_count}p: ${fs_list}"
             fi
 
-            local item="${size} | ${model} | ${disk_type}/${tran_upper} | S/N:${serial} | ${status_info}"
+            local model_short
+            model_short=$(echo "$model" | cut -c1-32)
+            local item
+            item=$(printf "%-7s  %-32s  %-9s  %-20s  %s" \
+                "$size" "$model_short" "${disk_type}/${tran_upper}" "S/N:${serial}" "$status_info")
             devices+=("/dev/$name" "$item")
         fi
     done < <(lsblk -dn -o NAME,SIZE,MODEL | grep -E '^sd|^nvme|^vd')
@@ -76,9 +80,12 @@ select_physical_device() {
         fi
     fi
 
+    local header
+    header=$(printf "%-7s  %-32s  %-9s  %-20s  %s" "SIZE" "MODEL" "TYPE" "SERIAL" "PARTITIONS")
+
     local selected
     selected=$(dialog --clear --title "$title" \
-        --menu "$prompt" 20 110 10 \
+        --menu "$prompt\n$header" 22 115 12 \
         "${devices[@]}" \
         3>&1 1>&2 2>&3)
 
