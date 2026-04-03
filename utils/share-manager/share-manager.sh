@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # PKG_NAME: share-manager
-# PKG_VERSION: 1.0.9
+# PKG_VERSION: 1.0.10
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all

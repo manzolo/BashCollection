@@ -270,12 +270,7 @@ validate_config() {
             *) errors+=("[$name]: invalid type '$type' (must be cifs, nfs, or sshfs)") ;;
         esac
 
-        if [ "$type" = "cifs" ] && [ -z "$username" ]; then
-            errors+=("[$name]: missing required field 'username' (required for CIFS)")
-        fi
-        if [ "$type" = "sshfs" ] && [ -z "$username" ]; then
-            errors+=("[$name]: missing required field 'username' (required for SSHFS)")
-        fi
+        # username is optional: if missing it will be prompted at mount time
 
     done < <(get_sections "$file")
 

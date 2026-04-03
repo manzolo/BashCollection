@@ -61,6 +61,18 @@ do_mount() {
         return 0
     fi
 
+    # Prompt for missing credentials at runtime
+    if [ "$type" == "sshfs" ] && [ -z "$username" ]; then
+        read -r -p "Username for '$name': " username </dev/tty
+    fi
+    if [ "$type" == "cifs" ] && [ -z "$username" ]; then
+        read -r -p "Username for '$name' (leave empty for guest): " username </dev/tty
+    fi
+    if [ "$type" == "cifs" ] && [ -n "$username" ] && [ -z "$password" ]; then
+        read -r -s -p "Password for '$name' (user: $username): " password </dev/tty
+        echo >&2
+    fi
+
     echo "Mounting '$name' ($type) at $mp..."
 
     case "$type" in
