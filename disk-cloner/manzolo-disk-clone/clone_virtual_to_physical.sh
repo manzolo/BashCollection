@@ -21,7 +21,7 @@ clone_virtual_to_physical() {
     log "Format: $format"
     log "Size: $((virt_size / 1073741824)) GB"
     
-    local dest_device=$(select_physical_device)
+    local dest_device=$(select_physical_device "DESTINATION")
     if [ -z "$dest_device" ] || [ ! -b "$dest_device" ]; then
         return 1
     fi

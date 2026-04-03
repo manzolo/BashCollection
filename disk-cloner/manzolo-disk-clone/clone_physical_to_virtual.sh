@@ -1,7 +1,7 @@
 clone_physical_to_virtual() {
     log "=== Physical to Virtual Cloning ==="
     
-    local source_device=$(select_physical_device)
+    local source_device=$(select_physical_device "SOURCE")
     if [ -z "$source_device" ] || [ ! -b "$source_device" ]; then
         return 1
     fi

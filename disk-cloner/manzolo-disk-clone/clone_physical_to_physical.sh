@@ -1,20 +1,20 @@
 clone_physical_to_physical_simple() {
     log "=== Physical to Physical Cloning (Simple Mode) ==="
     
-    local source_device=$(select_physical_device)
+    local source_device=$(select_physical_device "SOURCE")
     if [ -z "$source_device" ] || [ ! -b "$source_device" ]; then
         return 1
     fi
-    
+
     local source_size=$(blockdev --getsize64 "$source_device" 2>/dev/null)
     log "Source: $source_device"
     log "Source Size: $((source_size / 1073741824)) GB"
-    
-    local target_device=$(select_physical_device)
+
+    local target_device=$(select_physical_device "DESTINATION" "$source_device")
     if [ -z "$target_device" ] || [ ! -b "$target_device" ]; then
         return 1
     fi
-    
+
     if [ "$source_device" = "$target_device" ]; then
         dialog --title "Error" --msgbox "Source and target devices cannot be the same!" 8 60
         return 1
@@ -127,23 +127,23 @@ clone_physical_to_physical_simple() {
 clone_physical_to_physical_with_uuid() {
     log "=== Physical to Physical Cloning (UUID Preservation Mode) ==="
     
-    local source_device=$(select_physical_device)
+    local source_device=$(select_physical_device "SOURCE")
     if [ -z "$source_device" ] || [ ! -b "$source_device" ]; then
         return 1
     fi
-    
+
     local source_size=$(blockdev --getsize64 "$source_device" 2>/dev/null)
     log "Source: $source_device"
     log "Source Size: $((source_size / 1073741824)) GB"
-    
+
     # Show source disk details
     echo
     log "Source disk partition layout:"
     lsblk "$source_device" | tee -a "$LOGFILE"
-    
+
     local target_device
     while true; do
-        target_device=$(select_physical_device)
+        target_device=$(select_physical_device "DESTINATION" "$source_device")
         if [ -z "$target_device" ] || [ ! -b "$target_device" ]; then
             return 1
         fi
