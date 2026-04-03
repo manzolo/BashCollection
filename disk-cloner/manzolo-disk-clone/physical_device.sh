@@ -94,7 +94,7 @@ select_physical_device() {
     # dialog renders menu items as "  N  [item]" (2 + 1-digit tag + 2 spaces = 5 chars).
     # The prompt text area has 1 char of left margin, so net offset = 5 - 1 = 4 spaces.
     local header
-    header=$(printf "%4s%-12s │ %-7s │ %-30s │ %-9s │ %-18s │ %s" \
+    header=$(printf "%3s%-12s │ %-7s │ %-30s │ %-9s │ %-18s │ %s" \
         "" "DEVICE" "SIZE" "MODEL" "TYPE" "SERIAL" "PARTITIONS")
 
     local selected_idx
