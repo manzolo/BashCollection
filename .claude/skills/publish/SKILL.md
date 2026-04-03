@@ -38,6 +38,9 @@ Run:
 
 Wait for it to complete and report the outcome (success or error).
 
-### 3. Report
+### 4. Push
+If commit was created, push it to the remote repository
+
+### 5. Report
 
 Summarize what was done: which files were committed, the version published, and whether the remote deploy succeeded.
