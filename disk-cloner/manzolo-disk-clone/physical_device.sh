@@ -56,10 +56,13 @@ select_physical_device() {
             fi
 
             local model_short
-            model_short=$(echo "$model" | cut -c1-32)
+            model_short=$(printf "%.30s" "$model")
+            local serial_short
+            serial_short=$(printf "%.18s" "$serial")
+
             local item
-            item=$(printf "%-7s  %-32s  %-9s  %-20s  %s" \
-                "$size" "$model_short" "${disk_type}/${tran_upper}" "S/N:${serial}" "$status_info")
+            item=$(printf "%-7s │ %-30s │ %-9s │ %-18s │ %s" \
+                "$size" "$model_short" "${disk_type}/${tran_upper}" "$serial_short" "$status_info")
             devices+=("/dev/$name" "$item")
         fi
     done < <(lsblk -dn -o NAME,SIZE,MODEL | grep -E '^sd|^nvme|^vd')
@@ -80,8 +83,17 @@ select_physical_device() {
         fi
     fi
 
+    # Compute tag column width to align header with menu items
+    local max_tag=0
+    local i
+    for (( i=0; i<${#devices[@]}; i+=2 )); do
+        [ ${#devices[$i]} -gt $max_tag ] && max_tag=${#devices[$i]}
+    done
+    local pad
+    pad=$(printf "%$((max_tag + 3))s" "")
     local header
-    header=$(printf "%-7s  %-32s  %-9s  %-20s  %s" "SIZE" "MODEL" "TYPE" "SERIAL" "PARTITIONS")
+    header=$(printf "%s%-7s │ %-30s │ %-9s │ %-18s │ %s" \
+        "$pad" "SIZE" "MODEL" "TYPE" "SERIAL" "PARTITIONS")
 
     local selected
     selected=$(dialog --clear --title "$title" \

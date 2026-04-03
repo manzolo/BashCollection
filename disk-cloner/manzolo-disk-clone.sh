@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: manzolo-disk-clone
-# PKG_VERSION: 2.5.1
+# PKG_VERSION: 2.5.2
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
