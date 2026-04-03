@@ -45,7 +45,7 @@ clone_physical_to_physical_simple() {
     fi
     
     if ! dialog --title "⚠️ CRITICAL WARNING ⚠️" \
-        --yesno "$warning_msg\n\nType 'yes' to confirm:" 16 70; then
+        --yesno "$warning_msg\n\nAre you sure you want to continue?" 16 70; then
         return 1
     fi
     
