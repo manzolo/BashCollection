@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: dmarc-report
-# PKG_VERSION: 1.0.2
+# PKG_VERSION: 1.0.3
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -11,8 +11,8 @@
 # PKG_LONG_DESCRIPTION: Parses DMARC aggregate report files and displays
 #  a summary table with SPF/DKIM results per source IP.
 #  .
-#  Supported formats: .xml, .gz, .zip, .tar.gz, .tgz
-#  Accepts individual files, archives, or entire directories.
+#  Supported formats: .xml, .gz, .zip, .tar.gz, .tgz, .eml
+#  Accepts individual files, archives, .eml emails, or entire directories.
 # PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
 #===============================================================================
@@ -22,10 +22,11 @@
 # Usage: dmarc-report file1.xml [file2.xml] ...
 #        dmarc-report report.xml.gz
 #        dmarc-report report.zip
+#        dmarc-report report.eml
 #        dmarc-report /path/to/folder
-#        dmarc-report *.xml *.gz *.zip
+#        dmarc-report *.xml *.gz *.zip *.eml
 #
-# Supported formats: .xml, .gz, .zip, .tar.gz, .tgz
+# Supported formats: .xml, .gz, .zip, .tar.gz, .tgz, .eml
 #===============================================================================
 
 set -euo pipefail
@@ -72,12 +73,14 @@ Arguments:
   file.xml.gz / file.gz Gzip-compressed file
   file.zip              ZIP archive
   file.tar.gz / file.tgz  tar+gzip archive
-  /path/folder          Folder (recursively searches for XML and archives)
+  file.eml              Email file (extracts XML attachments from MIME)
+  /path/folder          Folder (recursively searches for XML, archives, and .eml)
 
 Examples:
   $0 report_google.xml
   $0 --detail /path/to/dmarc/
   $0 report.zip *.xml.gz reports_folder/
+  $0 /path/to/dmarc/emails/*.eml
 
 EOF
     exit 1
@@ -166,6 +169,51 @@ extract_file() {
     find "$extract_dir" -type f -iname '*.xml' 2>/dev/null
 }
 
+# Extract XML attachments from a .eml (MIME email) file
+extract_eml() {
+    local eml_file="$1"
+    ensure_tmpdir
+
+    if ! command -v python3 &>/dev/null; then
+        msg_warn "'python3' not found — .eml files will be skipped (install: sudo apt install python3)"
+        return
+    fi
+
+    local extract_dir
+    extract_dir=$(mktemp -d "$TMPDIR_WORK/eml.XXXXXX")
+
+    python3 - "$eml_file" "$extract_dir" <<'PYEOF'
+import sys, email, os
+
+eml_path, out_dir = sys.argv[1], sys.argv[2]
+with open(eml_path, 'rb') as f:
+    msg = email.message_from_bytes(f.read())
+
+for part in msg.walk():
+    fname = part.get_filename()
+    if fname and part.get_content_maintype() != 'multipart':
+        payload = part.get_payload(decode=True)
+        if payload:
+            with open(os.path.join(out_dir, fname), 'wb') as out:
+                out.write(payload)
+PYEOF
+
+    # Process each extracted attachment through the existing pipeline
+    for f in "$extract_dir"/*; do
+        [[ -f "$f" ]] || continue
+        case "${f,,}" in
+            *.xml)
+                echo "$f"
+                ;;
+            *.gz|*.zip|*.tar.gz|*.tgz)
+                while IFS= read -r extracted; do
+                    [[ -n "$extracted" ]] && echo "$extracted"
+                done < <(extract_file "$f")
+                ;;
+        esac
+    done
+}
+
 # --- Collect XML files to process ---
 
 collect_xml_files() {
@@ -184,8 +232,13 @@ collect_xml_files() {
                             [[ -n "$extracted" ]] && xml_files+=("$extracted")
                         done < <(extract_file "$f")
                         ;;
+                    *.eml)
+                        while IFS= read -r extracted; do
+                            [[ -n "$extracted" ]] && xml_files+=("$extracted")
+                        done < <(extract_eml "$f")
+                        ;;
                 esac
-            done < <(find "$arg" -type f \( -iname '*.xml' -o -iname '*.gz' -o -iname '*.zip' -o -iname '*.tar.gz' -o -iname '*.tgz' \) -print0 2>/dev/null)
+            done < <(find "$arg" -type f \( -iname '*.xml' -o -iname '*.gz' -o -iname '*.zip' -o -iname '*.tar.gz' -o -iname '*.tgz' -o -iname '*.eml' \) -print0 2>/dev/null)
 
         elif [[ -f "$arg" ]]; then
             case "${arg,,}" in
@@ -196,6 +249,11 @@ collect_xml_files() {
                     while IFS= read -r extracted; do
                         [[ -n "$extracted" ]] && xml_files+=("$extracted")
                     done < <(extract_file "$arg")
+                    ;;
+                *.eml)
+                    while IFS= read -r extracted; do
+                        [[ -n "$extracted" ]] && xml_files+=("$extracted")
+                    done < <(extract_eml "$arg")
                     ;;
                 *)
                     msg_warn "Unrecognized file type: $arg"
