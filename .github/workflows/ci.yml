@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Run ShellCheck on ollama-tools
+        run: |
+          shellcheck utils/ollama-tools/*.sh
+
+  pkg-headers:
+    name: PKG headers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required PKG_* fields in mapped scripts
+        run: |
+          error=0
+          while IFS= read -r line; do
+            [[ -z "$line" || "$line" == \#* ]] && continue
+            script_path="${line%%#*}"
+            [[ ! -f "$script_path" ]] && continue
+            for field in PKG_NAME PKG_VERSION PKG_DESCRIPTION; do
+              if ! grep -q "^# ${field}:" "$script_path"; then
+                echo "MISSING $field in $script_path"
+                error=1
+              fi
+            done
+          done < .manzolomap
+          exit $error
+
+  smoke-tests:
+    name: Smoke tests (ollama-tools)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get install -y curl jq
+
+      - name: ollama-claude --version
+        run: bash utils/ollama-tools/ollama-claude.sh --version
+
+      - name: ollama-claude --help
+        run: bash utils/ollama-tools/ollama-claude.sh --help
+
+      - name: ollama-codex --version
+        run: bash utils/ollama-tools/ollama-codex.sh --version
+
+      - name: ollama-codex --help
+        run: bash utils/ollama-tools/ollama-codex.sh --help
+
+      - name: openrouter-claude --version
+        run: bash utils/ollama-tools/openrouter-claude.sh --version
+
+      - name: openrouter-claude --help
+        run: bash utils/ollama-tools/openrouter-claude.sh --help
