@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: ollama-codex
-# PKG_VERSION: 1.0.0
+# PKG_VERSION: 1.0.1
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -25,7 +25,7 @@ set -euo pipefail
 # ollama-codex — wrapper for Codex CLI that uses an Ollama server backend
 # ---------------------------------------------------------------------------
 
-readonly VERSION="1.0.0"
+readonly VERSION="1.0.1"
 
 # --- Config file -----------------------------------------------------------
 CONFIG_DIR="$HOME/.config/manzolo/ollama-codex"
@@ -242,19 +242,20 @@ ensure_codex_installed() {
                 error "npm is required to install Codex CLI. Install Node.js first."
                 exit 1
             fi
-            info "Installing Codex CLI..."
-            npm install -g @openai/codex
+            info "Installing Codex CLI into ~/.local (no sudo required)..."
+            npm install -g --prefix "$HOME/.local" @openai/codex
+            export PATH="$HOME/.local/bin:$PATH"
             if ! command -v codex &>/dev/null; then
-                error "Installation failed. Try: npm install -g @openai/codex"
+                error "Installation failed. Try: npm install -g --prefix ~/.local @openai/codex"
                 exit 1
             fi
-            success "Codex CLI installed."
+            success "Codex CLI installed. Add ~/.local/bin to your PATH if not already set."
         else
-            error "Codex CLI is required. Install it with: npm install -g @openai/codex"
+            error "Codex CLI is required. Install it with: npm install -g --prefix ~/.local @openai/codex"
             exit 1
         fi
     else
-        error "Codex CLI is required. Install it with: npm install -g @openai/codex"
+        error "Codex CLI is required. Install it with: npm install -g --prefix ~/.local @openai/codex"
         exit 1
     fi
 }
