@@ -11,3 +11,6 @@ utils/email/email-domain-check.sh#email-domain-check
 utils/firefox/firefox-session-recover.sh#firefox-session-recover
 utils/network/network-viewer.sh#network-viewer
 utils/share-manager/share-manager.sh#share-manager
+utils/ollama-tools/ollama-claude.sh#ollama-claude
+utils/ollama-tools/ollama-codex.sh#ollama-codex
+utils/ollama-tools/openrouter-claude.sh#openrouter-claude
