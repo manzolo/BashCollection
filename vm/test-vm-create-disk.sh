@@ -1,4 +1,15 @@
 #!/bin/bash
+# PKG_NAME: vm-create-disk-test
+# PKG_VERSION: 1.0.0
+# PKG_SECTION: utils
+# PKG_PRIORITY: optional
+# PKG_ARCHITECTURE: all
+# PKG_DEPENDS: bash (>= 4.0), qemu-utils, sudo
+# PKG_MAINTAINER: Manzolo <manzolo@libero.it>
+# PKG_DESCRIPTION: Test suite for vm-create-disk
+# PKG_LONG_DESCRIPTION: Generates multiple disk configurations, runs
+#  vm-create-disk, and validates image creation and inspection workflows.
+# PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
 # Test script for vm_create_disk
 # Generates a matrix of disk configurations, creates disks, verifies with --info, and logs file size

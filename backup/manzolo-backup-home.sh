@@ -1,4 +1,15 @@
 #!/bin/bash
+# PKG_NAME: manzolo-backup-home
+# PKG_VERSION: 2.1.0
+# PKG_SECTION: admin
+# PKG_PRIORITY: optional
+# PKG_ARCHITECTURE: all
+# PKG_DEPENDS: bash (>= 4.0), rsync, coreutils, findutils
+# PKG_MAINTAINER: Manzolo <manzolo@libero.it>
+# PKG_DESCRIPTION: Multi-directory rsync backup utility
+# PKG_LONG_DESCRIPTION: Creates incremental backups for multiple directories
+#  with verification, retention, compression options, and detailed logs.
+# PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 🚀 ENHANCED MULTI-DIRECTORY BACKUP SCRIPT WITH RSYNC

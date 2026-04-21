@@ -3,8 +3,22 @@ name: CI
 on:
   push:
     branches: [main]
+  pull_request:
 
 jobs:
+  bash-syntax:
+    name: Bash syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate bash syntax on all scripts
+        run: |
+          while IFS= read -r -d '' file; do
+            echo "Checking $file"
+            bash -n "$file"
+          done < <(find . -type f -name '*.sh' -print0 | sort -z)
+
   shellcheck:
     name: ShellCheck
     runs-on: ubuntu-latest
@@ -24,13 +38,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check required PKG_* fields in mapped scripts
+      - name: Validate mapped scripts and required PKG_* fields
         run: |
           error=0
           while IFS= read -r line; do
             [[ -z "$line" || "$line" == \#* ]] && continue
             script_path="${line%%#*}"
-            [[ ! -f "$script_path" ]] && continue
+            command_name="${line#*#}"
+            if [[ ! -f "$script_path" ]]; then
+              echo "MISSING mapped script: $script_path ($command_name)"
+              error=1
+              continue
+            fi
             for field in PKG_NAME PKG_VERSION PKG_DESCRIPTION; do
               if ! grep -q "^# ${field}:" "$script_path"; then
                 echo "MISSING $field in $script_path"
@@ -41,7 +60,7 @@ jobs:
           exit $error
 
   smoke-tests:
-    name: Smoke tests (ollama-tools)
+    name: Smoke tests (published commands)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -49,20 +68,17 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get install -y curl jq
 
-      - name: ollama-claude --version
-        run: bash utils/ollama-tools/ollama-claude.sh --version
+      - name: Run smoke tests
+        run: bash .github/scripts/run-smoke-tests.sh
 
-      - name: ollama-claude --help
-        run: bash utils/ollama-tools/ollama-claude.sh --help
+  ollama-backend-tests:
+    name: Ollama tools backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: ollama-codex --version
-        run: bash utils/ollama-tools/ollama-codex.sh --version
+      - name: Install dependencies
+        run: sudo apt-get install -y curl jq
 
-      - name: ollama-codex --help
-        run: bash utils/ollama-tools/ollama-codex.sh --help
-
-      - name: openrouter-claude --version
-        run: bash utils/ollama-tools/openrouter-claude.sh --version
-
-      - name: openrouter-claude --help
-        run: bash utils/ollama-tools/openrouter-claude.sh --help
+      - name: Run Ollama backend tests
+        run: bash .github/scripts/run-ollama-backend-tests.sh
