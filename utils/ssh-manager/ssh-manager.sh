@@ -24,7 +24,7 @@
 # PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
 # Enhanced SSH Manager
-# Version: 2.4.3 - Log file location fix
+# Version: 2.5.0 - Minor fixes and hardening improvements
 
 # Get script directory for module loading
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,7 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="$HOME/.config/manzolo-ssh-manager"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 LOG_FILE="$CONFIG_DIR/ssh-manager.log"
-VERSION="2.4.3"
+VERSION="2.5.0"
 
 # Source all modules
 for module in "$SCRIPT_DIR/ssh-manager/"*.sh; do
