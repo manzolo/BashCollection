@@ -4,7 +4,7 @@
 
 # Add new server
 add_server() {
-    local name host user port description ssh_options
+    local name host user port description ssh_options ssh_alias jump_host favorite="false"
 
     name=$(dialog --inputbox "Server name:" 10 60 2>&1 >/dev/tty) || return
     [[ -z "$name" ]] && return
@@ -24,6 +24,8 @@ add_server() {
     [[ -z "$port" ]] && port="22"
 
     description=$(dialog --inputbox "Description (optional):" 10 60 2>&1 >/dev/tty)
+    ssh_alias=$(dialog --inputbox "SSH alias from ~/.ssh/config (optional):" 10 60 2>&1 >/dev/tty)
+    jump_host=$(dialog --inputbox "Jump host / ProxyJump (optional):" 10 60 2>&1 >/dev/tty)
 
     ssh_options=$(dialog --inputbox "Custom SSH options (optional, e.g., -o ProxyCommand='...'):" 10 60 2>&1 >/dev/tty)
 
@@ -39,6 +41,10 @@ add_server() {
     if ! parse_ssh_options "$ssh_options"; then
         dialog --title "Invalid SSH Options" --msgbox "Only simple SSH flags are supported here. Put complex quoting in ~/.ssh/config." 8 70
         return 1
+    fi
+
+    if dialog --title "Favorite" --yesno "Mark '$name' as favorite?" 8 45; then
+        favorite="true"
     fi
 
     backup_config
@@ -57,6 +63,17 @@ add_server() {
     if [[ -n "$ssh_options" && "$ssh_options" != "null" ]]; then
         SSH_OPTIONS="$ssh_options" \
             yq eval '(.servers[-1].ssh_options) = strenv(SSH_OPTIONS)' -i "$CONFIG_FILE"
+    fi
+    if [[ -n "$ssh_alias" && "$ssh_alias" != "null" ]]; then
+        SSH_ALIAS="$ssh_alias" \
+            yq eval '(.servers[-1].ssh_alias) = strenv(SSH_ALIAS)' -i "$CONFIG_FILE"
+    fi
+    if [[ -n "$jump_host" && "$jump_host" != "null" ]]; then
+        JUMP_HOST="$jump_host" \
+            yq eval '(.servers[-1].jump_host) = strenv(JUMP_HOST)' -i "$CONFIG_FILE"
+    fi
+    if [[ "$favorite" == "true" ]]; then
+        yq eval '(.servers[-1].favorite) = true' -i "$CONFIG_FILE"
     fi
 
     dialog --title "Success" --msgbox "Server '$name' added successfully!" 8 50
@@ -94,17 +111,22 @@ edit_server() {
         return 1
     fi
 
-    local name host user port description ssh_options
+    local name host user port description ssh_options ssh_alias jump_host favorite
     name=$(yq eval ".servers[$server_index].name" "$CONFIG_FILE")
     host=$(yq eval ".servers[$server_index].host" "$CONFIG_FILE")
     user=$(yq eval ".servers[$server_index].user" "$CONFIG_FILE")
     port=$(yq eval ".servers[$server_index].port // 22" "$CONFIG_FILE")
     description=$(yq eval ".servers[$server_index].description // \"\"" "$CONFIG_FILE")
     ssh_options=$(yq eval ".servers[$server_index].ssh_options // \"\"" "$CONFIG_FILE")
+    ssh_alias=$(yq eval ".servers[$server_index].ssh_alias // \"\"" "$CONFIG_FILE")
+    jump_host=$(yq eval ".servers[$server_index].jump_host // \"\"" "$CONFIG_FILE")
+    favorite=$(yq eval ".servers[$server_index].favorite // false" "$CONFIG_FILE")
     [[ "$description" == "null" ]] && description=""
     [[ "$ssh_options" == "null" ]] && ssh_options=""
+    [[ "$ssh_alias" == "null" ]] && ssh_alias=""
+    [[ "$jump_host" == "null" ]] && jump_host=""
 
-    local new_name new_host new_user new_port new_description new_ssh_options
+    local new_name new_host new_user new_port new_description new_ssh_options new_ssh_alias new_jump_host new_favorite="$favorite"
     new_name=$(dialog --inputbox "Server name:" 10 60 "$name" 2>&1 >/dev/tty) || return
 
     # Check for duplicate name only if changed
@@ -118,6 +140,8 @@ edit_server() {
     new_user=$(dialog --inputbox "Username:" 10 60 "$user" 2>&1 >/dev/tty) || return
     new_port=$(dialog --inputbox "SSH port:" 10 60 "$port" 2>&1 >/dev/tty) || return
     new_description=$(dialog --inputbox "Description:" 10 60 "$description" 2>&1 >/dev/tty)
+    new_ssh_alias=$(dialog --inputbox "SSH alias from ~/.ssh/config:" 10 60 "$ssh_alias" 2>&1 >/dev/tty)
+    new_jump_host=$(dialog --inputbox "Jump host / ProxyJump:" 10 60 "$jump_host" 2>&1 >/dev/tty)
     new_ssh_options=$(dialog --inputbox "Custom SSH options:" 10 60 "$ssh_options" 2>&1 >/dev/tty)
 
     if ! [[ "$new_port" =~ ^[0-9]+$ && "$new_port" -ge 1 && "$new_port" -le 65535 ]]; then
@@ -136,6 +160,12 @@ edit_server() {
         return 1
     fi
 
+    if dialog --title "Favorite" --yesno "Keep '$new_name' marked as favorite?" 8 50; then
+        new_favorite="true"
+    else
+        new_favorite="false"
+    fi
+
     backup_config
     NAME="$new_name" yq eval "(.servers[$server_index].name) = strenv(NAME)" -i "$CONFIG_FILE"
     HOST="$new_host" yq eval "(.servers[$server_index].host) = strenv(HOST)" -i "$CONFIG_FILE"
@@ -152,6 +182,24 @@ edit_server() {
         SSH_OPTIONS="$new_ssh_options" yq eval "(.servers[$server_index].ssh_options) = strenv(SSH_OPTIONS)" -i "$CONFIG_FILE"
     else
         yq eval "del(.servers[$server_index].ssh_options)" -i "$CONFIG_FILE"
+    fi
+
+    if [[ -n "$new_ssh_alias" ]]; then
+        SSH_ALIAS="$new_ssh_alias" yq eval "(.servers[$server_index].ssh_alias) = strenv(SSH_ALIAS)" -i "$CONFIG_FILE"
+    else
+        yq eval "del(.servers[$server_index].ssh_alias)" -i "$CONFIG_FILE"
+    fi
+
+    if [[ -n "$new_jump_host" ]]; then
+        JUMP_HOST="$new_jump_host" yq eval "(.servers[$server_index].jump_host) = strenv(JUMP_HOST)" -i "$CONFIG_FILE"
+    else
+        yq eval "del(.servers[$server_index].jump_host)" -i "$CONFIG_FILE"
+    fi
+
+    if [[ "$new_favorite" == "true" ]]; then
+        yq eval "(.servers[$server_index].favorite) = true" -i "$CONFIG_FILE"
+    else
+        yq eval "del(.servers[$server_index].favorite)" -i "$CONFIG_FILE"
     fi
 
     dialog --title "Success" --msgbox "Server edited successfully!" 8 50
@@ -220,22 +268,34 @@ show_server_info() {
     info_text+="Total configured servers: $server_count\n\n"
 
     for ((i=0; i<server_count; i++)); do
-        local name host user port description ssh_options
+        local name host user port description ssh_options ssh_alias jump_host favorite last_used use_count
         name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
         host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
         user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
         port=$(yq eval ".servers[$i].port // 22" "$CONFIG_FILE")
         description=$(yq eval ".servers[$i].description // \"\"" "$CONFIG_FILE")
         ssh_options=$(yq eval ".servers[$i].ssh_options // \"\"" "$CONFIG_FILE")
+        ssh_alias=$(yq eval ".servers[$i].ssh_alias // \"\"" "$CONFIG_FILE")
+        jump_host=$(yq eval ".servers[$i].jump_host // \"\"" "$CONFIG_FILE")
+        favorite=$(yq eval ".servers[$i].favorite // false" "$CONFIG_FILE")
+        last_used=$(yq eval ".servers[$i].last_used // 0" "$CONFIG_FILE")
+        use_count=$(yq eval ".servers[$i].use_count // 0" "$CONFIG_FILE")
         [[ "$description" == "null" ]] && description=""
         [[ "$ssh_options" == "null" ]] && ssh_options=""
+        [[ "$ssh_alias" == "null" ]] && ssh_alias=""
+        [[ "$jump_host" == "null" ]] && jump_host=""
 
         info_text+="[$(($i+1))] $name\n"
         info_text+="    Host: $host\n"
         info_text+="    User: $user\n"
         info_text+="    Port: $port\n"
+        [[ "$favorite" == "true" ]] && info_text+="    Favorite: yes\n"
+        [[ -n "$ssh_alias" ]] && info_text+="    SSH Alias: $ssh_alias\n"
+        [[ -n "$jump_host" ]] && info_text+="    Jump Host: $jump_host\n"
         [[ -n "$description" ]] && info_text+="    Description: $description\n"
         [[ -n "$ssh_options" ]] && info_text+="    SSH Options: $ssh_options\n"
+        info_text+="    Last Used: $(format_last_used "$last_used")\n"
+        info_text+="    Use Count: ${use_count:-0}\n"
         info_text+="\n"
     done
 

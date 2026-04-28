@@ -8,7 +8,7 @@ main_menu() {
         local choice
         choice=$(dialog --clear --title "🔧 SSH Manager v$VERSION" --menu \
             "Select an option:\n(ESC to exit)" \
-            22 60 12 \
+            22 64 13 \
             "1" "🚀 Connect via SSH" \
             "2" "🔑 Copy SSH key" \
             "3" "📁 Connect via SFTP" \
@@ -18,6 +18,7 @@ main_menu() {
             "7" "✏️  Edit server" \
             "8" "🗑️  Remove server" \
             "9" "ℹ️  Server information" \
+            "A" "🧰 Profile Toolkit" \
             "P" "🔧 Install prerequisites" \
             "0" "🚪 Exit" 2>&1 >/dev/tty)
 
@@ -39,6 +40,7 @@ main_menu() {
             "7" ) edit_server ;;
             "8" ) remove_server ;;
             "9" ) show_server_info ;;
+            "A" ) profile_toolkit_menu ;;
             "P" ) install_prerequisites ;;
             "0" ) clear; exit 0 ;;
         esac

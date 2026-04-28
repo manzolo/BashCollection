@@ -4,8 +4,7 @@
 
 # Configuration initialization
 init_config() {
-    mkdir -p "$CONFIG_DIR"
-    chmod 700 "$CONFIG_DIR" 2>/dev/null
+    ensure_manager_runtime_dirs
 
     if [[ ! -f "$CONFIG_FILE" ]]; then
         cat > "$CONFIG_FILE" << EOF

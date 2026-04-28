@@ -1,4 +1,4 @@
-# SSH Manager v2.4
+# SSH Manager v2.6
 
 Enhanced SSH connection manager with profiles, automation, and advanced port forwarding.
 
@@ -9,6 +9,9 @@ Enhanced SSH connection manager with profiles, automation, and advanced port for
 - **Port Forwarding**: Local (-L), Remote (-R), and Dynamic (-D) SSH tunnels
 - **Auto-Reconnect**: Persistent tunnels with autossh support
 - **SSH Key Management**: Copy SSH keys to servers
+- **Profile Toolkit**: Health checks, favorites/recents, import/export profiles
+- **SSH Config Integration**: Import aliases from `~/.ssh/config` and reuse them directly
+- **Jump Host Support**: Per-profile `ProxyJump` for bastion / hop servers
 - **YAML Configuration**: Human-readable configuration format
 - **Modular Architecture**: Easy to extend and maintain
 - **Connection Logging**: Track all SSH activities
@@ -28,6 +31,7 @@ sudo ./utils/ssh-manager/ssh-manager.sh
 1. Run `ssh-manager`
 2. Press `6` to add a server
 3. Press `1` to connect via SSH
+4. Press `A` for profile health, import/export and favorites
 
 ## Configuration
 
@@ -42,6 +46,9 @@ servers:
     user: "deploy"
     port: 22
     description: "Main production server"
+    ssh_alias: "prod"
+    jump_host: "bastion.company.com"
+    favorite: true
     ssh_options: "-o StrictHostKeyChecking=no"
     portforwards:
       - name: "MySQL Access"
@@ -84,6 +91,15 @@ servers:
 ```
 
 ## Port Forwarding
+
+## Profile Toolkit
+
+Menu `A` adds:
+
+- Health checks for one server or all servers
+- Import from `~/.ssh/config`
+- Export current profiles to an OpenSSH config snippet
+- Favorites and recent usage tracking
 
 ### Types of Port Forwards
 
@@ -155,6 +171,7 @@ utils/ssh-manager/
     ├── core.sh             # Core functions, logging, colors (86 lines)
     ├── config.sh           # Configuration management (112 lines)
     ├── connections.sh      # SSH/SFTP/SSHFS handlers (249 lines)
+    ├── profiles.sh         # Health/import-export/favorites toolkit
     ├── servers.sh          # Server CRUD operations (234 lines)
     ├── portforward.sh      # Port forwarding/tunnels (687 lines)
     ├── ui.sh               # User interface/menus (37 lines)

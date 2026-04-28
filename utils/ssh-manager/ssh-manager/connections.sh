@@ -13,23 +13,27 @@ handle_ssh_action() {
 
     while true; do
         local menu_items=()
-        local server_count
-        server_count=$(yq eval '.servers | length' "$CONFIG_FILE")
+        local sorted_indices
+        sorted_indices=$(get_sorted_server_indices)
 
-        for ((i=0; i<server_count; i++)); do
-            local name host user port description
+        while IFS= read -r i; do
+            [[ -z "$i" ]] && continue
+            local name host user port description favorite last_used display_text recent_label
             name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
             host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
             user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
             port=$(yq eval ".servers[$i].port // 22" "$CONFIG_FILE")
             description=$(yq eval ".servers[$i].description // \"\"" "$CONFIG_FILE")
+            favorite=$(yq eval ".servers[$i].favorite // false" "$CONFIG_FILE")
+            last_used=$(yq eval ".servers[$i].last_used // 0" "$CONFIG_FILE")
 
-            local display_text="$name ($user@$host:$port)"
+            display_text="$name ($user@$host:$port)"
+            [[ "$favorite" == "true" ]] && display_text="★ $display_text"
+            recent_label=$(format_last_used "$last_used")
+            [[ "$recent_label" != "never" ]] && display_text="$display_text - recent: $recent_label"
             [[ -n "$description" && "$description" != "null" ]] && display_text="$display_text - $description"
-
-            # Usa il nome del server come identificatore invece dell'indice
             menu_items+=("$name" "$display_text")
-        done
+        done <<< "$sorted_indices"
 
         menu_items+=("T" "🔍 Test connectivity")
         menu_items+=("Q" "← Back to main menu")
@@ -71,14 +75,7 @@ execute_ssh_action() {
     local status
     local ssh_cmd=()
 
-    local name host user port ssh_options
-    name=$(yq eval ".servers[$index].name" "$CONFIG_FILE")
-    host=$(yq eval ".servers[$index].host" "$CONFIG_FILE")
-    user=$(yq eval ".servers[$index].user" "$CONFIG_FILE")
-    port=$(yq eval ".servers[$index].port // 22" "$CONFIG_FILE")
-    ssh_options=$(yq eval ".servers[$index].ssh_options // \"\"" "$CONFIG_FILE")
-
-    if ! parse_ssh_options "$ssh_options"; then
+    if ! resolve_server_connection "$index"; then
         pause_for_enter
         return 1
     fi
@@ -87,11 +84,11 @@ execute_ssh_action() {
 
     case "$action" in
         "ssh")
-            print_message "$BLUE" "🚀 Connecting to: $user@$host:$port ($name)..."
-            log_message "INFO" "SSH connection to $user@$host:$port"
-            ssh_cmd=(ssh -p "$port")
-            [[ ${#PARSED_SSH_OPTIONS[@]} -gt 0 ]] && ssh_cmd+=("${PARSED_SSH_OPTIONS[@]}")
-            ssh_cmd+=(-t "$user@$host")
+            print_message "$BLUE" "🚀 Connecting to: $RESOLVED_DISPLAY_TARGET ($RESOLVED_SERVER_NAME)..."
+            log_message "INFO" "SSH connection to $RESOLVED_DISPLAY_TARGET"
+            ssh_cmd=(ssh)
+            append_resolved_connection_options ssh_cmd
+            ssh_cmd+=(-t "$RESOLVED_SSH_TARGET")
             "${ssh_cmd[@]}" 2> "$CONFIG_DIR/ssh_error.log"
             status=$?
             ;;
@@ -100,20 +97,28 @@ execute_ssh_action() {
                 dialog --title "Error" --msgbox "No SSH public key found" 8 50
                 return 1
             fi
-            print_message "$BLUE" "🔑 Copying SSH key to: $user@$host:$port ($name)..."
-            log_message "INFO" "Copying SSH key to $user@$host:$port"
-            ssh_cmd=(ssh-copy-id -p "$port")
-            [[ ${#PARSED_SSH_OPTIONS[@]} -gt 0 ]] && ssh_cmd+=("${PARSED_SSH_OPTIONS[@]}")
-            ssh_cmd+=("$user@$host")
+            print_message "$BLUE" "🔑 Copying SSH key to: $RESOLVED_DISPLAY_TARGET ($RESOLVED_SERVER_NAME)..."
+            log_message "INFO" "Copying SSH key to $RESOLVED_DISPLAY_TARGET"
+            ssh_cmd=(ssh-copy-id)
+            append_resolved_connection_options ssh_cmd
+            ssh_cmd+=("$RESOLVED_SSH_TARGET")
             "${ssh_cmd[@]}" 2> "$CONFIG_DIR/ssh_error.log"
             status=$?
             ;;
         "sftp")
-            print_message "$BLUE" "📁 Starting SFTP with: $user@$host:$port ($name)..."
-            log_message "INFO" "SFTP connection to $user@$host:$port"
-            ssh_cmd=(sftp -P "$port")
-            [[ ${#PARSED_SSH_OPTIONS[@]} -gt 0 ]] && ssh_cmd+=("${PARSED_SSH_OPTIONS[@]}")
-            ssh_cmd+=("$user@$host")
+            print_message "$BLUE" "📁 Starting SFTP with: $RESOLVED_DISPLAY_TARGET ($RESOLVED_SERVER_NAME)..."
+            log_message "INFO" "SFTP connection to $RESOLVED_DISPLAY_TARGET"
+            ssh_cmd=(sftp)
+            if [[ "$RESOLVED_HAS_ALIAS" -eq 0 ]]; then
+                ssh_cmd+=(-P "$RESOLVED_PORT")
+            fi
+            if [[ -n "$RESOLVED_PROXY_JUMP" ]]; then
+                ssh_cmd+=(-o "ProxyJump=$RESOLVED_PROXY_JUMP")
+            fi
+            if [[ ${#PARSED_SSH_OPTIONS[@]} -gt 0 ]]; then
+                ssh_cmd+=("${PARSED_SSH_OPTIONS[@]}")
+            fi
+            ssh_cmd+=("$RESOLVED_SSH_TARGET")
             "${ssh_cmd[@]}" 2> "$CONFIG_DIR/ssh_error.log"
             status=$?
             ;;
@@ -124,7 +129,7 @@ execute_ssh_action() {
                 return 1
             fi
 
-            execute_sshfs_mc "$name" "$host" "$user" "$port" "$ssh_options"
+            execute_sshfs_mc "$index"
             status=$?
             ;;
     esac
@@ -135,7 +140,7 @@ execute_ssh_action() {
         rm -f "$CONFIG_DIR/ssh_error.log"
     elif [[ $status -ne 0 ]]; then
         print_message "$RED" "❌ Error during $action: $(cat "$CONFIG_DIR/ssh_error.log" 2>/dev/null || echo 'Unknown error')"
-        log_message "ERROR" "$action failed on $user@$host:$port - $(cat "$CONFIG_DIR/ssh_error.log" 2>/dev/null || echo 'Unknown error')"
+        log_message "ERROR" "$action failed on $RESOLVED_DISPLAY_TARGET - $(cat "$CONFIG_DIR/ssh_error.log" 2>/dev/null || echo 'Unknown error')"
         rm -f "$CONFIG_DIR/ssh_error.log"
     else
         case "$action" in
@@ -144,7 +149,8 @@ execute_ssh_action() {
             "sftp") print_message "$GREEN" "✅ SFTP session terminated" ;;
             "sshfs-mc") print_message "$GREEN" "✅ SSHFS+MC session completed" ;;
         esac
-        log_message "INFO" "Operation $action completed successfully on $user@$host:$port"
+        record_server_usage "$index" "$action"
+        log_message "INFO" "Operation $action completed successfully on $RESOLVED_DISPLAY_TARGET"
     fi
 
     if [[ "$action" != "sshfs-mc" ]]; then
@@ -154,33 +160,31 @@ execute_ssh_action() {
 
 # Execute SSHFS + MC
 execute_sshfs_mc() {
-    local name="$1"
-    local host="$2"
-    local user="$3"
-    local port="$4"
-    local ssh_options="$5"
+    local index="$1"
     local mount_point
     local sshfs_cmd=()
     local ssh_command_string
 
+    if ! resolve_server_connection "$index"; then
+        return 1
+    fi
+
     # Create mount point
-    mount_point="/tmp/sshfs-${name// /_}-$$"
+    mount_point="/tmp/sshfs-${RESOLVED_SERVER_NAME// /_}-$$"
     mkdir -p "$mount_point" || {
         print_message "$RED" "❌ Cannot create mount point: $mount_point"
         return 1
     }
 
-    print_message "$BLUE" "🔗 Mounting remote filesystem: $user@$host:$port ($name)..."
+    print_message "$BLUE" "🔗 Mounting remote filesystem: $RESOLVED_DISPLAY_TARGET ($RESOLVED_SERVER_NAME)..."
     print_message "$BLUE" "📂 Mount point: $mount_point"
 
-    if ! parse_ssh_options "$ssh_options"; then
-        rmdir "$mount_point" 2>/dev/null
-        return 1
+    sshfs_cmd=(sshfs)
+    if [[ "$RESOLVED_HAS_ALIAS" -eq 0 ]]; then
+        sshfs_cmd+=(-p "$RESOLVED_PORT")
     fi
-
-    sshfs_cmd=(sshfs -p "$port")
-    if [[ ${#PARSED_SSH_OPTIONS[@]} -gt 0 ]]; then
-        ssh_command_string=$(build_ssh_command_string "$port")
+    if [[ -n "$RESOLVED_PROXY_JUMP" || ${#PARSED_SSH_OPTIONS[@]} -gt 0 ]]; then
+        ssh_command_string=$(build_ssh_command_string "$RESOLVED_PORT" "$RESOLVED_SSH_TARGET")
         sshfs_cmd+=(-o "ssh_command=$ssh_command_string")
     fi
 
@@ -188,10 +192,10 @@ execute_sshfs_mc() {
     sshfs_cmd+=(-o "reconnect,ServerAliveInterval=15,ServerAliveCountMax=3")
 
     # Mount the remote filesystem
-    sshfs_cmd+=("$user@$host:/" "$mount_point")
+    sshfs_cmd+=("${RESOLVED_SSH_TARGET}:/" "$mount_point")
     if "${sshfs_cmd[@]}" 2> "$CONFIG_DIR/sshfs_error.log"; then
         print_message "$GREEN" "✅ Remote filesystem mounted successfully"
-        log_message "INFO" "SSHFS mount successful: $user@$host:/ -> $mount_point"
+        log_message "INFO" "SSHFS mount successful: ${RESOLVED_SSH_TARGET}:/ -> $mount_point"
 
         print_message "$BLUE" "🗂️  Starting Midnight Commander..."
         print_message "$YELLOW" "💡 When you exit MC, the remote filesystem will be automatically unmounted"
@@ -239,7 +243,7 @@ execute_sshfs_mc() {
         fi
 
         print_message "$RED" "❌ Failed to mount remote filesystem: $(cat "$CONFIG_DIR/sshfs_error.log")"
-        log_message "ERROR" "SSHFS mount failed: $user@$host:/ -> $mount_point - $(cat "$CONFIG_DIR/sshfs_error.log")"
+        log_message "ERROR" "SSHFS mount failed: ${RESOLVED_SSH_TARGET}:/ -> $mount_point - $(cat "$CONFIG_DIR/sshfs_error.log")"
 
         # Clean up
         rmdir "$mount_point" 2>/dev/null
@@ -258,16 +262,20 @@ test_connectivity_menu() {
     fi
 
     local menu_items=()
-    local server_count
-    server_count=$(yq eval '.servers | length' "$CONFIG_FILE")
+    local sorted_indices
+    sorted_indices=$(get_sorted_server_indices)
 
-    for ((i=0; i<server_count; i++)); do
-        local name host user
+    while IFS= read -r i; do
+        [[ -z "$i" ]] && continue
+        local name host user favorite label
         name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
         host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
         user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
-        menu_items+=("$name" "$name ($user@$host)")
-    done
+        favorite=$(yq eval ".servers[$i].favorite // false" "$CONFIG_FILE")
+        label="$name ($user@$host)"
+        [[ "$favorite" == "true" ]] && label="★ $label"
+        menu_items+=("$name" "$label")
+    done <<< "$sorted_indices"
 
     local choice
     choice=$(dialog --clear --title "Connectivity Test" --menu \
@@ -283,13 +291,8 @@ test_connectivity_menu() {
         local server_index
         server_index=$(get_server_index_by_name "$choice")
         if [[ $? -eq 0 ]]; then
-            local user host port
-            user=$(yq eval ".servers[$server_index].user" "$CONFIG_FILE")
-            host=$(yq eval ".servers[$server_index].host" "$CONFIG_FILE")
-            port=$(yq eval ".servers[$server_index].port // 22" "$CONFIG_FILE")
-
             clear
-            test_ssh_connection "$user" "$host" "$port"
+            run_server_health_check "$server_index"
             pause_for_enter
             if [[ "$INTERRUPTED" -eq 1 ]]; then
                 clear_interrupt_state

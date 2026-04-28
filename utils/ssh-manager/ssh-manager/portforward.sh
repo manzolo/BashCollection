@@ -357,12 +357,8 @@ start_portforward() {
     local pf_idx="${choice#*:}"
 
     # Get server and port forward details
-    local server_name host user port ssh_options
+    local server_name
     server_name=$(yq eval ".servers[$server_idx].name" "$CONFIG_FILE")
-    host=$(yq eval ".servers[$server_idx].host" "$CONFIG_FILE")
-    user=$(yq eval ".servers[$server_idx].user" "$CONFIG_FILE")
-    port=$(yq eval ".servers[$server_idx].port // 22" "$CONFIG_FILE")
-    ssh_options=$(yq eval ".servers[$server_idx].ssh_options // \"\"" "$CONFIG_FILE")
 
     local pf_name pf_type pf_local_port pf_remote_host pf_remote_port autoreconnect
     pf_name=$(yq eval ".servers[$server_idx].portforwards[$pf_idx].name" "$CONFIG_FILE")
@@ -418,7 +414,7 @@ start_portforward() {
         fi
     fi
 
-    if ! parse_ssh_options "$ssh_options"; then
+    if ! resolve_server_connection "$server_idx"; then
         pause_for_enter
         return 1
     fi
@@ -435,9 +431,8 @@ start_portforward() {
         "D") ssh_cmd+=(-D "${pf_local_port}") ;;
     esac
 
-    ssh_cmd+=(-p "$port")
-    [[ ${#PARSED_SSH_OPTIONS[@]} -gt 0 ]] && ssh_cmd+=("${PARSED_SSH_OPTIONS[@]}")
-    ssh_cmd+=(-o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes "$user@$host")
+    append_resolved_connection_options ssh_cmd
+    ssh_cmd+=(-o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes "$RESOLVED_SSH_TARGET")
 
     if [[ "$autoreconnect" == "true" ]] && check_autossh; then
         print_message "$BLUE" "🔄 Using autossh for auto-reconnect..."
@@ -547,16 +542,28 @@ start_portforward() {
         # Common error hints
         if echo "$error_msg" | grep -qi "permission denied\|password"; then
             print_message "$YELLOW" "\n💡 Hint: Try copying your SSH key to the server:"
-            print_message "$YELLOW" "   ssh-copy-id -p $port $user@$host"
+            if [[ "$RESOLVED_HAS_ALIAS" -eq 1 ]]; then
+                print_message "$YELLOW" "   ssh-copy-id $RESOLVED_SSH_TARGET"
+            else
+                print_message "$YELLOW" "   ssh-copy-id -p $RESOLVED_PORT $RESOLVED_SSH_TARGET"
+            fi
         elif echo "$error_msg" | grep -qi "address already in use"; then
             print_message "$YELLOW" "\n💡 Hint: Port $pf_local_port is already in use"
         elif echo "$error_msg" | grep -qi "connection refused\|no route"; then
             print_message "$YELLOW" "\n💡 Hint: Check if SSH server is accessible"
-            print_message "$YELLOW" "   ssh -p $port $user@$host"
+            if [[ "$RESOLVED_HAS_ALIAS" -eq 1 ]]; then
+                print_message "$YELLOW" "   ssh $RESOLVED_SSH_TARGET"
+            else
+                print_message "$YELLOW" "   ssh -p $RESOLVED_PORT $RESOLVED_SSH_TARGET"
+            fi
         fi
 
         log_message "ERROR" "Port forward failed: $pf_name - $error_msg"
         rm -f "$error_log" "$pidfile"
+    fi
+
+    if [[ $command_status -eq 0 ]]; then
+        record_server_usage "$server_idx" "portforward:$pf_name"
     fi
 
     pause_for_enter
