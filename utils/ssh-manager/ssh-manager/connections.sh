@@ -39,6 +39,11 @@ handle_ssh_action() {
             "Select a server:\n(Use arrow keys and press Enter, or type to search)" \
             20 80 10 "${menu_items[@]}" 2>&1 >/dev/tty)
 
+        if should_return_to_main_menu; then
+            clear
+            return
+        fi
+
         case "$choice" in
             ""|"Q") clear; return ;;
             "T") test_connectivity_menu; continue ;;
@@ -48,6 +53,11 @@ handle_ssh_action() {
                 server_index=$(get_server_index_by_name "$choice")
                 if [[ $? -eq 0 ]]; then
                     execute_ssh_action "$action" "$server_index"
+                    if [[ "$INTERRUPTED" -eq 1 ]]; then
+                        clear_interrupt_state
+                        clear_main_menu_request
+                        continue
+                    fi
                 fi
                 ;;
         esac
@@ -58,6 +68,8 @@ handle_ssh_action() {
 execute_ssh_action() {
     local action="$1"
     local index="$2"
+    local status
+    local ssh_cmd=()
 
     local name host user port ssh_options
     name=$(yq eval ".servers[$index].name" "$CONFIG_FILE")
@@ -66,14 +78,22 @@ execute_ssh_action() {
     port=$(yq eval ".servers[$index].port // 22" "$CONFIG_FILE")
     ssh_options=$(yq eval ".servers[$index].ssh_options // \"\"" "$CONFIG_FILE")
 
+    if ! parse_ssh_options "$ssh_options"; then
+        pause_for_enter
+        return 1
+    fi
+
     clear
 
     case "$action" in
         "ssh")
             print_message "$BLUE" "🚀 Connecting to: $user@$host:$port ($name)..."
             log_message "INFO" "SSH connection to $user@$host:$port"
-            ssh $ssh_options -p "$port" -t "$user@$host" 2> "$CONFIG_DIR/ssh_error.log"
-            local status=$?
+            ssh_cmd=(ssh -p "$port")
+            [[ ${#PARSED_SSH_OPTIONS[@]} -gt 0 ]] && ssh_cmd+=("${PARSED_SSH_OPTIONS[@]}")
+            ssh_cmd+=(-t "$user@$host")
+            "${ssh_cmd[@]}" 2> "$CONFIG_DIR/ssh_error.log"
+            status=$?
             ;;
         "ssh-copy-id")
             if ! check_ssh_key; then
@@ -82,29 +102,38 @@ execute_ssh_action() {
             fi
             print_message "$BLUE" "🔑 Copying SSH key to: $user@$host:$port ($name)..."
             log_message "INFO" "Copying SSH key to $user@$host:$port"
-            ssh-copy-id $ssh_options -p "$port" "$user@$host" 2> "$CONFIG_DIR/ssh_error.log"
-            local status=$?
+            ssh_cmd=(ssh-copy-id -p "$port")
+            [[ ${#PARSED_SSH_OPTIONS[@]} -gt 0 ]] && ssh_cmd+=("${PARSED_SSH_OPTIONS[@]}")
+            ssh_cmd+=("$user@$host")
+            "${ssh_cmd[@]}" 2> "$CONFIG_DIR/ssh_error.log"
+            status=$?
             ;;
         "sftp")
             print_message "$BLUE" "📁 Starting SFTP with: $user@$host:$port ($name)..."
             log_message "INFO" "SFTP connection to $user@$host:$port"
-            sftp $ssh_options -P "$port" "$user@$host" 2> "$CONFIG_DIR/ssh_error.log"
-            local status=$?
+            ssh_cmd=(sftp -P "$port")
+            [[ ${#PARSED_SSH_OPTIONS[@]} -gt 0 ]] && ssh_cmd+=("${PARSED_SSH_OPTIONS[@]}")
+            ssh_cmd+=("$user@$host")
+            "${ssh_cmd[@]}" 2> "$CONFIG_DIR/ssh_error.log"
+            status=$?
             ;;
         "sshfs-mc")
             if ! check_sshfs_mc; then
                 print_message "$RED" "❌ Required packages not available"
-                print_message "$YELLOW" "\nPress ENTER to continue..."
-                read -r
+                pause_for_enter
                 return 1
             fi
 
             execute_sshfs_mc "$name" "$host" "$user" "$port" "$ssh_options"
-            local status=$?
+            status=$?
             ;;
     esac
 
-    if [[ $status -ne 0 ]]; then
+    if [[ $status -eq 130 || "$INTERRUPTED" -eq 1 ]]; then
+        print_message "$YELLOW" "⚠️  Operation cancelled, returning to main menu"
+        log_message "INFO" "Operation $action interrupted by user"
+        rm -f "$CONFIG_DIR/ssh_error.log"
+    elif [[ $status -ne 0 ]]; then
         print_message "$RED" "❌ Error during $action: $(cat "$CONFIG_DIR/ssh_error.log" 2>/dev/null || echo 'Unknown error')"
         log_message "ERROR" "$action failed on $user@$host:$port - $(cat "$CONFIG_DIR/ssh_error.log" 2>/dev/null || echo 'Unknown error')"
         rm -f "$CONFIG_DIR/ssh_error.log"
@@ -119,8 +148,7 @@ execute_ssh_action() {
     fi
 
     if [[ "$action" != "sshfs-mc" ]]; then
-        print_message "$YELLOW" "\nPress ENTER to continue..."
-        read -r
+        pause_for_enter
     fi
 }
 
@@ -131,9 +159,12 @@ execute_sshfs_mc() {
     local user="$3"
     local port="$4"
     local ssh_options="$5"
+    local mount_point
+    local sshfs_cmd=()
+    local ssh_command_string
 
     # Create mount point
-    local mount_point="/tmp/sshfs-${name// /_}-$$"
+    mount_point="/tmp/sshfs-${name// /_}-$$"
     mkdir -p "$mount_point" || {
         print_message "$RED" "❌ Cannot create mount point: $mount_point"
         return 1
@@ -142,17 +173,23 @@ execute_sshfs_mc() {
     print_message "$BLUE" "🔗 Mounting remote filesystem: $user@$host:$port ($name)..."
     print_message "$BLUE" "📂 Mount point: $mount_point"
 
-    # SSHFS mount options
-    local sshfs_options="-p $port"
-    if [[ -n "$ssh_options" && "$ssh_options" != "null" ]]; then
-        sshfs_options="$sshfs_options -o ssh_command='ssh $ssh_options'"
+    if ! parse_ssh_options "$ssh_options"; then
+        rmdir "$mount_point" 2>/dev/null
+        return 1
+    fi
+
+    sshfs_cmd=(sshfs -p "$port")
+    if [[ ${#PARSED_SSH_OPTIONS[@]} -gt 0 ]]; then
+        ssh_command_string=$(build_ssh_command_string "$port")
+        sshfs_cmd+=(-o "ssh_command=$ssh_command_string")
     fi
 
     # Add common SSHFS options for better experience
-    sshfs_options="$sshfs_options -o reconnect,ServerAliveInterval=15,ServerAliveCountMax=3"
+    sshfs_cmd+=(-o "reconnect,ServerAliveInterval=15,ServerAliveCountMax=3")
 
     # Mount the remote filesystem
-    if sshfs $sshfs_options "$user@$host:/" "$mount_point" 2> "$CONFIG_DIR/sshfs_error.log"; then
+    sshfs_cmd+=("$user@$host:/" "$mount_point")
+    if "${sshfs_cmd[@]}" 2> "$CONFIG_DIR/sshfs_error.log"; then
         print_message "$GREEN" "✅ Remote filesystem mounted successfully"
         log_message "INFO" "SSHFS mount successful: $user@$host:/ -> $mount_point"
 
@@ -194,6 +231,13 @@ execute_sshfs_mc() {
         fi
 
     else
+        if [[ "$INTERRUPTED" -eq 1 ]]; then
+            rmdir "$mount_point" 2>/dev/null
+            rm -f "$CONFIG_DIR/sshfs_error.log"
+            print_message "$YELLOW" "⚠️  SSHFS operation cancelled, returning to main menu"
+            return 130
+        fi
+
         print_message "$RED" "❌ Failed to mount remote filesystem: $(cat "$CONFIG_DIR/sshfs_error.log")"
         log_message "ERROR" "SSHFS mount failed: $user@$host:/ -> $mount_point - $(cat "$CONFIG_DIR/sshfs_error.log")"
 
@@ -201,8 +245,7 @@ execute_sshfs_mc() {
         rmdir "$mount_point" 2>/dev/null
         rm -f "$CONFIG_DIR/sshfs_error.log"
 
-        print_message "$YELLOW" "\nPress ENTER to continue..."
-        read -r
+        pause_for_enter
         return 1
     fi
 }
@@ -231,6 +274,11 @@ test_connectivity_menu() {
         "Select server to test:" \
         15 60 8 "${menu_items[@]}" 2>&1 >/dev/tty)
 
+    if should_return_to_main_menu; then
+        clear
+        return
+    fi
+
     if [[ -n "$choice" ]]; then
         local server_index
         server_index=$(get_server_index_by_name "$choice")
@@ -242,8 +290,12 @@ test_connectivity_menu() {
 
             clear
             test_ssh_connection "$user" "$host" "$port"
-            print_message "$YELLOW" "\nPress ENTER to continue..."
-            read -r
+            pause_for_enter
+            if [[ "$INTERRUPTED" -eq 1 ]]; then
+                clear_interrupt_state
+                clear_main_menu_request
+                return
+            fi
         fi
     fi
 }

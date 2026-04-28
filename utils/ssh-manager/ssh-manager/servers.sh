@@ -4,7 +4,7 @@
 
 # Add new server
 add_server() {
-    local name host user port description
+    local name host user port description ssh_options
 
     name=$(dialog --inputbox "Server name:" 10 60 2>&1 >/dev/tty) || return
     [[ -z "$name" ]] && return
@@ -36,24 +36,28 @@ add_server() {
         return 1
     fi
 
+    if ! parse_ssh_options "$ssh_options"; then
+        dialog --title "Invalid SSH Options" --msgbox "Only simple SSH flags are supported here. Put complex quoting in ~/.ssh/config." 8 70
+        return 1
+    fi
+
     backup_config
-    local new_server_yaml
-    new_server_yaml=$(cat << EOF
-  - name: "$name"
-    host: "$host"
-    user: "$user"
-    port: $port
-EOF
-)
+    NAME="$name" HOST="$host" USERNAME="$user" PORT="$port" \
+        yq eval '.servers += [{
+            "name": strenv(NAME),
+            "host": strenv(HOST),
+            "user": strenv(USERNAME),
+            "port": (strenv(PORT) | tonumber)
+        }]' -i "$CONFIG_FILE"
 
     if [[ -n "$description" && "$description" != "null" ]]; then
-        new_server_yaml+="\n    description: \"$description\""
+        DESCRIPTION="$description" \
+            yq eval '(.servers[-1].description) = strenv(DESCRIPTION)' -i "$CONFIG_FILE"
     fi
     if [[ -n "$ssh_options" && "$ssh_options" != "null" ]]; then
-        new_server_yaml+="\n    ssh_options: \"$ssh_options\""
+        SSH_OPTIONS="$ssh_options" \
+            yq eval '(.servers[-1].ssh_options) = strenv(SSH_OPTIONS)' -i "$CONFIG_FILE"
     fi
-
-    echo -e "$new_server_yaml" >> "$CONFIG_FILE"
 
     dialog --title "Success" --msgbox "Server '$name' added successfully!" 8 50
     log_message "INFO" "New server added: $name ($user@$host:$port)"
@@ -127,20 +131,25 @@ edit_server() {
         fi
     fi
 
+    if ! parse_ssh_options "$new_ssh_options"; then
+        dialog --title "Invalid SSH Options" --msgbox "Only simple SSH flags are supported here. Put complex quoting in ~/.ssh/config." 8 70
+        return 1
+    fi
+
     backup_config
-    yq eval ".servers[$server_index].name = \"$new_name\"" -i "$CONFIG_FILE"
-    yq eval ".servers[$server_index].host = \"$new_host\"" -i "$CONFIG_FILE"
-    yq eval ".servers[$server_index].user = \"$new_user\"" -i "$CONFIG_FILE"
-    yq eval ".servers[$server_index].port = $new_port" -i "$CONFIG_FILE"
+    NAME="$new_name" yq eval "(.servers[$server_index].name) = strenv(NAME)" -i "$CONFIG_FILE"
+    HOST="$new_host" yq eval "(.servers[$server_index].host) = strenv(HOST)" -i "$CONFIG_FILE"
+    USERNAME="$new_user" yq eval "(.servers[$server_index].user) = strenv(USERNAME)" -i "$CONFIG_FILE"
+    PORT="$new_port" yq eval "(.servers[$server_index].port) = (strenv(PORT) | tonumber)" -i "$CONFIG_FILE"
 
     if [[ -n "$new_description" ]]; then
-        yq eval ".servers[$server_index].description = \"$new_description\"" -i "$CONFIG_FILE"
+        DESCRIPTION="$new_description" yq eval "(.servers[$server_index].description) = strenv(DESCRIPTION)" -i "$CONFIG_FILE"
     else
         yq eval "del(.servers[$server_index].description)" -i "$CONFIG_FILE"
     fi
 
     if [[ -n "$new_ssh_options" ]]; then
-        yq eval ".servers[$server_index].ssh_options = \"$new_ssh_options\"" -i "$CONFIG_FILE"
+        SSH_OPTIONS="$new_ssh_options" yq eval "(.servers[$server_index].ssh_options) = strenv(SSH_OPTIONS)" -i "$CONFIG_FILE"
     else
         yq eval "del(.servers[$server_index].ssh_options)" -i "$CONFIG_FILE"
     fi
