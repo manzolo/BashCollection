@@ -15,6 +15,13 @@ init_portforward_dir() {
     [[ ! -f "$PF_PIDS_FILE" ]] && touch "$PF_PIDS_FILE"
 }
 
+rewrite_pf_pids_file() {
+    local temp_file
+    temp_file=$(mktemp "$PF_DIR/.active_pids.XXXXXX")
+    cat > "$temp_file"
+    mv "$temp_file" "$PF_PIDS_FILE"
+}
+
 # Find a free local port
 find_free_port() {
     local start_port="${1:-10000}"
@@ -84,6 +91,7 @@ check_autossh() {
 
 # Add port forward profile
 add_portforward() {
+    local local_host
     if ! validate_config; then
         dialog --title "Error" --msgbox "No servers configured. Add a server first." 8 50
         return 1
@@ -107,9 +115,15 @@ add_portforward() {
         "Select server for port forwarding:" \
         15 60 8 "${menu_items[@]}" 2>&1 >/dev/tty) || return
 
+    if should_return_to_main_menu; then
+        clear
+        return
+    fi
+
     local server_index
-    server_index=$(get_server_index_by_name "$server_choice")
-    [[ $? -ne 0 ]] && return 1
+    if ! server_index=$(get_server_index_by_name "$server_choice"); then
+        return 1
+    fi
 
     # Select tunnel type
     local tunnel_type
@@ -127,7 +141,7 @@ add_portforward() {
     [[ -z "$pf_name" ]] && return
 
     # Check for duplicate name
-    if yq eval ".servers[$server_index].portforwards[]? | select(.name == \"$pf_name\") | .name" "$CONFIG_FILE" 2>/dev/null | grep -q "$pf_name"; then
+    if PF_NAME="$pf_name" yq eval ".servers[$server_index].portforwards[]? | select(.name == strenv(PF_NAME)) | .name" "$CONFIG_FILE" 2>/dev/null | grep -Fxq "$pf_name"; then
         dialog --title "Error" --msgbox "Port forward profile '$pf_name' already exists!" 8 50
         return 1
     fi
@@ -202,17 +216,28 @@ add_portforward() {
         yq eval ".servers[$server_index].portforwards = []" -i "$CONFIG_FILE"
     fi
 
-    # Add the port forward entry
-    local yaml_entry="{\"name\": \"$pf_name\", \"type\": \"$tunnel_type\", \"local_port\": $local_port"
+    PF_NAME="$pf_name" TUNNEL_TYPE="$tunnel_type" LOCAL_PORT="$local_port" \
+        yq eval ".servers[$server_index].portforwards += [{
+            \"name\": strenv(PF_NAME),
+            \"type\": strenv(TUNNEL_TYPE),
+            \"local_port\": (strenv(LOCAL_PORT) | tonumber)
+        }]" -i "$CONFIG_FILE"
 
-    [[ -n "$remote_host" ]] && yaml_entry+=", \"remote_host\": \"$remote_host\""
-    [[ -n "$remote_port" ]] && yaml_entry+=", \"remote_port\": $remote_port"
-    [[ -n "$description" ]] && yaml_entry+=", \"description\": \"$description\""
-    [[ "$autoreconnect" == "true" ]] && yaml_entry+=", \"autoreconnect\": true"
-
-    yaml_entry+="}"
-
-    yq eval ".servers[$server_index].portforwards += [$yaml_entry]" -i "$CONFIG_FILE"
+    if [[ -n "$remote_host" ]]; then
+        REMOTE_HOST="$remote_host" \
+            yq eval "(.servers[$server_index].portforwards[-1].remote_host) = strenv(REMOTE_HOST)" -i "$CONFIG_FILE"
+    fi
+    if [[ -n "$remote_port" ]]; then
+        REMOTE_PORT="$remote_port" \
+            yq eval "(.servers[$server_index].portforwards[-1].remote_port) = (strenv(REMOTE_PORT) | tonumber)" -i "$CONFIG_FILE"
+    fi
+    if [[ -n "$description" ]]; then
+        DESCRIPTION="$description" \
+            yq eval "(.servers[$server_index].portforwards[-1].description) = strenv(DESCRIPTION)" -i "$CONFIG_FILE"
+    fi
+    if [[ "$autoreconnect" == "true" ]]; then
+        yq eval "(.servers[$server_index].portforwards[-1].autoreconnect) = true" -i "$CONFIG_FILE"
+    fi
 
     dialog --title "Success" --msgbox "Port forward profile '$pf_name' added successfully!" 8 50
     log_message "INFO" "Port forward profile added: $pf_name (type: $tunnel_type)"
@@ -346,6 +371,13 @@ start_portforward() {
     pf_remote_host=$(yq eval ".servers[$server_idx].portforwards[$pf_idx].remote_host // \"\"" "$CONFIG_FILE")
     pf_remote_port=$(yq eval ".servers[$server_idx].portforwards[$pf_idx].remote_port // \"\"" "$CONFIG_FILE")
     autoreconnect=$(yq eval ".servers[$server_idx].portforwards[$pf_idx].autoreconnect // false" "$CONFIG_FILE")
+    local ssh_cmd=()
+    local error_log
+    local tunnel_marker
+    local start_time
+    local tunnel_pid
+    local port_pids
+    local pidfile
 
     # Check if already running
     if grep -q "^${server_idx}:${pf_idx}:" "$PF_PIDS_FILE" 2>/dev/null; then
@@ -356,7 +388,7 @@ start_portforward() {
             return 0
         else
             # Clean up stale entry
-            sed -i "/^${server_idx}:${pf_idx}:/d" "$PF_PIDS_FILE"
+            grep -v "^${server_idx}:${pf_idx}:" "$PF_PIDS_FILE" | rewrite_pf_pids_file
         fi
     fi
 
@@ -366,88 +398,96 @@ start_portforward() {
             print_message "$RED" "❌ Port $pf_local_port is already in use!"
 
             # Try to find what's using it
-            local port_pids=$(find_tunnel_pids_by_port "$pf_local_port")
+            port_pids=$(find_tunnel_pids_by_port "$pf_local_port")
             if [[ -n "$port_pids" ]]; then
                 print_message "$YELLOW" "⚠️  Found SSH tunnel(s) using this port: $port_pids"
                 print_message "$YELLOW" "   Use 'Port Forwarding → Stop tunnel' or run: kill $port_pids"
             else
                 print_message "$YELLOW" "⚠️  Another process is using port $pf_local_port"
                 if command -v lsof &>/dev/null; then
-                    local proc_info=$(lsof -ti :$pf_local_port 2>/dev/null | head -1)
+                    local proc_info
+                    proc_info=$(lsof -ti :"$pf_local_port" 2>/dev/null | head -1)
                     if [[ -n "$proc_info" ]]; then
                         print_message "$YELLOW" "   Process PID: $proc_info"
                         ps -p "$proc_info" -o comm= 2>/dev/null | head -1
                     fi
                 fi
             fi
-            print_message "$YELLOW" "\nPress ENTER to continue..."
-            read -r
+            pause_for_enter
             return 1
         fi
     fi
 
-    # Build SSH command
-    local ssh_cmd=""
-    local forward_arg=""
-
-    case "$pf_type" in
-        "L") forward_arg="-L ${pf_local_port}:${pf_remote_host}:${pf_remote_port}" ;;
-        "R") forward_arg="-R ${pf_remote_port}:${pf_remote_host}:${pf_local_port}" ;;
-        "D") forward_arg="-D ${pf_local_port}" ;;
-    esac
-
-    local base_ssh_cmd="ssh -N -f $forward_arg -p $port"
-    [[ -n "$ssh_options" && "$ssh_options" != "null" ]] && base_ssh_cmd+=" $ssh_options"
-    base_ssh_cmd+=" -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes"
-    base_ssh_cmd+=" $user@$host"
+    if ! parse_ssh_options "$ssh_options"; then
+        pause_for_enter
+        return 1
+    fi
 
     clear
     print_message "$BLUE" "🚀 Starting port forward: $pf_name"
 
-    # Create a unique marker for this tunnel
-    local tunnel_marker="SSH_TUNNEL_${server_idx}_${pf_idx}_$$"
+    tunnel_marker="SSH_TUNNEL_${server_idx}_${pf_idx}_$$"
+    ssh_cmd=(ssh -N -f)
+
+    case "$pf_type" in
+        "L") ssh_cmd+=(-L "${pf_local_port}:${pf_remote_host}:${pf_remote_port}") ;;
+        "R") ssh_cmd+=(-R "${pf_remote_port}:${pf_remote_host}:${pf_local_port}") ;;
+        "D") ssh_cmd+=(-D "${pf_local_port}") ;;
+    esac
+
+    ssh_cmd+=(-p "$port")
+    [[ ${#PARSED_SSH_OPTIONS[@]} -gt 0 ]] && ssh_cmd+=("${PARSED_SSH_OPTIONS[@]}")
+    ssh_cmd+=(-o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes "$user@$host")
 
     if [[ "$autoreconnect" == "true" ]] && check_autossh; then
         print_message "$BLUE" "🔄 Using autossh for auto-reconnect..."
-        # Use autossh without -f, start in background manually
-        ssh_cmd="AUTOSSH_PIDFILE=/tmp/${tunnel_marker}.pid autossh -M 0 -f $forward_arg -p $port"
-        [[ -n "$ssh_options" && "$ssh_options" != "null" ]] && ssh_cmd+=" $ssh_options"
-        ssh_cmd+=" -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes"
-        ssh_cmd+=" $user@$host -N"
-    else
-        # Standard SSH with -f (fork to background)
-        ssh_cmd="$base_ssh_cmd"
+        ssh_cmd[0]="autossh"
+        ssh_cmd=("${ssh_cmd[@]:0:1}" -M 0 "${ssh_cmd[@]:1}")
     fi
 
     # Start the tunnel
-    local start_time=$(date +%s)
-    if eval "$ssh_cmd" 2>pf_error.log; then
+    start_time=$(date +%s)
+    error_log=$(mktemp "${TMPDIR:-/tmp}/ssh-manager-pf-error.XXXXXX")
+    pidfile="/tmp/${tunnel_marker}.pid"
+    tunnel_pid=""
+
+    local command_status
+    if [[ "$autoreconnect" == "true" ]] && check_autossh; then
+        AUTOSSH_PIDFILE="$pidfile" "${ssh_cmd[@]}" 2>"$error_log"
+    else
+        "${ssh_cmd[@]}" 2>"$error_log"
+    fi
+    command_status=$?
+
+    if [[ $command_status -eq 130 || "$INTERRUPTED" -eq 1 ]]; then
+        print_message "$YELLOW" "⚠️  Tunnel start cancelled, returning to main menu"
+        log_message "INFO" "Port forward start interrupted by user: $pf_name"
+        rm -f "$error_log" "$pidfile"
+    elif [[ $command_status -eq 0 ]]; then
         # Wait a bit for the tunnel to establish
         sleep 2
 
-        # Find the PID using multiple methods
-        local tunnel_pid=""
-
         # Method 1: Check autossh PID file
-        if [[ "$autoreconnect" == "true" ]] && [[ -f "/tmp/${tunnel_marker}.pid" ]]; then
-            tunnel_pid=$(cat "/tmp/${tunnel_marker}.pid" 2>/dev/null)
-            rm -f "/tmp/${tunnel_marker}.pid"  # Clean up PID file
+        if [[ "$autoreconnect" == "true" ]] && [[ -f "$pidfile" ]]; then
+            tunnel_pid=$(cat "$pidfile" 2>/dev/null)
+            rm -f "$pidfile"
         fi
 
         # Method 2: Find by port if Local or Dynamic
         if [[ -z "$tunnel_pid" && ("$pf_type" == "L" || "$pf_type" == "D") ]]; then
-            local port_pids=$(find_tunnel_pids_by_port "$pf_local_port")
+            port_pids=$(find_tunnel_pids_by_port "$pf_local_port")
             if [[ -n "$port_pids" ]]; then
                 # Get the most recent PID
                 for pid in $port_pids; do
-                    local pid_start=$(stat -c %Y /proc/$pid 2>/dev/null || echo 0)
+                    local pid_start
+                    pid_start=$(stat -c %Y "/proc/$pid" 2>/dev/null || echo 0)
                     if [[ $pid_start -ge $start_time ]]; then
                         tunnel_pid="$pid"
                         break
                     fi
                 done
                 # If no recent PID found, just use the first one
-                [[ -z "$tunnel_pid" ]] && tunnel_pid=$(echo $port_pids | awk '{print $1}')
+                [[ -z "$tunnel_pid" ]] && tunnel_pid=$(echo "$port_pids" | awk '{print $1}')
             fi
         fi
 
@@ -465,7 +505,7 @@ start_portforward() {
 
         # Verify PID is valid
         if [[ -n "$tunnel_pid" ]] && ps -p "$tunnel_pid" &>/dev/null; then
-            echo "${server_idx}:${pf_idx}:${tunnel_pid}:${pf_name}" >> "$PF_PIDS_FILE"
+            printf '%s\n' "${server_idx}:${pf_idx}:${tunnel_pid}:${pf_name}" >> "$PF_PIDS_FILE"
 
             print_message "$GREEN" "✅ Port forward started successfully (PID: $tunnel_pid)"
             case "$pf_type" in
@@ -483,9 +523,10 @@ start_portforward() {
                     print_message "$GREEN" "   ✓ Port $pf_local_port is listening (tunnel likely active)"
 
                     # Try to find PID one more time
-                    local found_pids=$(find_tunnel_pids_by_port "$pf_local_port")
+                    local found_pids
+                    found_pids=$(find_tunnel_pids_by_port "$pf_local_port")
                     if [[ -n "$found_pids" ]]; then
-                        tunnel_pid=$(echo $found_pids | awk '{print $1}')
+                        tunnel_pid=$(echo "$found_pids" | awk '{print $1}')
                         echo "${server_idx}:${pf_idx}:${tunnel_pid}:${pf_name}" >> "$PF_PIDS_FILE"
                         print_message "$GREEN" "   Found PID: $tunnel_pid (saved for tracking)"
                         log_message "INFO" "Port forward started: $pf_name (PID: $tunnel_pid) - found via port"
@@ -496,9 +537,10 @@ start_portforward() {
             fi
         fi
 
-        rm -f pf_error.log
+        rm -f "$error_log"
     else
-        local error_msg=$(cat pf_error.log 2>/dev/null || echo 'Unknown error')
+        local error_msg
+        error_msg=$(cat "$error_log" 2>/dev/null || echo 'Unknown error')
         print_message "$RED" "❌ Failed to start port forward"
         print_message "$RED" "   Error: $error_msg"
 
@@ -514,11 +556,10 @@ start_portforward() {
         fi
 
         log_message "ERROR" "Port forward failed: $pf_name - $error_msg"
-        rm -f pf_error.log
+        rm -f "$error_log" "$pidfile"
     fi
 
-    print_message "$YELLOW" "\nPress ENTER to continue..."
-    read -r
+    pause_for_enter
 }
 
 # Find all SSH tunnel processes
@@ -553,20 +594,19 @@ stop_portforward() {
 
     # Build menu of active tunnels from tracking file
     local menu_items=()
-    local has_tracked=false
-
     if [[ -s "$PF_PIDS_FILE" ]]; then
+        local cleaned_entries=()
         while IFS=: read -r server_idx pf_idx pid name; do
             if ps -p "$pid" &>/dev/null; then
-                has_tracked=true
                 local server_name
                 server_name=$(yq eval ".servers[$server_idx].name" "$CONFIG_FILE" 2>/dev/null || echo "Unknown")
                 menu_items+=("$server_idx:$pf_idx:$pid" "$name @ $server_name (PID: $pid)")
+                cleaned_entries+=("${server_idx}:${pf_idx}:${pid}:${name}")
             else
-                # Clean up stale entry
-                sed -i "/^${server_idx}:${pf_idx}:${pid}:/d" "$PF_PIDS_FILE"
+                :
             fi
         done < "$PF_PIDS_FILE"
+        printf '%s\n' "${cleaned_entries[@]}" | rewrite_pf_pids_file
     fi
 
     # Find orphaned SSH tunnels (running but not tracked)
@@ -575,7 +615,6 @@ stop_portforward() {
         # Check if this PID is already in our tracking file
         if ! grep -q ":$pid:" "$PF_PIDS_FILE" 2>/dev/null; then
             ((orphan_count++))
-            local short_cmd=$(echo "$cmdline" | sed 's/.*ssh/ssh/' | cut -c1-50)
             menu_items+=("ORPHAN:$pid" "⚠️  Untracked tunnel (PID: $pid, Port: ${port:-?})")
         fi
     done < <(find_all_ssh_tunnels)
@@ -596,6 +635,11 @@ stop_portforward() {
         "Select tunnel to stop:\n(${orphan_count} orphaned tunnel(s) found)" \
         22 80 12 "${menu_items[@]}" 2>&1 >/dev/tty) || return
 
+    if should_return_to_main_menu; then
+        clear
+        return
+    fi
+
     clear
 
     case "$choice" in
@@ -611,7 +655,7 @@ stop_portforward() {
                         log_message "INFO" "Port forward stopped: $name (PID: $pid)"
                     fi
                 done < "$PF_PIDS_FILE"
-                > "$PF_PIDS_FILE"
+                : > "$PF_PIDS_FILE"
             fi
 
             # Stop orphaned tunnels
@@ -662,7 +706,7 @@ stop_portforward() {
 
             if ps -p "$pid" &>/dev/null; then
                 kill "$pid" 2>/dev/null
-                sed -i "/^${server_idx}:${pf_idx}:${pid}:/d" "$PF_PIDS_FILE"
+                grep -v "^${server_idx}:${pf_idx}:${pid}:" "$PF_PIDS_FILE" | rewrite_pf_pids_file
 
                 local pf_name
                 pf_name=$(yq eval ".servers[$server_idx].portforwards[$pf_idx].name" "$CONFIG_FILE" 2>/dev/null || echo "Unknown")
@@ -671,13 +715,12 @@ stop_portforward() {
                 log_message "INFO" "Port forward stopped: $pf_name (PID: $pid)"
             else
                 print_message "$RED" "❌ Process not found (PID: $pid)"
-                sed -i "/^${server_idx}:${pf_idx}:${pid}:/d" "$PF_PIDS_FILE"
+                grep -v "^${server_idx}:${pf_idx}:${pid}:" "$PF_PIDS_FILE" | rewrite_pf_pids_file
             fi
             ;;
     esac
 
-    print_message "$YELLOW" "\nPress ENTER to continue..."
-    read -r
+    pause_for_enter
 }
 
 # Show active tunnels status
@@ -775,6 +818,11 @@ remove_portforward() {
         "Select port forward profile to remove:" \
         20 70 10 "${menu_items[@]}" 2>&1 >/dev/tty) || return
 
+    if should_return_to_main_menu; then
+        clear
+        return
+    fi
+
     # Parse choice
     local server_idx="${choice%:*}"
     local pf_idx="${choice#*:}"
@@ -808,10 +856,29 @@ portforward_menu() {
             "6" "🗑️  Remove profile" \
             "0" "← Back to main menu" 2>&1 >/dev/tty)
 
+        if should_return_to_main_menu; then
+            clear
+            return
+        fi
+
         case "$choice" in
             "") clear; return ;;
-            "1") start_portforward ;;
-            "2") stop_portforward ;;
+            "1")
+                start_portforward
+                if [[ "$INTERRUPTED" -eq 1 ]]; then
+                    clear_interrupt_state
+                    clear_main_menu_request
+                    continue
+                fi
+                ;;
+            "2")
+                stop_portforward
+                if [[ "$INTERRUPTED" -eq 1 ]]; then
+                    clear_interrupt_state
+                    clear_main_menu_request
+                    continue
+                fi
+                ;;
             "3") show_active_tunnels ;;
             "4") add_portforward ;;
             "5") list_portforwards ;;

@@ -21,6 +21,13 @@ main_menu() {
             "P" "🔧 Install prerequisites" \
             "0" "🚪 Exit" 2>&1 >/dev/tty)
 
+        if should_return_to_main_menu; then
+            clear
+            clear_interrupt_state
+            clear_main_menu_request
+            continue
+        fi
+
         case "$choice" in
             ""  ) clear; exit 0 ;;
             "1" ) handle_ssh_action "ssh" ;;

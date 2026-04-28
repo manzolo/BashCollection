@@ -38,6 +38,79 @@ print_message() {
     echo -e "${color}${message}${RESET}"
 }
 
+# Parsed SSH options are kept in a shared array for Bash 4 compatibility
+PARSED_SSH_OPTIONS=()
+INTERRUPTED=0
+RETURN_TO_MAIN_MENU=0
+
+handle_interrupt() {
+    INTERRUPTED=1
+    RETURN_TO_MAIN_MENU=1
+    echo
+}
+
+clear_interrupt_state() {
+    INTERRUPTED=0
+}
+
+clear_main_menu_request() {
+    RETURN_TO_MAIN_MENU=0
+}
+
+should_return_to_main_menu() {
+    [[ "$RETURN_TO_MAIN_MENU" -eq 1 ]]
+}
+
+pause_for_enter() {
+    local prompt="${1:-\nPress ENTER to continue...}"
+
+    if should_return_to_main_menu; then
+        return 0
+    fi
+
+    print_message "$YELLOW" "$prompt"
+    read -r
+
+    if [[ $? -eq 130 || "$INTERRUPTED" -eq 1 ]]; then
+        return 0
+    fi
+
+    return 0
+}
+
+# Parse SSH options conservatively to avoid command injection.
+# Complex shell constructs should live in ~/.ssh/config instead.
+parse_ssh_options() {
+    local raw_options="$1"
+    PARSED_SSH_OPTIONS=()
+
+    [[ -z "$raw_options" || "$raw_options" == "null" ]] && return 0
+
+    if [[ "$raw_options" == *$'\n'* || "$raw_options" == *$'\r'* ]] || \
+       [[ "$raw_options" =~ [\`\;\&\|\<\>\$\(\)\{\}\\\'\"] ]]; then
+        print_message "$RED" "❌ Unsafe SSH options detected. Use simple flags only or move complex logic to ~/.ssh/config."
+        return 1
+    fi
+
+    read -r -a PARSED_SSH_OPTIONS <<< "$raw_options"
+    return 0
+}
+
+# Build a shell-escaped ssh command string for tools like sshfs that only accept a string.
+build_ssh_command_string() {
+    local port="$1"
+    local ssh_command=()
+    local ssh_command_string
+
+    ssh_command=(ssh -p "$port")
+    if [[ ${#PARSED_SSH_OPTIONS[@]} -gt 0 ]]; then
+        ssh_command+=("${PARSED_SSH_OPTIONS[@]}")
+    fi
+
+    printf -v ssh_command_string '%q ' "${ssh_command[@]}"
+    printf '%s\n' "${ssh_command_string% }"
+}
+
 # Test SSH connectivity
 test_ssh_connection() {
     local user="$1"

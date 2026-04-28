@@ -42,6 +42,8 @@ for module in "$SCRIPT_DIR/ssh-manager/"*.sh; do
     fi
 done
 
+trap 'handle_interrupt' INT
+
 # Main function
 main() {
     # Check Bash version

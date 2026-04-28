@@ -5,6 +5,7 @@
 # Configuration initialization
 init_config() {
     mkdir -p "$CONFIG_DIR"
+    chmod 700 "$CONFIG_DIR" 2>/dev/null
 
     if [[ ! -f "$CONFIG_FILE" ]]; then
         cat > "$CONFIG_FILE" << EOF
@@ -15,6 +16,7 @@ servers:
     port: 22
     description: "Example server"
 EOF
+        chmod 600 "$CONFIG_FILE" 2>/dev/null
         print_message "$GREEN" "✅ Configuration file created: $CONFIG_FILE"
         log_message "INFO" "Initial configuration file created"
     fi
