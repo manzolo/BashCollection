@@ -230,7 +230,7 @@ run_health_check_menu() {
             else
                 print_message "$YELLOW" "⚠️  Health checks completed with $failures failure(s)"
             fi
-            pause_for_enter
+            pause_for_key
             ;;
     esac
 }

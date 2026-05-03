@@ -409,13 +409,13 @@ start_portforward() {
                     fi
                 fi
             fi
-            pause_for_enter
+            pause_for_key
             return 1
         fi
     fi
 
     if ! resolve_server_connection "$server_idx"; then
-        pause_for_enter
+        pause_for_key
         return 1
     fi
 
@@ -566,7 +566,7 @@ start_portforward() {
         record_server_usage "$server_idx" "portforward:$pf_name"
     fi
 
-    pause_for_enter
+    pause_for_key
 }
 
 # Find all SSH tunnel processes
@@ -727,7 +727,7 @@ stop_portforward() {
             ;;
     esac
 
-    pause_for_enter
+    pause_for_key
 }
 
 # Show active tunnels status

@@ -76,7 +76,7 @@ execute_ssh_action() {
     local ssh_cmd=()
 
     if ! resolve_server_connection "$index"; then
-        pause_for_enter
+        pause_for_key
         return 1
     fi
 
@@ -125,7 +125,7 @@ execute_ssh_action() {
         "sshfs-mc")
             if ! check_sshfs_mc; then
                 print_message "$RED" "❌ Required packages not available"
-                pause_for_enter
+                pause_for_key
                 return 1
             fi
 
@@ -154,7 +154,7 @@ execute_ssh_action() {
     fi
 
     if [[ "$action" != "sshfs-mc" ]]; then
-        pause_for_enter
+        pause_for_key
     fi
 }
 
@@ -249,7 +249,7 @@ execute_sshfs_mc() {
         rmdir "$mount_point" 2>/dev/null
         rm -f "$CONFIG_DIR/sshfs_error.log"
 
-        pause_for_enter
+        pause_for_key
         return 1
     fi
 }
@@ -293,7 +293,7 @@ test_connectivity_menu() {
         if [[ $? -eq 0 ]]; then
             clear
             run_server_health_check "$server_index"
-            pause_for_enter
+            pause_for_key
             if [[ "$INTERRUPTED" -eq 1 ]]; then
                 clear_interrupt_state
                 clear_main_menu_request

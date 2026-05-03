@@ -91,6 +91,23 @@ pause_for_enter() {
     return 0
 }
 
+pause_for_key() {
+    local prompt="${1:-\nPress any key to continue...}"
+
+    if should_return_to_main_menu; then
+        return 0
+    fi
+
+    print_message "$YELLOW" "$prompt"
+    read -r -n 1 -s
+
+    if [[ $? -eq 130 || "$INTERRUPTED" -eq 1 ]]; then
+        return 0
+    fi
+
+    return 0
+}
+
 ensure_manager_runtime_dirs() {
     mkdir -p "$CONFIG_DIR" "$EXPORT_DIR"
     chmod 700 "$CONFIG_DIR" 2>/dev/null
