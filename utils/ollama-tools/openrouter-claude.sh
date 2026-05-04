@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: openrouter-claude
-# PKG_VERSION: 1.0.1
+# PKG_VERSION: 1.0.2
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -26,7 +26,7 @@ set -euo pipefail
 # openrouter-claude — wrapper for Claude CLI that uses an OpenRouter backend
 # ---------------------------------------------------------------------------
 
-readonly VERSION="1.0.1"
+readonly VERSION="1.0.2"
 
 # OpenRouter API endpoints (not user-configurable)
 readonly OPENROUTER_BASE_URL="https://openrouter.ai/api"
@@ -323,6 +323,17 @@ ensure_claude_installed() {
     fi
 }
 
+# --- Map OpenRouter Claude slug to Anthropic model ID ----------------------
+# Claude CLI's --model flag expects Anthropic IDs (e.g. claude-sonnet-4-6),
+# not OpenRouter slugs (e.g. anthropic/claude-sonnet-4.6).
+map_model_for_claude_cli() {
+    local slug="$1"
+    # Strip "anthropic/" prefix if present
+    local name="${slug#anthropic/}"
+    # Convert dots to dashes and lowercase (anthropic/claude-sonnet-4.6 → claude-sonnet-4-6)
+    echo "${name//\./-}" | tr '[:upper:]' '[:lower:]'
+}
+
 # --- Configure environment for OpenRouter ----------------------------------
 configure_env() {
     export ANTHROPIC_BASE_URL="${OPENROUTER_BASE_URL}"
@@ -465,8 +476,12 @@ main() {
 
     success "Using model: ${BOLD}${MODEL}${RESET} via OpenRouter"
 
+    # Claude CLI expects Anthropic model IDs, not OpenRouter slugs
+    local cli_model
+    cli_model=$(map_model_for_claude_cli "$MODEL")
+
     # Pass model explicitly via --model so Claude CLI uses it regardless of internal tier mapping
-    exec claude --model "${MODEL}" "${EXTRA_ARGS[@]}"
+    exec claude --model "${cli_model}" "${EXTRA_ARGS[@]}"
 }
 
 # Detect if MODEL was explicitly set by the user via env var
