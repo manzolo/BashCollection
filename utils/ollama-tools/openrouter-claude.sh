@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: openrouter-claude
-# PKG_VERSION: 1.0.0
+# PKG_VERSION: 1.0.1
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -17,7 +17,7 @@
 #  - Filters free-tier (:free) models by default; --all shows paid models too
 #  - First-run guided configuration wizard (stores API key securely, mode 600)
 #  - JSON config file with API key, default model, free_only flag, and timeout
-#  - Maps all Claude tiers (Opus/Sonnet/Haiku) to the selected model via env vars
+#  - Passes selected model directly via --model flag to Claude CLI
 #  - Auto-installs the Claude CLI if not present
 # PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 set -euo pipefail
@@ -26,7 +26,7 @@ set -euo pipefail
 # openrouter-claude — wrapper for Claude CLI that uses an OpenRouter backend
 # ---------------------------------------------------------------------------
 
-readonly VERSION="1.0.0"
+readonly VERSION="1.0.1"
 
 # OpenRouter API endpoints (not user-configurable)
 readonly OPENROUTER_BASE_URL="https://openrouter.ai/api"
@@ -325,13 +325,9 @@ ensure_claude_installed() {
 
 # --- Configure environment for OpenRouter ----------------------------------
 configure_env() {
-    local model="$1"
     export ANTHROPIC_BASE_URL="${OPENROUTER_BASE_URL}"
     export ANTHROPIC_AUTH_TOKEN="${OPENROUTER_API_KEY}"
     export ANTHROPIC_API_KEY=""   # must be explicitly empty so the SDK uses AUTH_TOKEN
-    export ANTHROPIC_DEFAULT_OPUS_MODEL="${model}"
-    export ANTHROPIC_DEFAULT_SONNET_MODEL="${model}"
-    export ANTHROPIC_DEFAULT_HAIKU_MODEL="${model}"
 }
 
 # --- Help ------------------------------------------------------------------
@@ -364,8 +360,7 @@ ${BOLD}CONFIG FILE${RESET}
 
 ${BOLD}NOTES${RESET}
     By default only :free models are shown. Use --all to see paid models too.
-    All Claude internal tiers (Opus/Sonnet/Haiku) are mapped to the selected
-    model via ANTHROPIC_DEFAULT_*_MODEL env vars.
+    The selected model is passed directly via --model to Claude CLI.
     Current default model: ${default_label}
 
 ${BOLD}EXAMPLES${RESET}
@@ -466,12 +461,12 @@ main() {
 
     validate_model "$MODEL"
     ensure_claude_installed
-    configure_env "$MODEL"
+    configure_env
 
     success "Using model: ${BOLD}${MODEL}${RESET} via OpenRouter"
 
-    # Replace this process with claude (no --model: mapping is via env vars)
-    exec claude "${EXTRA_ARGS[@]}"
+    # Pass model explicitly via --model so Claude CLI uses it regardless of internal tier mapping
+    exec claude --model "${MODEL}" "${EXTRA_ARGS[@]}"
 }
 
 # Detect if MODEL was explicitly set by the user via env var
