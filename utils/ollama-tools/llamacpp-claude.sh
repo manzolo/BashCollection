@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: llamacpp-claude
-# PKG_VERSION: 1.1.1
+# PKG_VERSION: 1.1.2
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -21,8 +21,9 @@
 # PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 set -euo pipefail
 
-readonly VERSION="1.1.1"
-readonly PROXY_SCRIPT="$(dirname "$(realpath "${BASH_SOURCE[0]}")")/llamacpp-proxy.py"
+readonly VERSION="1.1.2"
+PROXY_SCRIPT="$(dirname "$(realpath "${BASH_SOURCE[0]}")")/llamacpp-proxy.py"
+readonly PROXY_SCRIPT
 
 # --- Config ----------------------------------------------------------------
 CONFIG_DIR="$HOME/.config/manzolo/llamacpp-claude"
@@ -54,7 +55,7 @@ success() { echo "${GREEN}[OK]${RESET} $*" >&2; }
 # --- Cleanup ---------------------------------------------------------------
 PROXY_PID=""
 cleanup() {
-    [[ -n "$PROXY_PID" ]] && kill "$PROXY_PID" 2>/dev/null || true
+    if [[ -n "$PROXY_PID" ]]; then kill "$PROXY_PID" 2>/dev/null; fi
 }
 trap cleanup EXIT
 
@@ -193,7 +194,7 @@ select_model_interactive() {
         MODEL="${models[$((choice-1))]}"
         success "Selezionato: ${BOLD}${MODEL}${RESET}"
     else
-        [[ -n "$DEFAULT_MODEL" ]] && MODEL="$DEFAULT_MODEL" || { error "Selezione non valida."; exit 1; }
+        if [[ -n "$DEFAULT_MODEL" ]]; then MODEL="$DEFAULT_MODEL"; else error "Selezione non valida."; exit 1; fi
     fi
 }
 
@@ -289,7 +290,7 @@ main() {
 
     fetch_models | grep -qx "$MODEL" || {
         warn "Modello '${MODEL}' non trovato sul server."
-        [[ -t 0 ]] && select_model_interactive || { error "Modello non disponibile."; exit 1; }
+        if [[ -t 0 ]]; then select_model_interactive; else error "Modello non disponibile."; exit 1; fi
     }
 
     start_proxy "$LLAMA_SERVER_URL" "$PROXY_PORT" "$MODEL"
