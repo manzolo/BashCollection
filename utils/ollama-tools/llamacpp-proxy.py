@@ -67,8 +67,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
     def do_GET(self):
-        if self.path == "/v1/models":
+        if self.path.startswith("/v1/models"):
             try:
                 r = requests.get(f"{BACKEND}/v1/models", timeout=10)
                 self.send_json(r.status_code, r.json())
@@ -78,7 +82,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_json(404, {"error": "not found"})
 
     def do_POST(self):
-        if self.path != "/v1/messages":
+        if not self.path.startswith("/v1/messages"):
             self.send_json(404, {"error": "not found"})
             return
 
