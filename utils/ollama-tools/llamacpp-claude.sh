@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: llamacpp-claude
-# PKG_VERSION: 1.1.2
+# PKG_VERSION: 1.1.3
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -21,7 +21,7 @@
 # PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 set -euo pipefail
 
-readonly VERSION="1.1.2"
+readonly VERSION="1.1.3"
 PROXY_SCRIPT="$(dirname "$(realpath "${BASH_SOURCE[0]}")")/llamacpp-proxy.py"
 readonly PROXY_SCRIPT
 
