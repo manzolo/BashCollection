@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 llamacpp-proxy — traduce Anthropic Messages API → OpenAI Chat Completions API
-Richiesto da llamacpp-claude per bridgare Claude CLI con llama-server.
+Gestisce reasoning_content (thinking) e content (text) di DeepSeek e simili.
 """
 import json
 import sys
@@ -29,13 +29,21 @@ def to_openai(data):
 
 def to_anthropic(oai, model):
     choice = oai["choices"][0]
-    text = choice["message"].get("content") or ""
+    msg = choice["message"]
+    reasoning = msg.get("reasoning_content") or ""
+    text = msg.get("content") or ""
     usage = oai.get("usage", {})
+
+    content = []
+    if reasoning:
+        content.append({"type": "thinking", "thinking": reasoning})
+    content.append({"type": "text", "text": text})
+
     return {
         "id": f"msg_{uuid.uuid4().hex[:20]}",
         "type": "message",
         "role": "assistant",
-        "content": [{"type": "text", "text": text}],
+        "content": content,
         "model": model,
         "stop_reason": "end_turn",
         "stop_sequence": None,
@@ -124,11 +132,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 "usage": {"input_tokens": 0, "output_tokens": 0},
             },
         })
-        sse_write(self.wfile, "content_block_start", {
-            "type": "content_block_start", "index": 0,
-            "content_block": {"type": "text", "text": ""},
-        })
         sse_write(self.wfile, "ping", {"type": "ping"})
+
+        # Block state: we open blocks lazily as content arrives
+        thinking_open = False   # thinking block (index 0) opened
+        text_open = False       # text block opened
+        text_index = 0          # index of the text block
 
         oai_data["stream"] = True
         try:
@@ -145,19 +154,63 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         break
                     try:
                         chunk = json.loads(payload)
-                        text = chunk["choices"][0].get("delta", {}).get("content", "")
-                        if text:
+                        delta = chunk["choices"][0].get("delta", {})
+                        reasoning = delta.get("reasoning_content") or ""
+                        content = delta.get("content") or ""
+
+                        if reasoning:
+                            if not thinking_open:
+                                sse_write(self.wfile, "content_block_start", {
+                                    "type": "content_block_start", "index": 0,
+                                    "content_block": {"type": "thinking", "thinking": ""},
+                                })
+                                thinking_open = True
                             sse_write(self.wfile, "content_block_delta", {
                                 "type": "content_block_delta", "index": 0,
-                                "delta": {"type": "text_delta", "text": text},
+                                "delta": {"type": "thinking_delta", "thinking": reasoning},
+                            })
+
+                        if content:
+                            if not text_open:
+                                if thinking_open:
+                                    # Close thinking block before opening text
+                                    sse_write(self.wfile, "content_block_stop",
+                                              {"type": "content_block_stop", "index": 0})
+                                    thinking_open = False
+                                    text_index = 1
+                                else:
+                                    text_index = 0
+                                sse_write(self.wfile, "content_block_start", {
+                                    "type": "content_block_start", "index": text_index,
+                                    "content_block": {"type": "text", "text": ""},
+                                })
+                                text_open = True
+                            sse_write(self.wfile, "content_block_delta", {
+                                "type": "content_block_delta", "index": text_index,
+                                "delta": {"type": "text_delta", "text": content},
                             })
                     except Exception:
                         pass
         except Exception as e:
             print(f"[llamacpp-proxy] stream error: {e}", file=sys.stderr)
 
-        sse_write(self.wfile, "content_block_stop",
-                  {"type": "content_block_stop", "index": 0})
+        # Close any still-open blocks
+        if thinking_open:
+            sse_write(self.wfile, "content_block_stop",
+                      {"type": "content_block_stop", "index": 0})
+            text_index = 1
+        if text_open:
+            sse_write(self.wfile, "content_block_stop",
+                      {"type": "content_block_stop", "index": text_index})
+        if not thinking_open and not text_open:
+            # Nothing generated — emit empty text block for protocol compliance
+            sse_write(self.wfile, "content_block_start", {
+                "type": "content_block_start", "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            })
+            sse_write(self.wfile, "content_block_stop",
+                      {"type": "content_block_stop", "index": 0})
+
         sse_write(self.wfile, "message_delta", {
             "type": "message_delta",
             "delta": {"stop_reason": "end_turn", "stop_sequence": None},
@@ -175,7 +228,7 @@ def main():
     ap.add_argument("--backend", default="http://localhost:11435",
                     help="URL del llama-server (default: http://localhost:11435)")
     ap.add_argument("--model", default="deepseek-v4-flash",
-                    help="Nome modello da usare nelle risposte (default: deepseek-v4-flash)")
+                    help="Nome modello (default: deepseek-v4-flash)")
     args = ap.parse_args()
 
     global BACKEND, MODEL_NAME
