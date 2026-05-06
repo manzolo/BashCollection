@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: ssh-manager
-# PKG_VERSION: 2.6.2
+# PKG_VERSION: 2.6.3
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -33,7 +33,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_DIR="$HOME/.config/manzolo-ssh-manager"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 LOG_FILE="$CONFIG_DIR/ssh-manager.log"
-VERSION="2.6.2"
+VERSION="2.6.3"
 
 # Source all modules
 for module in "$SCRIPT_DIR/ssh-manager/"*.sh; do
@@ -55,20 +55,20 @@ main() {
     # Check prerequisites
     if ! command -v dialog &> /dev/null; then
         print_message "$RED" "❌ Dialog is not installed. Run option 9 from the menu."
-        echo "Do you want to install the prerequisites now? (y/n)"
+        echo "Do you want to install the prerequisites now? (Y/n)"
         read -r response
-        if [[ "$response" =~ ^[Yy]$ ]]; then
+        if [[ -z "$response" || "$response" =~ ^[Yy]$ ]]; then
             install_prerequisites || exit 1
         else
             exit 1
         fi
     fi
-    
+
     if ! command -v yq &> /dev/null; then
         print_message "$RED" "❌ yq is not installed. Run option 9 from the menu."
-        echo "Do you want to install the prerequisites now? (y/n)"
+        echo "Do you want to install the prerequisites now? (Y/n)"
         read -r response
-        if [[ "$response" =~ ^[Yy]$ ]]; then
+        if [[ -z "$response" || "$response" =~ ^[Yy]$ ]]; then
             install_prerequisites || exit 1
         else
             exit 1
