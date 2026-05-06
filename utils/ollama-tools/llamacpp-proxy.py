@@ -34,16 +34,18 @@ def to_anthropic(oai, model):
     text = msg.get("content") or ""
     usage = oai.get("usage", {})
 
-    content = []
+    # Combine into a single text block — thinking blocks require Anthropic's
+    # cryptographic signature which we cannot generate from a third-party server
+    full_text = ""
     if reasoning:
-        content.append({"type": "thinking", "thinking": reasoning})
-    content.append({"type": "text", "text": text})
+        full_text = f"<thinking>\n{reasoning}\n</thinking>\n\n"
+    full_text += text
 
     return {
         "id": f"msg_{uuid.uuid4().hex[:20]}",
         "type": "message",
         "role": "assistant",
-        "content": content,
+        "content": [{"type": "text", "text": full_text}],
         "model": model,
         "stop_reason": "end_turn",
         "stop_sequence": None,
@@ -134,12 +136,15 @@ class ProxyHandler(BaseHTTPRequestHandler):
         })
         sse_write(self.wfile, "ping", {"type": "ping"})
 
-        # Block state: we open blocks lazily as content arrives
-        thinking_open = False   # thinking block (index 0) opened
-        text_open = False       # text block opened
-        text_index = 0          # index of the text block
+        # Single text block — we stream both reasoning and content as text_delta
+        sse_write(self.wfile, "content_block_start", {
+            "type": "content_block_start", "index": 0,
+            "content_block": {"type": "text", "text": ""},
+        })
 
         oai_data["stream"] = True
+        in_reasoning = False   # tracks if we've started the <thinking> section
+
         try:
             with requests.post(f"{BACKEND}/v1/chat/completions",
                                json=oai_data, stream=True, timeout=300) as r:
@@ -159,34 +164,26 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         content = delta.get("content") or ""
 
                         if reasoning:
-                            if not thinking_open:
-                                sse_write(self.wfile, "content_block_start", {
-                                    "type": "content_block_start", "index": 0,
-                                    "content_block": {"type": "thinking", "thinking": ""},
+                            if not in_reasoning:
+                                sse_write(self.wfile, "content_block_delta", {
+                                    "type": "content_block_delta", "index": 0,
+                                    "delta": {"type": "text_delta", "text": "<thinking>\n"},
                                 })
-                                thinking_open = True
+                                in_reasoning = True
                             sse_write(self.wfile, "content_block_delta", {
                                 "type": "content_block_delta", "index": 0,
-                                "delta": {"type": "thinking_delta", "thinking": reasoning},
+                                "delta": {"type": "text_delta", "text": reasoning},
                             })
 
                         if content:
-                            if not text_open:
-                                if thinking_open:
-                                    # Close thinking block before opening text
-                                    sse_write(self.wfile, "content_block_stop",
-                                              {"type": "content_block_stop", "index": 0})
-                                    thinking_open = False
-                                    text_index = 1
-                                else:
-                                    text_index = 0
-                                sse_write(self.wfile, "content_block_start", {
-                                    "type": "content_block_start", "index": text_index,
-                                    "content_block": {"type": "text", "text": ""},
+                            if in_reasoning:
+                                sse_write(self.wfile, "content_block_delta", {
+                                    "type": "content_block_delta", "index": 0,
+                                    "delta": {"type": "text_delta", "text": "\n</thinking>\n\n"},
                                 })
-                                text_open = True
+                                in_reasoning = False
                             sse_write(self.wfile, "content_block_delta", {
-                                "type": "content_block_delta", "index": text_index,
+                                "type": "content_block_delta", "index": 0,
                                 "delta": {"type": "text_delta", "text": content},
                             })
                     except Exception:
@@ -194,22 +191,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
         except Exception as e:
             print(f"[llamacpp-proxy] stream error: {e}", file=sys.stderr)
 
-        # Close any still-open blocks
-        if thinking_open:
-            sse_write(self.wfile, "content_block_stop",
-                      {"type": "content_block_stop", "index": 0})
-            text_index = 1
-        if text_open:
-            sse_write(self.wfile, "content_block_stop",
-                      {"type": "content_block_stop", "index": text_index})
-        if not thinking_open and not text_open:
-            # Nothing generated — emit empty text block for protocol compliance
-            sse_write(self.wfile, "content_block_start", {
-                "type": "content_block_start", "index": 0,
-                "content_block": {"type": "text", "text": ""},
+        if in_reasoning:
+            sse_write(self.wfile, "content_block_delta", {
+                "type": "content_block_delta", "index": 0,
+                "delta": {"type": "text_delta", "text": "\n</thinking>\n"},
             })
-            sse_write(self.wfile, "content_block_stop",
-                      {"type": "content_block_stop", "index": 0})
+
+        sse_write(self.wfile, "content_block_stop",
+                  {"type": "content_block_stop", "index": 0})
 
         sse_write(self.wfile, "message_delta", {
             "type": "message_delta",
