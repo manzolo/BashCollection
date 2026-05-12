@@ -11,7 +11,7 @@ _resolve_user_home() {
     fi
 }
 
-CONFIG_TEMPLATE='# manzolo-share-manager configuration
+CONFIG_TEMPLATE='# manzolo/share-manager configuration
 # Format: INI sections — one [section] per share
 #
 # Available fields:
@@ -73,7 +73,7 @@ init_config() {
     local user_home
     user_home=$(_resolve_user_home)
 
-    CONFIG_DIR="$user_home/.config/manzolo-share-manager"
+    CONFIG_DIR="$user_home/.config/manzolo/share-manager"
     CONFIG_FILE="$CONFIG_DIR/shares.conf"
 
     if [ ! -d "$CONFIG_DIR" ]; then

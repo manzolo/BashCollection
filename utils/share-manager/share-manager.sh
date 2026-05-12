@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # PKG_NAME: share-manager
-# PKG_VERSION: 1.0.10
+# PKG_VERSION: 1.0.11
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -12,7 +12,7 @@
 # PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SCRIPT_VERSION="1.0.9"
+SCRIPT_VERSION="1.0.11"
 
 # Colors
 RED='\033[0;31m'
