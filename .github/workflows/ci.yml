@@ -20,7 +20,7 @@ jobs:
           done < <(find . -type f -name '*.sh' -print0 | sort -z)
 
   shellcheck:
-    name: ShellCheck
+    name: ShellCheck (mapped scripts)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,9 +28,30 @@ jobs:
       - name: Install ShellCheck
         run: sudo apt-get install -y shellcheck
 
-      - name: Run ShellCheck on ollama-tools
+      - name: Run ShellCheck on every mapped script
+        # Severity `error` is the bloking floor (163 pre-existing warnings
+        # across 12 scripts make `warning` unworkable today). Tighten to
+        # `-S warning` once the warning debt is paid down per script.
         run: |
-          shellcheck utils/ollama-tools/*.sh
+          failed=0
+          while IFS= read -r line; do
+            [[ -z "$line" || "$line" == \#* ]] && continue
+            script_path="${line%%#*}"
+            command_name="${line#*#}"
+            echo "::group::shellcheck ${command_name} (${script_path})"
+            if ! shellcheck -S error -x "$script_path"; then
+              failed=1
+              echo "::error file=${script_path}::shellcheck errors above"
+            fi
+            # Informational pass: surface warnings as GitHub annotations
+            # without failing the job, so they're visible in the PR diff.
+            shellcheck -S warning -x -f gcc "$script_path" 2>&1 \
+              | awk -F: -v f="$script_path" '
+                  /warning:/ { printf "::warning file=%s,line=%s::%s\n", f, $2, $0 }' \
+              || true
+            echo "::endgroup::"
+          done < .manzolomap
+          exit "$failed"
 
   pkg-headers:
     name: PKG headers
@@ -59,17 +80,44 @@ jobs:
           done < .manzolomap
           exit $error
 
-  smoke-tests:
-    name: Smoke tests (published commands)
+  discover:
+    name: Discover packages
     runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.list.outputs.packages }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        run: bash .github/scripts/discover-packages.sh
+
+  pkg:
+    name: pkg
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ${{ fromJson(needs.discover.outputs.packages) }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: sudo apt-get install -y curl jq
+      - name: Install build prerequisites
+        run: sudo apt-get install -y rsync dpkg-dev python3-yaml
 
-      - name: Run smoke tests
-        run: bash .github/scripts/run-smoke-tests.sh
+      - name: Build .deb
+        id: build
+        run: |
+          deb=$(bash .github/scripts/build-pkg.sh "${{ matrix.package }}")
+          echo "deb=$deb" >> "$GITHUB_OUTPUT"
+          echo "Built: $deb"
+
+      - name: Install .deb (with APT to resolve deps)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y "${{ steps.build.outputs.deb }}"
+
+      - name: Smoke test
+        run: bash .github/scripts/smoke-test-pkg.sh "${{ matrix.package }}"
 
   ollama-backend-tests:
     name: Ollama tools backend

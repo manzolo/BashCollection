@@ -1,0 +1,57 @@
+# Per-package smoke test configuration.
+#
+# One entry per command in .manzolomap. Keys:
+#   cmd:       array of arguments passed to the installed command.
+#              Default if omitted: ["--help"]
+#   apt_deps:  extra apt packages to install before running the smoke
+#              (use only for deps not declared in PKG_DEPENDS).
+#   skip:      string with the reason. When set, the smoke step is
+#              reported as skipped (CI stays green) instead of running.
+#
+# The runner installs the .deb first (via `apt install -y ./package.deb`)
+# so PKG_DEPENDS are satisfied automatically by APT.
+
+mchroot:
+  cmd: ["--help"]
+
+mcleaner:
+  skip: "interactive whiptail menu, no safe non-interactive invocation"
+
+mbackup:
+  cmd: ["--help"]
+
+mtest:
+  cmd: ["--help"]
+
+usb-boot-test:
+  skip: "requires real USB device and large ISO download"
+
+manzolo-firewall:
+  skip: "modifies firewall state, unsafe in CI"
+
+manzolo-process-monitor:
+  skip: "interactive TUI, no --help flag"
+
+dmarc-report:
+  cmd: ["--help"]
+
+email-domain-check:
+  skip: "requires DNS queries and external email validation, no --help"
+
+firefox-session-recover:
+  cmd: ["--help"]
+
+network-viewer:
+  cmd: ["--help"]
+
+share-manager:
+  cmd: ["info"]
+
+ollama-claude:
+  cmd: ["--version"]
+
+ollama-codex:
+  cmd: ["--version"]
+
+openrouter-claude:
+  cmd: ["--version"]

@@ -1034,6 +1034,69 @@ publish_specific_script() {
     return $((1 - success))
 }
 
+# Build a single package without publishing/deploying. Used by CI to verify
+# that dpkg-deb can produce a valid .deb. Copies the resulting file into
+# $SCRIPT_DIR/packages/ and prints its path.
+build_specific_script() {
+    local script_name="$1"
+
+    if [ -z "$script_name" ]; then
+        echo -e "${RED}✖ No script name provided${NC}" >&2
+        echo "Usage: $0 build <pkg-name>" >&2
+        return 1
+    fi
+
+    load_ignore_patterns
+    load_name_mappings
+    find_executable_scripts
+
+    if [ ${#INCLUDED_FILES[@]} -eq 0 ]; then
+        echo -e "${RED}No executable scripts found.${NC}" >&2
+        return 1
+    fi
+
+    local found_script=""
+    local found_name=""
+    for script_path in "${INCLUDED_FILES[@]}"; do
+        local cmd_name=$(get_command_name "$script_path")
+        local base_name=$(basename "$script_path" .sh)
+        if [ "$cmd_name" = "$script_name" ] || \
+           [ "$base_name" = "$script_name" ] || \
+           [ "$base_name" = "${script_name}.sh" ]; then
+            found_script="$script_path"
+            found_name="$cmd_name"
+            break
+        fi
+    done
+
+    if [ -z "$found_script" ]; then
+        echo -e "${RED}✖ Script not found: $script_name${NC}" >&2
+        return 1
+    fi
+
+    local PACKAGE_BUILD_DIR
+    PACKAGE_BUILD_DIR=$(mktemp -d)
+    # shellcheck disable=SC2064
+    trap "rm -rf '$PACKAGE_BUILD_DIR'" RETURN
+
+    if ! build_script_package "$found_script" "$found_name" "$PACKAGE_BUILD_DIR"; then
+        echo -e "${RED}✖ Package build failed${NC}" >&2
+        return 1
+    fi
+
+    local out_dir="$SCRIPT_DIR/packages"
+    mkdir -p "$out_dir"
+    local built_deb
+    built_deb=$(find "$PACKAGE_BUILD_DIR" -name "*.deb" -print -quit)
+    if [ -z "$built_deb" ]; then
+        echo -e "${RED}✖ No .deb file produced${NC}" >&2
+        return 1
+    fi
+    cp "$built_deb" "$out_dir/"
+    echo -e "${GREEN}✔ Built: ${BOLD}$out_dir/$(basename "$built_deb")${NC}"
+    return 0
+}
+
 # Menu per la pubblicazione nel repository
 publish_menu() {
     local target_script="$1"
@@ -1819,6 +1882,9 @@ main() {
             ;;
         publish)
             publish_menu "$2"
+            ;;
+        build)
+            build_specific_script "$2"
             ;;
         unpublish)
             shift  # Remove 'unpublish' from arguments
