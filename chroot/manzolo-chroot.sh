@@ -35,12 +35,17 @@
 set -euo pipefail
 
 # Constants
+# shellcheck disable=SC2034
 readonly ORIGINAL_USER="${USER:-root}"
-readonly SCRIPT_NAME=$(basename "$0")
-readonly SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+SCRIPT_NAME=$(basename "$0")
+readonly SCRIPT_NAME
+SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+readonly SCRIPT_DIR
 readonly LOG_FILE="/tmp/${SCRIPT_NAME%.sh}.log"
 readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.sh}.lock"
+# shellcheck disable=SC2034
 readonly CONFIG_FILE="$SCRIPT_DIR/chroot.conf"
+# shellcheck disable=SC2034
 readonly CHROOT_PID_FILE="/tmp/${SCRIPT_NAME%.sh}.chroot.pid"
 
 # Global variables
@@ -52,32 +57,47 @@ ROOT_DEVICE=""
 ROOT_MOUNT="/mnt/chroot"
 EFI_PART=""
 BOOT_PART=""
+# shellcheck disable=SC2034
 ADDITIONAL_MOUNTS=()
+# shellcheck disable=SC2034
 MOUNTED_POINTS=()
+# shellcheck disable=SC2034
 BIND_MOUNTS=()
 ENABLE_GUI_SUPPORT=false
 CHROOT_USER=""
+# shellcheck disable=SC2034
 CUSTOM_SHELL="/bin/bash"
+# shellcheck disable=SC2034
 PRESERVE_ENV=false
 
 # Virtual disk specific variables
 VIRTUAL_MODE=false
 VIRTUAL_IMAGE=""
+# shellcheck disable=SC2034
 NBD_DEVICE=""
+# shellcheck disable=SC2034
 LUKS_MAPPINGS=()
+# shellcheck disable=SC2034
 ACTIVATED_VGS=()
+# shellcheck disable=SC2034
 OPEN_LUKS_PARTS=()
 
 # Colors for output
+# shellcheck disable=SC2034
 RED='\033[0;31m'
+# shellcheck disable=SC2034
 GREEN='\033[0;32m'
+# shellcheck disable=SC2034
 YELLOW='\033[1;33m'
+# shellcheck disable=SC2034
 BLUE='\033[0;34m'
+# shellcheck disable=SC2034
 NC='\033[0m'
 
 # Scan and "source" .sh file recursive.
 for script in "$SCRIPT_DIR/manzolo-chroot/"*.sh; do
     if [ -f "$script" ]; then
+        # shellcheck disable=SC1090  # dynamic module loader
         source "$script"
     else
         echo "Error: file script $script not found."
@@ -90,6 +110,7 @@ parse_args() {
         case $1 in
             -c|--config)
                 USE_CONFIG=true
+                # shellcheck disable=SC2034
                 CONFIG_FILE_PATH="$2"
                 shift 2
                 ;;
@@ -98,6 +119,7 @@ parse_args() {
                 shift
                 ;;
             -d|--debug)
+                # shellcheck disable=SC2034
                 DEBUG_MODE=true
                 shift
                 ;;
@@ -127,7 +149,8 @@ main() {
     
     # Check for existing instance
     if [[ -f "$LOCK_FILE" ]]; then
-        local pid=$(cat "$LOCK_FILE" 2>/dev/null || echo "")
+        local pid
+        pid=$(cat "$LOCK_FILE" 2>/dev/null || echo "")
         if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
             error "Another instance is already running (PID: $pid)"
             exit 1

@@ -57,8 +57,10 @@ get_timestamp() {
 # Get elapsed time since start
 get_elapsed_time() {
     if [[ -n "${SCRIPT_START_TIME:-}" ]]; then
-        local current_time=$(date +%s)
-        local elapsed=$((current_time - SCRIPT_START_TIME))
+        local current_time
+        current_time=$(date +%s)
+        local elapsed
+        elapsed=$((current_time - SCRIPT_START_TIME))
         printf "%02d:%02d" $((elapsed / 60)) $((elapsed % 60))
     else
         echo "00:00"
@@ -70,8 +72,10 @@ log() {
     local level="$1"
     local message="$2"
     local context="${3:-}"
-    local timestamp="$(get_timestamp)"
-    local elapsed="$(get_elapsed_time)"
+    local timestamp
+    timestamp="$(get_timestamp)"
+    local elapsed
+    elapsed="$(get_elapsed_time)"
     local prefix=""
     local color=""
     
@@ -158,10 +162,12 @@ log_section() {
     
     # Create centered title with separators
     local title_length=${#title}
-    local padding=$(( (width - title_length - 2) / 2 ))
-    local left_sep=$(printf "%*s" $padding "" | tr " " "$separator_char")
-    local right_sep=$(printf "%*s" $((width - title_length - 2 - padding)) "" | tr " " "$separator_char")
-    
+    local padding
+    padding=$(( (width - title_length - 2) / 2 ))
+    local left_sep
+    left_sep=$(printf "%*s" $padding "" | tr " " "$separator_char")
+    local right_sep
+    right_sep=$(printf "%*s" $((width - title_length - 2 - padding)) "" | tr " " "$separator_char")
     log "$level" "${left_sep} ${title} ${right_sep}"
     log "$level" "$(printf "%*s" $width "" | tr " " "$separator_char")"
 }
@@ -207,7 +213,9 @@ run_command() {
     log_debug "Executing: $cmd" "$context"
     log_info "Running: $description" "$context"
     
-    local start_time=$(date +%s)
+    local start_time
+    
+    start_time=$(date +%s)
     local output
     local exit_code
     
@@ -225,9 +233,11 @@ run_command() {
         exit_code=$?
     fi
     
-    local end_time=$(date +%s)
-    local duration=$((end_time - start_time))
+    local end_time
     
+    end_time=$(date +%s)
+    local duration
+    duration=$((end_time - start_time))
     if [[ $exit_code -eq 0 ]]; then
         log_success "$description completed in ${duration}s" "$context"
         if [[ -n "$output" ]]; then
@@ -257,10 +267,13 @@ log_file_info() {
         return 1
     fi
     
-    local file_size_bytes=$(stat -c%s "$file_path" 2>/dev/null || echo "0")
-    local file_size_human=$(ls -lh "$file_path" 2>/dev/null | awk '{print $5}' || echo "unknown")
-    local file_type=$(file -b "$file_path" 2>/dev/null || echo "unknown")
+    local file_size_bytes
     
+    file_size_bytes=$(stat -c%s "$file_path" 2>/dev/null || echo "0")
+    local file_size_human
+    file_size_human=$(ls -lh "$file_path" 2>/dev/null | awk '{print $5}' || echo "unknown")
+    local file_type
+    file_type=$(file -b "$file_path" 2>/dev/null || echo "unknown")
     log_info "File: $(basename "$file_path")" "$context"
     log_info "  Path: $file_path" "$context"
     log_info "  Size: $file_size_human ($file_size_bytes bytes)" "$context"
@@ -274,10 +287,13 @@ show_progress() {
     local operation="$3"
     local width=50
     
-    local percentage=$((current * 100 / total))
-    local filled=$((current * width / total))
-    local empty=$((width - filled))
+    local percentage
     
+    percentage=$((current * 100 / total))
+    local filled
+    filled=$((current * width / total))
+    local empty
+    empty=$((width - filled))
     local bar="["
     bar+="$(printf "%*s" $filled "" | tr " " "#")"
     bar+="$(printf "%*s" $empty "" | tr " " "-")"
@@ -311,10 +327,12 @@ repeat() {
 
 format_duration() {
     local seconds="$1"
-    local hours=$((seconds / 3600))
-    local minutes=$(((seconds % 3600) / 60))
-    local secs=$((seconds % 60))
-    
+    local hours
+    hours=$((seconds / 3600))
+    local minutes
+    minutes=$(((seconds % 3600) / 60))
+    local secs
+    secs=$((seconds % 60))
     if [[ $hours -gt 0 ]]; then
         printf "%02d:%02d:%02d" $hours $minutes $secs
     else
@@ -409,7 +427,8 @@ cleanup() {
     # Cleanup test directory
     if [[ -d "$TEST_DIR" ]]; then
         if [[ "$KEEP_IMAGES" == "false" ]]; then
-            local file_count=$(find "$TEST_DIR" -type f | wc -l)
+            local file_count
+            file_count=$(find "$TEST_DIR" -type f | wc -l)
             log_info "Removing test directory with $file_count files" "CLEANUP"
             rm -rf "$TEST_DIR"
             log_success "Test directory cleaned up" "CLEANUP"
@@ -449,7 +468,8 @@ cleanup() {
     if command -v losetup >/dev/null 2>&1; then
         local loop_count=0
         while IFS= read -r loop_info; do
-            local loop_dev=$(echo "$loop_info" | awk -F: '{print $1}')
+            local loop_dev
+            loop_dev=$(echo "$loop_info" | awk -F: '{print $1}')
             if sudo losetup -d "$loop_dev" &>/dev/null; then
                 log_info "Released loop device: $loop_dev" "CLEANUP"
                 ((loop_count++))
@@ -470,8 +490,8 @@ generate_config() {
     local partitions_array=("$@")
 
     # Generate unique test name
-    local unique_name=$(generate_unique_test_name "$disk_format" "$partition_table" "$preallocation" "${partitions_array[@]}")
-    
+    local unique_name
+    unique_name=$(generate_unique_test_name "$disk_format" "$partition_table" "$preallocation" "${partitions_array[@]}")
     local config_file="$TEST_DIR/${unique_name}.sh"
     local disk_name="${unique_name}.${disk_format}"
 
@@ -518,7 +538,9 @@ verify_disk() {
     
     log_file_info "$disk_file" "$context"
     
-    local file_size_bytes=$(stat -c%s "$disk_file" 2>/dev/null || echo "0")
+    local file_size_bytes
+    
+    file_size_bytes=$(stat -c%s "$disk_file" 2>/dev/null || echo "0")
     if [[ $file_size_bytes -eq 0 ]]; then
         log_error "Disk file is empty" "$context"
         return 1
@@ -576,7 +598,8 @@ analyze_disk_with_lsblk() {
         log_warning "Failed to connect via qemu-nbd, trying loop device" "$context"
         
         # Fallback to loop device for raw format
-        local disk_format=$(qemu-img info "$disk_file" 2>/dev/null | grep 'file format' | awk '{print $NF}')
+        local disk_format
+        disk_format=$(qemu-img info "$disk_file" 2>/dev/null | grep 'file format' | awk '{print $NF}')
         if [[ "$disk_format" == "raw" ]]; then
             if device_name=$(sudo losetup -f --show "$disk_file" 2>/dev/null); then
                 connection_method="loopback"
@@ -635,7 +658,8 @@ initialize_logging() {
     fi
     
     # Create log file directory if needed
-    local log_dir=$(dirname "$LOG_FILE")
+    local log_dir
+    log_dir=$(dirname "$LOG_FILE")
     if [[ ! -d "$log_dir" ]]; then
         mkdir -p "$log_dir" 2>/dev/null || {
             echo "ERROR: Failed to create log directory: $log_dir"
@@ -735,8 +759,8 @@ main() {
         IFS=' ' read -r -a partitions_array <<< "$partitions"
         
         # Generate unique test name
-        local unique_name=$(generate_unique_test_name "$disk_format" "$partition_table" "$preallocation" "${partitions_array[@]}")
-        
+        local unique_name
+        unique_name=$(generate_unique_test_name "$disk_format" "$partition_table" "$preallocation" "${partitions_array[@]}")
         # Show progress
         show_progress $test_index $TOTAL_TESTS "Executing tests"
         
@@ -834,9 +858,10 @@ main() {
     done
     
     # Final summary
-    local total_time=$(($(date +%s) - SCRIPT_START_TIME))
-    local formatted_duration=$(format_duration $total_time)
-    
+    local total_time
+    total_time=$(($(date +%s) - SCRIPT_START_TIME))
+    local formatted_duration
+    formatted_duration=$(format_duration $total_time)
     log_section "TEST EXECUTION SUMMARY" "RESULT"
     log_result "Execution completed in: $formatted_duration"
     log_result "Total tests executed: $TOTAL_TESTS"
@@ -846,7 +871,8 @@ main() {
     
     # Calculate success rate
     if [[ $TOTAL_TESTS -gt 0 ]]; then
-        local success_rate=$(( (PASSED_TESTS * 100) / TOTAL_TESTS ))
+        local success_rate
+        success_rate=$(( (PASSED_TESTS * 100) / TOTAL_TESTS ))
         log_result "Success rate: ${success_rate}%"
     fi
     
@@ -915,8 +941,8 @@ parse_partitions_array() {
         fi
         
         # Normalize size to bytes for comparison
-        local size_bytes=$(normalize_size_to_bytes "$size")
-        
+        local size_bytes
+        size_bytes=$(normalize_size_to_bytes "$size")
         result_array+=("$index|$size|$size_bytes|$fs_type|$part_type")
         log_debug "Parsed partition $index: $size ($size_bytes bytes) $fs_type $part_type" "$context"
         ((index++))

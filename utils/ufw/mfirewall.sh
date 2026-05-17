@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: mfirewall
-# PKG_VERSION: 1.2.1
+# PKG_VERSION: 1.2.2
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -33,8 +33,10 @@ LC_ALL=C
 
 # =================== CONFIGURATION ===================
 readonly SCRIPT_VERSION="1.2"
+# shellcheck disable=SC2034
 readonly SCRIPT_NAME="Manzolo UFW Manager"
 readonly LOG_FILE="/var/log/ufw-manager.log"
+# shellcheck disable=SC2034
 readonly CONFIG_FILE="/etc/ufw-manager/config.conf"
 readonly BACKUP_DIR="/etc/ufw-manager/backups"
 
@@ -49,9 +51,10 @@ readonly WT_MENU_HEIGHT=12
 log_action() {
     local level="$1"
     local message="$2"
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    local user=$(whoami)
-    
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local user
+    user=$(whoami)
     echo "[$timestamp] [$level] [$user] $message" >> "$LOG_FILE" 2>/dev/null || true
 }
 
@@ -184,8 +187,8 @@ execute_command() {
 # =================== BACKUP AND RESTORE ===================
 
 backup_configuration() {
-    local backup_file="$BACKUP_DIR/ufw_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
-    
+    local backup_file
+    backup_file="$BACKUP_DIR/ufw_backup_$(date +%Y%m%d_%H%M%S).tar.gz"
     show_progress "Creating UFW configuration backup..." 3
     
     if sudo tar -czf "$backup_file" /etc/ufw/ /lib/ufw/ 2>/dev/null; then
@@ -207,7 +210,8 @@ restore_configuration() {
     local i=1
     
     while IFS= read -r -d '' backup; do
-        local filename=$(basename "$backup")
+        local filename
+        filename=$(basename "$backup")
         menu_options+=("$i" "$filename")
         ((i++))
     done < <(find "$BACKUP_DIR" -name "*.tar.gz" -print0 | sort -z)
@@ -217,12 +221,14 @@ restore_configuration() {
         return
     fi
     
-    local choice=$(whiptail --title "Restore Configuration" --menu "Select backup to restore:" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT "${menu_options[@]}" 3>&1 1>&2 2>&3)
+    local choice
     
+    choice=$(whiptail --title "Restore Configuration" --menu "Select backup to restore:" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT "${menu_options[@]}" 3>&1 1>&2 2>&3)
     if [ -n "$choice" ]; then
-        local backup_file=$(find "$BACKUP_DIR" -name "*.tar.gz" | sort | sed -n "${choice}p")
-        local filename=$(basename "$backup_file")
-        
+        local backup_file
+        backup_file=$(find "$BACKUP_DIR" -name "*.tar.gz" | sort | sed -n "${choice}p")
+        local filename
+        filename=$(basename "$backup_file")
         if confirm_action "Restore from backup: $filename?\n\nThis will reset current UFW configuration!"; then
             show_progress "Restoring configuration..." 5
             sudo ufw --force reset >/dev/null 2>&1
@@ -261,7 +267,8 @@ show_detailed_status() {
 
 main_menu() {
     while true; do
-        local choice=$(whiptail --title "UFW Manager Professional v$SCRIPT_VERSION" --menu "Choose an option:" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT \
+        local choice
+        choice=$(whiptail --title "UFW Manager Professional v$SCRIPT_VERSION" --menu "Choose an option:" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT \
         "1" "View Detailed UFW Status" \
         "2" "Basic UFW Control" \
         "3" "Add Firewall Rules" \
@@ -318,7 +325,8 @@ manage_ufw_basic() {
             ufw_status="not installed"
         fi
         
-        local choice=$(whiptail --title "Basic UFW Management (Status: $ufw_status)" --menu "Choose action:" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT \
+        local choice
+        choice=$(whiptail --title "Basic UFW Management (Status: $ufw_status)" --menu "Choose action:" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT \
         "1" "Enable UFW" \
         "2" "Disable UFW" \
         "3" "Reset UFW (removes all rules)" \
@@ -337,7 +345,8 @@ manage_ufw_basic() {
                 ;;
             4) execute_command "sudo ufw reload" "Reload UFW configuration" ;;
             5) 
-                local version_info="UFW Version Information:\n$(ufw --version 2>/dev/null || echo 'Version information not available')"
+                local version_info
+                version_info="UFW Version Information:\n$(ufw --version 2>/dev/null || echo 'Version information not available')"
                 whiptail --title "UFW Version" --msgbox "$version_info" $WT_HEIGHT $WT_WIDTH
                 ;;
             6) set_default_policies ;;
@@ -347,9 +356,10 @@ manage_ufw_basic() {
 }
 
 set_default_policies() {
-    local current_policies="Current default policies:\n$(sudo ufw status verbose | grep 'Default:' || echo 'Could not retrieve current policies')"
-    
-    local choice=$(whiptail --title "Set Default Policies" --menu "$current_policies\n\nChoose policy set:" 20 $WT_WIDTH $WT_MENU_HEIGHT \
+    local current_policies
+    current_policies="Current default policies:\n$(sudo ufw status verbose | grep 'Default:' || echo 'Could not retrieve current policies')"
+    local choice
+    choice=$(whiptail --title "Set Default Policies" --menu "$current_policies\n\nChoose policy set:" 20 $WT_WIDTH $WT_MENU_HEIGHT \
     "1" "Secure (deny incoming, allow outgoing)" \
     "2" "Restrictive (deny both incoming/outgoing)" \
     "3" "Permissive (allow both - NOT recommended)" \
@@ -376,13 +386,15 @@ set_default_policies() {
 }
 
 custom_default_policies() {
-    local incoming=$(whiptail --title "Incoming Policy" --menu "Choose default policy for incoming connections:" $WT_HEIGHT $WT_WIDTH 3 \
+    local incoming
+    incoming=$(whiptail --title "Incoming Policy" --menu "Choose default policy for incoming connections:" $WT_HEIGHT $WT_WIDTH 3 \
     "allow" "Allow all incoming" \
     "deny" "Deny all incoming (recommended)" \
     "reject" "Reject all incoming" 3>&1 1>&2 2>&3)
     
     if [ -n "$incoming" ]; then
-        local outgoing=$(whiptail --title "Outgoing Policy" --menu "Choose default policy for outgoing connections:" $WT_HEIGHT $WT_WIDTH 3 \
+        local outgoing
+        outgoing=$(whiptail --title "Outgoing Policy" --menu "Choose default policy for outgoing connections:" $WT_HEIGHT $WT_WIDTH 3 \
         "allow" "Allow all outgoing (recommended)" \
         "deny" "Deny all outgoing" \
         "reject" "Reject all outgoing" 3>&1 1>&2 2>&3)
@@ -399,7 +411,8 @@ custom_default_policies() {
 
 add_rules() {
     while true; do
-        local choice=$(whiptail --title "Add Firewall Rules" --menu "Choose rule type:" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT \
+        local choice
+        choice=$(whiptail --title "Add Firewall Rules" --menu "Choose rule type:" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT \
         "1" "Allow Specific Port" \
         "2" "Block Specific Port" \
         "3" "Limit Connections (Rate Limiting)" \
@@ -428,17 +441,18 @@ add_rules() {
 
 add_port_rule() {
     local action="$1"
-    local port=$(whiptail --title "Port Number" --inputbox "Enter port number (1-65535):\n\nExamples: 22 (SSH), 80 (HTTP), 443 (HTTPS), 8080" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
-    
+    local port
+    port=$(whiptail --title "Port Number" --inputbox "Enter port number (1-65535):\n\nExamples: 22 (SSH), 80 (HTTP), 443 (HTTPS), 8080" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
     if [ -n "$port" ] && [[ $port =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
-        local protocol=$(whiptail --title "Protocol" --menu "Select protocol:" $WT_HEIGHT $WT_WIDTH 3 \
+        local protocol
+        protocol=$(whiptail --title "Protocol" --menu "Select protocol:" $WT_HEIGHT $WT_WIDTH 3 \
         "tcp" "TCP Protocol" \
         "udp" "UDP Protocol" \
         "both" "Both TCP and UDP" 3>&1 1>&2 2>&3)
         
         if [ -n "$protocol" ]; then
-            local comment=$(whiptail --title "Comment (Optional)" --inputbox "Add a comment for this rule (optional):" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
-            
+            local comment
+            comment=$(whiptail --title "Comment (Optional)" --inputbox "Add a comment for this rule (optional):" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
             local cmd=""
             case $protocol in
                 "tcp") cmd="sudo ufw $action $port/tcp" ;;
@@ -458,19 +472,20 @@ add_port_rule() {
 }
 
 add_service_rule() {
-    local service=$(whiptail --title "Service Name" --inputbox "Enter service name:\n\nCommon services:\nssh, http, https, ftp, smtp, pop3, imap\n\nService name:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
-    
+    local service
+    service=$(whiptail --title "Service Name" --inputbox "Enter service name:\n\nCommon services:\nssh, http, https, ftp, smtp, pop3, imap\n\nService name:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
     if [ -n "$service" ]; then
         execute_command "sudo ufw allow $service" "Allow service: $service"
     fi
 }
 
 add_ip_rule() {
-    local ip=$(whiptail --title "IP Address" --inputbox "Enter IP address:\n\nExample: 192.168.1.100\n\nIP Address:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
-    
+    local ip
+    ip=$(whiptail --title "IP Address" --inputbox "Enter IP address:\n\nExample: 192.168.1.100\n\nIP Address:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
     if [ -n "$ip" ] && [[ $ip =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then
         if (( ${BASH_REMATCH[1]} <= 255 && ${BASH_REMATCH[2]} <= 255 && ${BASH_REMATCH[3]} <= 255 && ${BASH_REMATCH[4]} <= 255 )); then
-            local choice=$(whiptail --title "IP Rule Type" --menu "Choose rule type for IP $ip:" $WT_HEIGHT $WT_WIDTH 4 \
+            local choice
+            choice=$(whiptail --title "IP Rule Type" --menu "Choose rule type for IP $ip:" $WT_HEIGHT $WT_WIDTH 4 \
             "1" "Allow all traffic from this IP" \
             "2" "Allow specific port from this IP" \
             "3" "Block all traffic from this IP" 3>&1 1>&2 2>&3)
@@ -478,9 +493,11 @@ add_ip_rule() {
             case $choice in
                 1) execute_command "sudo ufw allow from $ip" "Allow all traffic from $ip" ;;
                 2)
-                    local port=$(whiptail --title "Port" --inputbox "Enter port number:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+                    local port
+                    port=$(whiptail --title "Port" --inputbox "Enter port number:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
                     if [[ $port =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 )); then
-                        local proto=$(whiptail --title "Protocol" --inputbox "Protocol (tcp/udp, default: tcp):" $WT_HEIGHT $WT_WIDTH "tcp" 3>&1 1>&2 2>&3)
+                        local proto
+                        proto=$(whiptail --title "Protocol" --inputbox "Protocol (tcp/udp, default: tcp):" $WT_HEIGHT $WT_WIDTH "tcp" 3>&1 1>&2 2>&3)
                         proto=${proto:-tcp}
                         if [[ "$proto" == "tcp" || "$proto" == "udp" ]]; then
                             execute_command "sudo ufw allow proto $proto from $ip to any port $port" "Allow $ip to access port $port/$proto"
@@ -498,8 +515,8 @@ add_ip_rule() {
 }
 
 add_subnet_rule() {
-    local subnet=$(whiptail --title "Subnet" --inputbox "Enter subnet in CIDR notation:\n\nExamples:\n192.168.1.0/24 (local network)\n10.0.0.0/8 (large private network)\n\nSubnet:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
-    
+    local subnet
+    subnet=$(whiptail --title "Subnet" --inputbox "Enter subnet in CIDR notation:\n\nExamples:\n192.168.1.0/24 (local network)\n10.0.0.0/8 (large private network)\n\nSubnet:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
     if [ -n "$subnet" ] && [[ $subnet =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
         execute_command "sudo ufw allow from $subnet" "Allow traffic from subnet $subnet"
     else
@@ -508,10 +525,11 @@ add_subnet_rule() {
 }
 
 add_port_range_rule() {
-    local port_range=$(whiptail --title "Port Range" --inputbox "Enter port range:\n\nExample: 8000:8010\n\nPort Range:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
-    
+    local port_range
+    port_range=$(whiptail --title "Port Range" --inputbox "Enter port range:\n\nExample: 8000:8010\n\nPort Range:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
     if [ -n "$port_range" ] && [[ $port_range =~ ^[0-9]+:[0-9]+$ ]]; then
-        local protocol=$(whiptail --title "Protocol" --menu "Select protocol:" $WT_HEIGHT $WT_WIDTH 2 \
+        local protocol
+        protocol=$(whiptail --title "Protocol" --menu "Select protocol:" $WT_HEIGHT $WT_WIDTH 2 \
         "tcp" "TCP Protocol" \
         "udp" "UDP Protocol" 3>&1 1>&2 2>&3)
         
@@ -524,9 +542,10 @@ add_port_range_rule() {
 }
 
 add_app_profile_rule() {
-    local app_list=$(sudo ufw app list 2>/dev/null || echo "No application profiles available")
-    local app_name=$(whiptail --title "Application Profiles" --inputbox "$app_list\n\nEnter application profile name:" 20 $WT_WIDTH 3>&1 1>&2 2>&3)
-    
+    local app_list
+    app_list=$(sudo ufw app list 2>/dev/null || echo "No application profiles available")
+    local app_name
+    app_name=$(whiptail --title "Application Profiles" --inputbox "$app_list\n\nEnter application profile name:" 20 $WT_WIDTH 3>&1 1>&2 2>&3)
     if [ -n "$app_name" ] && sudo ufw app info "$app_name" >/dev/null 2>&1; then
         execute_command "sudo ufw allow '$app_name'" "Allow application profile: $app_name"
     elif [ -n "$app_name" ]; then
@@ -535,7 +554,8 @@ add_app_profile_rule() {
 }
 
 custom_rule_builder() {
-    local action=$(whiptail --title "Custom Rule Builder - Action" --menu "Select action:" $WT_HEIGHT $WT_WIDTH 4 \
+    local action
+    action=$(whiptail --title "Custom Rule Builder - Action" --menu "Select action:" $WT_HEIGHT $WT_WIDTH 4 \
     "allow" "Allow traffic" \
     "deny" "Deny traffic (silent)" \
     "reject" "Reject traffic (with response)" \
@@ -546,7 +566,8 @@ custom_rule_builder() {
     local rule_parts=("$action")
     
     # Direction
-    local direction=$(whiptail --title "Direction (Optional)" --menu "Select direction:" $WT_HEIGHT $WT_WIDTH 3 \
+    local direction
+    direction=$(whiptail --title "Direction (Optional)" --menu "Select direction:" $WT_HEIGHT $WT_WIDTH 3 \
     "in" "Incoming traffic" \
     "out" "Outgoing traffic" \
     "skip" "Skip (no direction specified)" 3>&1 1>&2 2>&3)
@@ -556,26 +577,28 @@ custom_rule_builder() {
     fi
     
     # From IP
-    local from_ip=$(whiptail --title "From IP (Optional)" --inputbox "Enter source IP or subnet (leave empty to skip):\n\nExamples:\n192.168.1.100\n192.168.1.0/24" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
-    
+    local from_ip
+    from_ip=$(whiptail --title "From IP (Optional)" --inputbox "Enter source IP or subnet (leave empty to skip):\n\nExamples:\n192.168.1.100\n192.168.1.0/24" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
     if [ -n "$from_ip" ]; then
         rule_parts+=("from" "$from_ip")
     fi
     
     # To specification
-    local to_spec=$(whiptail --title "To Specification" --inputbox "Enter destination (leave empty for 'any'):" $WT_HEIGHT $WT_WIDTH "any" 3>&1 1>&2 2>&3)
+    local to_spec
+    to_spec=$(whiptail --title "To Specification" --inputbox "Enter destination (leave empty for 'any'):" $WT_HEIGHT $WT_WIDTH "any" 3>&1 1>&2 2>&3)
     to_spec=${to_spec:-any}
     rule_parts+=("to" "$to_spec")
     
     # Port
-    local port=$(whiptail --title "Port (Optional)" --inputbox "Enter port number (leave empty to skip):" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
-    
+    local port
+    port=$(whiptail --title "Port (Optional)" --inputbox "Enter port number (leave empty to skip):" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
     if [ -n "$port" ]; then
         rule_parts+=("port" "$port")
     fi
     
     # Protocol
-    local protocol=$(whiptail --title "Protocol (Optional)" --menu "Select protocol:" $WT_HEIGHT $WT_WIDTH 4 \
+    local protocol
+    protocol=$(whiptail --title "Protocol (Optional)" --menu "Select protocol:" $WT_HEIGHT $WT_WIDTH 4 \
     "tcp" "TCP Protocol" \
     "udp" "UDP Protocol" \
     "icmp" "ICMP Protocol" \
@@ -586,8 +609,8 @@ custom_rule_builder() {
     fi
     
     # Comment
-    local comment=$(whiptail --title "Comment (Optional)" --inputbox "Add a comment for this rule:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
-    
+    local comment
+    comment=$(whiptail --title "Comment (Optional)" --inputbox "Add a comment for this rule:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
     if [ -n "$comment" ]; then
         rule_parts+=("comment" "\"$comment\"")
     fi
@@ -603,7 +626,8 @@ custom_rule_builder() {
 
 remove_rules() {
     while true; do
-        local choice=$(whiptail --title "Remove Firewall Rules" --menu "Choose removal method:" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT \
+        local choice
+        choice=$(whiptail --title "Remove Firewall Rules" --menu "Choose removal method:" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT \
         "1" "Remove by Rule Number" \
         "2" "Remove by Port" \
         "3" "Remove by Service Name" \
@@ -629,16 +653,19 @@ remove_rules() {
 }
 
 remove_by_number() {
-    local rules_output=$(sudo ufw status numbered 2>/dev/null)
+    local rules_output
+    rules_output=$(sudo ufw status numbered 2>/dev/null)
     if ! echo "$rules_output" | grep -q "^\["; then
         show_message "No Rules" "No numbered rules found" "error"
         return
     fi
     
-    local rule_num=$(whiptail --title "Rule Number" --inputbox "Current numbered rules:\n\n$rules_output\n\nEnter rule number to remove:" 25 $WT_WIDTH 3>&1 1>&2 2>&3)
+    local rule_num
     
+    rule_num=$(whiptail --title "Rule Number" --inputbox "Current numbered rules:\n\n$rules_output\n\nEnter rule number to remove:" 25 $WT_WIDTH 3>&1 1>&2 2>&3)
     if [ -n "$rule_num" ] && [[ $rule_num =~ ^[0-9]+$ ]]; then
-        local rule_line=$(echo "$rules_output" | grep "^\[ *$rule_num\]")
+        local rule_line
+        rule_line=$(echo "$rules_output" | grep "^\[ *$rule_num\]")
         if [ -n "$rule_line" ]; then
             if confirm_action "Remove this rule?\n\n$rule_line"; then
                 execute_command "sudo ufw delete $rule_num" "Remove rule number $rule_num" true
@@ -652,10 +679,11 @@ remove_by_number() {
 }
 
 remove_by_port() {
-    local port=$(whiptail --title "Port Number" --inputbox "Enter port number to remove rules for:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
-    
+    local port
+    port=$(whiptail --title "Port Number" --inputbox "Enter port number to remove rules for:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
     if [ -n "$port" ] && [[ $port =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then
-        local choice=$(whiptail --title "Remove Port Rules" --menu "Select rule type to remove for port $port:" $WT_HEIGHT $WT_WIDTH 6 \
+        local choice
+        choice=$(whiptail --title "Remove Port Rules" --menu "Select rule type to remove for port $port:" $WT_HEIGHT $WT_WIDTH 6 \
         "1" "Remove TCP allow rule" \
         "2" "Remove UDP allow rule" \
         "3" "Remove both TCP and UDP allow rules" \
@@ -684,16 +712,16 @@ remove_by_port() {
 }
 
 remove_by_service() {
-    local service=$(whiptail --title "Service Name" --inputbox "Enter service name to remove:\n\nExamples: ssh, http, https, ftp" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
-    
+    local service
+    service=$(whiptail --title "Service Name" --inputbox "Enter service name to remove:\n\nExamples: ssh, http, https, ftp" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
     if [ -n "$service" ]; then
         execute_command "sudo ufw delete allow $service" "Remove rule for service $service"
     fi
 }
 
 remove_by_ip() {
-    local ip=$(whiptail --title "IP Address" --inputbox "Enter IP address to remove rules for:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
-    
+    local ip
+    ip=$(whiptail --title "IP Address" --inputbox "Enter IP address to remove rules for:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
     if [ -n "$ip" ] && [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
         execute_command "sudo ufw delete allow from $ip" "Remove rules for IP $ip"
     else
@@ -702,29 +730,30 @@ remove_by_ip() {
 }
 
 remove_multiple_rules() {
-    local rules_output=$(sudo ufw status numbered 2>/dev/null)
+    local rules_output
+    rules_output=$(sudo ufw status numbered 2>/dev/null)
     if ! echo "$rules_output" | grep -q "^\["; then
         show_message "No Rules" "No numbered rules found" "error"
         return
     fi
     
-    local rule_numbers=$(whiptail --title "Multiple Rule Removal" --inputbox "Current rules:\n\n$rules_output\n\nEnter rule numbers separated by spaces (e.g., 1 3 5):" 25 100 3>&1 1>&2 2>&3)
+    local rule_numbers
     
+    rule_numbers=$(whiptail --title "Multiple Rule Removal" --inputbox "Current rules:\n\n$rules_output\n\nEnter rule numbers separated by spaces (e.g., 1 3 5):" 25 100 3>&1 1>&2 2>&3)
     if [ -n "$rule_numbers" ]; then
         local -a rules
         read -ra rules <<< "$rule_numbers"
         
         # Sort in descending order
-        local IFS=$'\n'
-        rules=($(sort -nr <<<"${rules[*]}"))
-        unset IFS
+        mapfile -t rules < <(printf '%s\n' "${rules[@]}" | sort -nr)
         
         local valid_rules=()
         local preview_text="Rules to be removed:\n\n"
         
         for rule in "${rules[@]}"; do
             if [[ $rule =~ ^[0-9]+$ ]]; then
-                local rule_line=$(echo "$rules_output" | grep "^\[ *$rule\]")
+                local rule_line
+                rule_line=$(echo "$rules_output" | grep "^\[ *$rule\]")
                 if [ -n "$rule_line" ]; then
                     valid_rules+=("$rule")
                     preview_text+="$rule_line\n"
@@ -824,7 +853,8 @@ show_advanced_examples() {
 }
 
 bulk_rule_management() {
-    local choice=$(whiptail --title "Bulk Rule Management" --menu "Choose bulk operation:" $WT_HEIGHT $WT_WIDTH 4 \
+    local choice
+    choice=$(whiptail --title "Bulk Rule Management" --menu "Choose bulk operation:" $WT_HEIGHT $WT_WIDTH 4 \
     "1" "Import rules from file" \
     "2" "Export current rules to file" \
     "3" "Apply predefined rule set" \
@@ -832,7 +862,8 @@ bulk_rule_management() {
     
     case $choice in
         1)
-            local file_path=$(whiptail --title "Import Rules" --inputbox "Enter file path containing UFW rules:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+            local file_path
+            file_path=$(whiptail --title "Import Rules" --inputbox "Enter file path containing UFW rules:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
             if [ -n "$file_path" ] && [ -f "$file_path" ]; then
                 if confirm_action "Import rules from $file_path?"; then
                     local count=0
@@ -849,8 +880,9 @@ bulk_rule_management() {
             fi
             ;;
         2)
-            local export_file="/tmp/ufw_rules_$(date +%Y%m%d_%H%M%S).txt"
-            sudo ufw status numbered > "$export_file"
+            local export_file
+            export_file="/tmp/ufw_rules_$(date +%Y%m%d_%H%M%S).txt"
+            sudo ufw status numbered | tee "$export_file" >/dev/null
             show_message "Export Complete" "Rules exported to:\n$export_file" "success"
             ;;
         3)
@@ -860,7 +892,8 @@ bulk_rule_management() {
 }
 
 predefined_configurations() {
-    local choice=$(whiptail --title "Predefined Rule Sets" --menu "Choose configuration:" $WT_HEIGHT $WT_WIDTH 6 \
+    local choice
+    choice=$(whiptail --title "Predefined Rule Sets" --menu "Choose configuration:" $WT_HEIGHT $WT_WIDTH 6 \
     "1" "Web Server (HTTP/HTTPS + SSH)" \
     "2" "Database Server (MySQL/PostgreSQL + SSH)" \
     "3" "Mail Server (SMTP/POP3/IMAP + SSH)" \
@@ -931,7 +964,8 @@ predefined_configurations() {
 }
 
 gaming_server_config() {
-    local choice=$(whiptail --title "Gaming Server Configuration" --menu "Choose gaming server type:" $WT_HEIGHT $WT_WIDTH 3 \
+    local choice
+    choice=$(whiptail --title "Gaming Server Configuration" --menu "Choose gaming server type:" $WT_HEIGHT $WT_WIDTH 3 \
     "1" "Steam Server" \
     "2" "Minecraft Server" \
     "3" "Custom Gaming Ports" 3>&1 1>&2 2>&3)
@@ -951,7 +985,8 @@ gaming_server_config() {
             fi
             ;;
         3)
-            local port_range=$(whiptail --title "Custom Gaming Ports" --inputbox "Enter custom port range (e.g., 7777:7784):" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+            local port_range
+            port_range=$(whiptail --title "Custom Gaming Ports" --inputbox "Enter custom port range (e.g., 7777:7784):" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
             if [ -n "$port_range" ]; then
                 sudo ufw allow $port_range comment 'Custom Gaming'
                 show_message "Custom Gaming" "Custom gaming ports configured" "success"
@@ -965,7 +1000,8 @@ real_time_monitoring() {
 }
 
 log_management() {
-    local choice=$(whiptail --title "Log Management" --menu "Choose log operation:" $WT_HEIGHT $WT_WIDTH 6 \
+    local choice
+    choice=$(whiptail --title "Log Management" --menu "Choose log operation:" $WT_HEIGHT $WT_WIDTH 6 \
     "1" "View recent UFW logs" \
     "2" "Search logs by IP" \
     "3" "Search logs by port" \
@@ -975,20 +1011,25 @@ log_management() {
     
     case $choice in
         1)
-            local recent_logs=$(sudo tail -20 /var/log/ufw.log 2>/dev/null || echo "No logs found")
+            local recent_logs
+            recent_logs=$(sudo tail -20 /var/log/ufw.log 2>/dev/null || echo "No logs found")
             whiptail --title "Recent UFW Logs" --scrolltext --msgbox "$recent_logs" 25 100
             ;;
         2)
-            local search_ip=$(whiptail --title "Search by IP" --inputbox "Enter IP address to search for:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+            local search_ip
+            search_ip=$(whiptail --title "Search by IP" --inputbox "Enter IP address to search for:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
             if [ -n "$search_ip" ]; then
-                local results=$(grep "$search_ip" /var/log/ufw.log 2>/dev/null | tail -10 || echo "No matches found")
+                local results
+                results=$(grep "$search_ip" /var/log/ufw.log 2>/dev/null | tail -10 || echo "No matches found")
                 whiptail --title "Search Results for $search_ip" --scrolltext --msgbox "$results" 25 100
             fi
             ;;
         3)
-            local search_port=$(whiptail --title "Search by Port" --inputbox "Enter port number to search for:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
+            local search_port
+            search_port=$(whiptail --title "Search by Port" --inputbox "Enter port number to search for:" $WT_HEIGHT $WT_WIDTH 3>&1 1>&2 2>&3)
             if [ -n "$search_port" ]; then
-                local results=$(grep "DPT=$search_port" /var/log/ufw.log 2>/dev/null | tail -10 || echo "No matches found")
+                local results
+                results=$(grep "DPT=$search_port" /var/log/ufw.log 2>/dev/null | tail -10 || echo "No matches found")
                 whiptail --title "Search Results for Port $search_port" --scrolltext --msgbox "$results" 25 100
             fi
             ;;
@@ -1000,7 +1041,8 @@ log_management() {
             whiptail --title "Log Statistics" --scrolltext --msgbox "$stats" $WT_HEIGHT $WT_WIDTH
             ;;
         5)
-            local export_file="/tmp/ufw_logs_$(date +%Y%m%d_%H%M%S).txt"
+            local export_file
+            export_file="/tmp/ufw_logs_$(date +%Y%m%d_%H%M%S).txt"
             sudo cp /var/log/ufw.log "$export_file" 2>/dev/null
             show_message "Logs Exported" "Logs exported to:\n$export_file" "success"
             ;;
@@ -1011,9 +1053,10 @@ log_management() {
 }
 
 configure_logging() {
-    local current_logging=$(sudo ufw status verbose | grep "Logging:" || echo "Logging: unknown")
-    
-    local choice=$(whiptail --title "Configure Logging" --menu "$current_logging\n\nChoose logging option:" $WT_HEIGHT $WT_WIDTH 5 \
+    local current_logging
+    current_logging=$(sudo ufw status verbose | grep "Logging:" || echo "Logging: unknown")
+    local choice
+    choice=$(whiptail --title "Configure Logging" --menu "$current_logging\n\nChoose logging option:" $WT_HEIGHT $WT_WIDTH 5 \
     "1" "Enable logging" \
     "2" "Disable logging" \
     "3" "Set logging level - Low" \
@@ -1042,9 +1085,11 @@ security_audit() {
     fi
     
     # Check default policies
-    local default_in=$(sudo ufw status verbose | grep "Default:" | awk '{print $2}')
-    local default_out=$(sudo ufw status verbose | grep "Default:" | awk '{print $4}')
-    
+    local default_in
+    default_in=$(sudo ufw status verbose | grep "Default:" | awk '{print $2}')
+    local default_out
+    # shellcheck disable=SC2034
+    default_out=$(sudo ufw status verbose | grep "Default:" | awk '{print $4}')
     if [ "$default_in" = "deny" ]; then
         audit_results+="[OK] Default incoming policy is secure (deny)\n"
     else

@@ -28,10 +28,7 @@ jobs:
       - name: Install ShellCheck
         run: sudo apt-get install -y shellcheck
 
-      - name: Run ShellCheck on every mapped script
-        # Severity `error` is the bloking floor (163 pre-existing warnings
-        # across 12 scripts make `warning` unworkable today). Tighten to
-        # `-S warning` once the warning debt is paid down per script.
+      - name: Run ShellCheck on every mapped script (-S warning)
         run: |
           failed=0
           while IFS= read -r line; do
@@ -39,16 +36,10 @@ jobs:
             script_path="${line%%#*}"
             command_name="${line#*#}"
             echo "::group::shellcheck ${command_name} (${script_path})"
-            if ! shellcheck -S error -x "$script_path"; then
+            if ! shellcheck -S warning -x "$script_path"; then
               failed=1
-              echo "::error file=${script_path}::shellcheck errors above"
+              echo "::error file=${script_path}::shellcheck warnings/errors above"
             fi
-            # Informational pass: surface warnings as GitHub annotations
-            # without failing the job, so they're visible in the PR diff.
-            shellcheck -S warning -x -f gcc "$script_path" 2>&1 \
-              | awk -F: -v f="$script_path" '
-                  /warning:/ { printf "::warning file=%s,line=%s::%s\n", f, $2, $0 }' \
-              || true
             echo "::endgroup::"
           done < .manzolomap
           exit "$failed"

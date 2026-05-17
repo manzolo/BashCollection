@@ -32,20 +32,24 @@
 set -euo pipefail  # Exit on error, undefined vars, pipe failures
 
 # Global configuration
-readonly SCRIPT_NAME="$(basename "$0")"
+SCRIPT_NAME="$(basename "$0")"
+readonly SCRIPT_NAME
 readonly SCRIPT_VERSION="2.0"
 readonly LOG_DIR="/tmp/${SCRIPT_NAME%.*}_logs"
-readonly LOG_FILE="${LOG_DIR}/monitor_$(date +%Y%m%d_%H%M%S).log"
+LOG_FILE="${LOG_DIR}/monitor_$(date +%Y%m%d_%H%M%S).log"
+readonly LOG_FILE
 readonly CONFIG_FILE="$HOME/.netmonitor.conf"
 readonly TEMP_DIR="/tmp/${SCRIPT_NAME%.*}_$$"
 
-# Color codes for output
+# Color codes for output (some unused — palette kept for future use)
 readonly RED='\033[0;31m'
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
 readonly BLUE='\033[0;34m'
+# shellcheck disable=SC2034
 readonly MAGENTA='\033[0;35m'
 readonly CYAN='\033[0;36m'
+# shellcheck disable=SC2034
 readonly WHITE='\033[1;37m'
 readonly NC='\033[0m' # No Color
 
@@ -74,7 +78,8 @@ cleanup() {
 log_message() {
     local level="$1"
     local message="$2"
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local timestamp
+    timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
 }
 
@@ -162,9 +167,10 @@ show_ports_lsof() {
         "6" "Export results to file" 2> "$temp_file"; then
         return 0
     fi
-    
-    local choice=$(cat "$temp_file")
-    
+
+    local choice
+    choice=$(cat "$temp_file")
+
     {
         print_color "$CYAN" "=== lsof Port Analysis ==="
         echo "Timestamp: $(date)"
@@ -232,7 +238,8 @@ show_ports_lsof() {
                 fi
                 ;;
             6)
-                local export_file="$LOG_DIR/ports_lsof_$(date +%Y%m%d_%H%M%S).txt"
+                local export_file
+                export_file="$LOG_DIR/ports_lsof_$(date +%Y%m%d_%H%M%S).txt"
                 print_color "$YELLOW" "Exporting complete port analysis to: $export_file"
                 {
                     echo "Complete lsof port analysis - $(date)"
@@ -733,8 +740,9 @@ manage_configuration() {
         "2" "Reset to defaults" \
         "3" "View log directory" \
         "4" "Clear old logs" 2> "$temp_file"; then
-        
-        local choice=$(cat "$temp_file")
+
+        local choice
+        choice=$(cat "$temp_file")
         
         case $choice in
             1)
@@ -791,7 +799,8 @@ view_logs() {
     local temp_file="$TEMP_DIR/log_choice"
     
     if whiptail --title "Log Viewer" --menu "Select log file:" 20 70 10 "${log_files[@]}" 2> "$temp_file"; then
-        local selected_log=$(cat "$temp_file")
+        local selected_log
+        selected_log=$(cat "$temp_file")
         local log_path="$LOG_DIR/$selected_log"
         
         if [[ -r "$log_path" ]]; then
@@ -819,8 +828,9 @@ show_main_menu() {
             "8" "Configuration - Manage settings" \
             "9" "Help - Usage information" \
             "10" "Exit - Quit application" 2> "$temp_file"; then
-            
-            local choice=$(cat "$temp_file")
+
+            local choice
+            choice=$(cat "$temp_file")
             
             case $choice in
                 1) clear; show_ports_lsof ;;

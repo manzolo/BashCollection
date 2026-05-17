@@ -43,40 +43,59 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Configuration
+# Configuration and global state. Several variables below are consumed
+# by the modules under ventoy-usb-test/*.sh that we source dynamically;
+# they appear unused when this file is linted in isolation, so each
+# such var gets an explicit `disable=SC2034` annotation.
 readonly SCRIPT_NAME="USB Boot Tester"
 readonly VERSION="2.1.4"
+# shellcheck disable=SC2034
 readonly LOG_DIR="/tmp/ventoy_test_logs"
+# shellcheck disable=SC2034
 readonly CONFIG_FILE="$HOME/.ventoy_test_config"
 # Determine the directory where the script is located (resolving symlinks)
-readonly SCRIPT_PATH="$(readlink -f "$0")"
-readonly SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+SCRIPT_PATH="$(readlink -f "$0")"
+readonly SCRIPT_PATH
+SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+readonly SCRIPT_DIR
 
-# Global variables with default values
+# Global variables with default values (consumed by sourced modules)
 MEMORY="2048"
 CORES="4"
+# shellcheck disable=SC2034
 THREADS="1"
+# shellcheck disable=SC2034
 SOCKETS="1"
+# shellcheck disable=SC2034
 MACHINE_TYPE="q35"
 DEFAULT_BIOS="/usr/share/OVMF/OVMF.fd"
 DISK=""
+# shellcheck disable=SC2034
 FORMAT="raw"
 BIOS_MODE="uefi"
 VGA_MODE="virtio"
+# shellcheck disable=SC2034
 NETWORK=false
+# shellcheck disable=SC2034
 SOUND=false
 USB_VERSION="3.0"
 
-# Colors for messages
+# Colors for messages (consumed by sourced modules)
+# shellcheck disable=SC2034
 readonly RED='\033[0;31m'
+# shellcheck disable=SC2034
 readonly GREEN='\033[0;32m'
+# shellcheck disable=SC2034
 readonly YELLOW='\033[1;33m'
+# shellcheck disable=SC2034
 readonly BLUE='\033[0;34m'
+# shellcheck disable=SC2034
 readonly NC='\033[0m'
 
 # Scan and "source" .sh file recursive.
 for script in "$SCRIPT_DIR/ventoy-usb-test/"*.sh; do
     if [ -f "$script" ]; then
+        # shellcheck disable=SC1090  # dynamic module loader
         source "$script"
     else
         echo "Error: file script $script not found."
@@ -92,7 +111,8 @@ main_menu() {
         local disk_info=""
         if [[ -n "$DISK" ]]; then
             if [[ -b "$DISK" ]]; then
-                local size=$(lsblk -d -o SIZE "$DISK" 2>/dev/null | tail -1 || echo "?")
+                local size
+                size=$(lsblk -d -o SIZE "$DISK" 2>/dev/null | tail -1 || echo "?")
                 disk_info="$(basename "$DISK") (${size})"
             else
                 disk_info="$(basename "$DISK")"

@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: manzolo-backup-home
-# PKG_VERSION: 2.1.1
+# PKG_VERSION: 2.1.2
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -51,9 +51,11 @@ declare -r STATS="📊"
 # ═══════════════════════════════════════════════════════════════════════════════
 # 📋 CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
-declare -r SCRIPT_NAME="$(basename "$0")"
+SCRIPT_NAME="$(basename "$0")"
+declare -r SCRIPT_NAME
 declare -r SCRIPT_VERSION="2.1"
-declare -r SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+declare -r SCRIPT_DIR
 declare -r LOG_DIR="/var/log/backup"
 declare -r CONFIG_FILE="$SCRIPT_DIR/backup.conf"
 
@@ -76,6 +78,7 @@ declare DRY_RUN=false
 declare VERBOSE=false
 declare QUIET=false
 declare FORCE=false
+# shellcheck disable=SC2034  # --name flag declared but not yet wired into backup naming (TODO)
 declare BACKUP_NAME=""
 declare -a BACKUP_DIRS=("/etc" "/opt")
 declare -a FAILED_BACKUPS=()
@@ -89,7 +92,8 @@ declare -a SUCCESS_BACKUPS=()
 log() {
     local level="$1"
     local message="$2"
-    local timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
+    local timestamp
+    timestamp="$(date '+%Y-%m-%d %H:%M:%S')"
     
     case "$level" in
         "ERROR")   echo -e "${RED}${ERROR} [${timestamp}] ERROR: ${message}${NC}" ;;
@@ -116,8 +120,8 @@ show_progress() {
     
     # Clear the line and show progress with current directory
     printf "\r\033[K${CYAN}["
-    printf "%*s" "$completed" | tr ' ' '='
-    printf "%*s" "$remaining" | tr ' ' '-'
+    printf "%*s" "$completed" "" | tr ' ' '='
+    printf "%*s" "$remaining" "" | tr ' ' '-'
     printf "] %d%% (%d/%d) ${WHITE}%s${NC}" "$percentage" "$current" "$total" "$(basename "$source_dir")"
 }
 
@@ -133,8 +137,9 @@ print_header() {
 
 # System information display - fixed alignment
 show_system_info() {
-    local hostname_str="$(hostname)"
-    local datetime_str="$(date '+%Y-%m-%d %H:%M:%S %Z')"
+    local hostname_str datetime_str
+    hostname_str="$(hostname)"
+    datetime_str="$(date '+%Y-%m-%d %H:%M:%S %Z')"
     
     echo -e "${CYAN}┌─────────────────────────────────────────────────────────────────────────────┐${NC}"
     echo -e "${CYAN}│${NC} ${ROCKET} ${WHITE}SYSTEM INFORMATION${NC}                                                     ${CYAN}│${NC}"
@@ -216,7 +221,7 @@ check_prerequisites() {
     # Check if running as root
     if [ "$EUID" -ne 0 ]; then
         log "ERROR" "This script must be run with sudo to handle root files"
-        echo -e "${YELLOW}Usage:${NC} sudo $0 $*"
+        echo -e "${YELLOW}Usage:${NC} sudo $0 $*"  # $* echoes the original argv forwarded by main
         exit 1
     fi
     
@@ -471,7 +476,8 @@ verify_backup() {
             fi
             
             # 3. Check for rsync errors in log file
-            local log_file="$backup_dir/../backup_$(date +%Y%m%d)*.log"
+            local log_file
+            log_file="$backup_dir/../backup_$(date +%Y%m%d)*.log"
             if ls $log_file 2>/dev/null | head -1 | xargs grep -qi "error\|failed\|permission denied" 2>/dev/null; then
                 warnings+=("Rsync reported errors (check log file)")
                 issues=$((issues + 1))
@@ -538,7 +544,6 @@ verify_backup() {
 
 # Cleanup old backups
 cleanup_old_backups() {
-    local base_dir="$1"
     local max_backups="${CONFIG[max_backups]}"
     
     echo -e "  ${GRAY}${INFO} Cleaning up old backups (keeping $max_backups)${NC}"
@@ -684,6 +689,7 @@ main() {
                 shift
                 ;;
             --name)
+                # shellcheck disable=SC2034  # --name flag accepted but not yet wired into backup naming (TODO)
                 BACKUP_NAME="$2"
                 shift 2
                 ;;
@@ -713,7 +719,7 @@ main() {
     fi
     
     # Initialize
-    check_prerequisites
+    check_prerequisites "$@"
     load_config
     [ -z "$REAL_USER" ] && get_real_user
     
@@ -815,7 +821,8 @@ main() {
         [ "$base_name" = "" ] && base_name="root"
         
         local dest_dir="$DEST_DISK/backup_${base_name}"
-        local log_file="$dest_dir/backup_$(date +%Y%m%d_%H%M%S).log"
+        local log_file
+        log_file="$dest_dir/backup_$(date +%Y%m%d_%H%M%S).log"
         
         echo -e "${BLUE}│${NC} ${DISK} ${GRAY}Destination:${NC} $dest_dir"
         echo -e "${BLUE}╰─────────────────────────────────────────────────────────────────────────────╯${NC}"
@@ -827,7 +834,7 @@ main() {
         perform_backup "$source_dir" "$dest_dir" "$log_file" "$DRY_RUN" "$rsync_options" "$exclude_file"
         
         # Cleanup old backups
-        [ "$DRY_RUN" = false ] && cleanup_old_backups "$dest_dir"
+        [ "$DRY_RUN" = false ] && cleanup_old_backups
         
         # Show completion for this directory
         echo -e "${GREEN}└─ ${SUCCESS} Backup completed for ${base_name_dir}${NC}\n"
