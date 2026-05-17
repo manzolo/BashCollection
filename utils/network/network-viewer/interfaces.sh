@@ -94,7 +94,7 @@ show_interfaces() {
             addr=$(echo "$aline" | awk '{print $4}')
             [[ -n "$addr" ]] && addrs+=("$addr")
         done < <(run_cmd ip -o addr show dev "$iface" 2>/dev/null \
-                 | awk -v ipv6="$SHOW_IPV6" '($3=="inet" || ipv6=="true")')
+                 | awk -v ipv6="${SHOW_IPV6:-false}" '($3=="inet" || ipv6=="true")')
 
         if [[ ${#addrs[@]} -eq 0 ]]; then
             # Interface exists but has no addresses matching the current filter

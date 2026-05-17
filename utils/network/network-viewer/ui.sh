@@ -58,7 +58,7 @@ debug_status() {
 }
 
 ipv6_status() {
-    if [[ "$SHOW_IPV6" == "true" ]]; then echo "ON"; else echo "OFF"; fi
+    if [[ "${SHOW_IPV6:-false}" == "true" ]]; then echo "ON"; else echo "OFF"; fi
 }
 
 toggle_debug() {
@@ -73,7 +73,7 @@ toggle_debug() {
 }
 
 toggle_ipv6() {
-    if [[ "$SHOW_IPV6" == "true" ]]; then
+    if [[ "${SHOW_IPV6:-false}" == "true" ]]; then
         SHOW_IPV6=false
         msg_info "IPv6 display disabled."
     else

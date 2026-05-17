@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: network-viewer
-# PKG_VERSION: 1.0.4
+# PKG_VERSION: 1.0.5
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -45,6 +45,7 @@ msg_err()  { echo -e "  ${RED}[x]${NC} $*" >&2; }
 
 # --- Global state ---
 DEBUG=false
+SHOW_IPV6=false
 
 # Open fd 3 as a persistent debug output channel pointing to the terminal.
 # Unlike stderr, fd 3 is never redirected by callers (e.g. "$(run_cmd ... 2>/dev/null)"),

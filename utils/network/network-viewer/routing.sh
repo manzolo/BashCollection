@@ -78,7 +78,7 @@ _print_route_table() {
 show_routing() {
     print_header "Routing Table" $_RT_SEP
     _print_route_table "inet"  "IPv4 Routes"
-    [[ "$SHOW_IPV6" == "true" ]] && _print_route_table "inet6" "IPv6 Routes" || true
+    [[ "${SHOW_IPV6:-false}" == "true" ]] && _print_route_table "inet6" "IPv6 Routes" || true
 }
 
 # Column widths: network=26, iface=16, proto=8 → total 54
