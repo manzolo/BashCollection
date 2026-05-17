@@ -159,5 +159,12 @@ Various system administration and specialized tools.
 ## Contributing
 Feel free to fork, add scripts, or submit PRs. Ensure scripts are well-commented and safe.
 
+Every PR runs through a GitHub Actions matrix that builds, installs and smoke-tests each mapped command independently (`pkg (<name>)` checks). New scripts are expected to:
+- carry a complete `PKG_*` header (see existing scripts as a template),
+- be listed in `.manzolomap` and (optionally) `.github/smoke-tests.yaml`,
+- support `-h` / `--help` and exit `0` — the CI smoke step invokes it.
+
+Developer-facing notes (CI layout, functional test fixtures under `tests/<pkg>/`, ShellCheck baseline, the `build` sub-command, etc.) live in [CLAUDE.md](CLAUDE.md).
+
 ## License
 MIT License - Free to use/modify/distribute. No warranty provided.

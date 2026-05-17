@@ -41,7 +41,19 @@ sudo ./menage_scripts.sh uninstall
 
 # Update from git and reinstall
 sudo ./menage_scripts.sh update
+
+# Build .deb for one package without publishing/deploying (used by CI)
+./menage_scripts.sh build <pkg-name>          # prints .deb path on stdout
+
+# Build + upload to remote APT repo
+./menage_scripts.sh publish <pkg-name>
 ```
+
+**Heads-up on `publish`**: its lookup includes a substring fallback
+(`*$name*`), so any directory whose path contains the package name can be
+matched accidentally (e.g. `tests/dmarc-report/test.sh` would shadow
+`utils/email/dmarc-report.sh`). When adding directories that mirror a
+package name, list them in `.manzoloignore`.
 
 ## Code Architecture
 
@@ -119,10 +131,13 @@ qemu-nbd --disconnect /dev/nbd0
 ### Adding a New Script
 
 1. Create the script in the appropriate category directory (e.g., `utils/mynewscript/mynewscript.sh`)
-2. Make it executable: `chmod +x utils/mynewscript/mynewscript.sh`
-3. If it has helper modules, create a subdirectory: `utils/mynewscript/mynewscript/`
-4. Optionally add to `.manzoloignore` to exclude or `.manzolomap` to rename
-5. Test with `sudo ./menage_scripts.sh install --debug`
+2. Add the standard `PKG_NAME` / `PKG_VERSION` / `PKG_DESCRIPTION` / `PKG_DEPENDS` header (required — CI's `pkg-headers` job rejects mapped scripts without them)
+3. Make it executable: `chmod +x utils/mynewscript/mynewscript.sh`
+4. If it has helper modules, create a subdirectory: `utils/mynewscript/mynewscript/`
+5. Ensure the script supports `-h` / `--help` and exits 0 (CI smoke matrix invokes `--help` on every installed wrapper — see "Continuous Integration" below)
+6. Optionally add to `.manzoloignore` to exclude or `.manzolomap` to rename
+7. Add the package entry to `.github/smoke-tests.yaml` (default `cmd: ["--help"]` is fine for most scripts; use `skip: "<reason>"` only for things that genuinely can't be smoke-tested)
+8. Test with `sudo ./menage_scripts.sh install --debug`
 
 ### Testing Scripts Without Installation
 
@@ -133,6 +148,60 @@ sudo ./path/to/script.sh
 # Or use the manager's run command
 ./menage_scripts.sh run scriptname
 ```
+
+## Continuous Integration
+
+CI lives in `.github/workflows/ci.yml`. Six job classes run on every push to `main` and every PR:
+
+- **`bash-syntax`** — `bash -n` on every `*.sh`
+- **`shellcheck`** — `-S warning` on every script in `.manzolomap` (failing floor; all currently warning-clean)
+- **`pkg-headers`** — validates required `PKG_*` fields
+- **`discover`** — emits the matrix list from `.manzolomap` as JSON
+- **`pkg` (matrix, `fail-fast: false`)** — one job per mapped command. Each runs: build .deb → `sudo apt install ./<deb>` (resolves deps) → smoke test (cmd from `.github/smoke-tests.yaml`) → optional functional test
+- **`ollama-backend-tests`** — Docker-based mock backend for the ollama-tools trio
+
+Failures surface as discrete GitHub checks (`pkg (git-info)`, `pkg (mfirewall)`, ...) so you can see at a glance which package broke.
+
+### Smoke-test configuration
+
+`.github/smoke-tests.yaml` is the source of truth for per-package smoke behaviour:
+
+```yaml
+git-info:
+  cmd: ["--help"]                  # default if omitted
+
+share-manager:
+  cmd: ["info"]                    # non-default invocation
+
+dmarc-report:
+  cmd: ["--help"]
+  apt_deps: [libxml2-utils]        # extras not declared in PKG_DEPENDS
+  script: tests/dmarc-report/test.sh   # functional test (see below)
+
+some-pkg:
+  skip: "reason — shows as ⊘ in the job summary"
+```
+
+### Functional tests
+
+Live under `tests/<pkg>/`:
+
+```
+tests/
+  <pkg>/
+    test.sh              # executable; receives PKG_BIN = path to installed wrapper
+    fixtures/            # synthetic inputs (XML samples, fake dirs, etc.)
+```
+
+The test script is invoked by `.github/scripts/smoke-test-pkg.sh` after the basic `cmd` succeeds. It receives `$PKG_BIN` pointing at the installed wrapper (usually `/usr/local/bin/<pkg>`) and must exit 0 on success. **`tests/*` is intentionally in `.manzoloignore`** — these are CI fixtures, not publishable scripts.
+
+### CI helper scripts
+
+Under `.github/scripts/`:
+
+- `discover-packages.sh` — emits the JSON matrix list; runnable locally for debug
+- `build-pkg.sh` — wraps `./menage_scripts.sh build <name>`; reserves stdout for the .deb path, log goes to stderr (the workflow captures stdout into `$GITHUB_OUTPUT`)
+- `smoke-test-pkg.sh` — runs the YAML-configured smoke for a single package
 
 ### Common Dependencies
 
