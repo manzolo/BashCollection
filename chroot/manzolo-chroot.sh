@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: manzolo-chroot
-# PKG_VERSION: 3.0.1
+# PKG_VERSION: 3.0.2
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -41,8 +41,8 @@ SCRIPT_NAME=$(basename "$0")
 readonly SCRIPT_NAME
 SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
 readonly SCRIPT_DIR
-readonly LOG_FILE="/tmp/${SCRIPT_NAME%.sh}.log"
-readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.sh}.lock"
+readonly LOG_FILE="/tmp/${SCRIPT_NAME%.sh}.${UID:-0}.log"
+readonly LOCK_FILE="/tmp/${SCRIPT_NAME%.sh}.${UID:-0}.lock"
 # shellcheck disable=SC2034
 readonly CONFIG_FILE="$SCRIPT_DIR/chroot.conf"
 # shellcheck disable=SC2034
@@ -160,7 +160,7 @@ main() {
         fi
     fi
     
-    echo $ > "$LOCK_FILE"
+    echo $$ > "$LOCK_FILE"
     
     # Set trap for cleanup
     trap cleanup EXIT INT TERM

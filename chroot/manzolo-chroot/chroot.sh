@@ -352,10 +352,38 @@ enter_chroot() {
     # Entra nel chroot - SENZA usare run_with_privileges per evitare buffering
     if [[ -n "${CHROOT_USER:-}" ]] && [[ "$CHROOT_USER" != "root" ]]; then
         log "Entering chroot as user $CHROOT_USER"
-        if [[ ${#chroot_env_vars[@]} -gt 0 ]]; then
-            sudo chroot "$ROOT_MOUNT" su - "$CHROOT_USER" -c "env ${chroot_env_vars[*]} $chosen_shell"
+
+        local passwd_entry chroot_home use_login_shell=true runtime_home su_command
+        passwd_entry=$(awk -F: -v user="$CHROOT_USER" '$1 == user { print; exit }' "$ROOT_MOUNT/etc/passwd" 2>/dev/null || true)
+
+        if [[ -n "$passwd_entry" ]]; then
+            chroot_home=$(awk -F: '{ print $6 }' <<< "$passwd_entry")
         else
-            sudo chroot "$ROOT_MOUNT" su - "$CHROOT_USER" -c "$chosen_shell"
+            warning "User $CHROOT_USER not found in chroot passwd database; su may fail"
+            chroot_home="/home/$CHROOT_USER"
+        fi
+
+        if [[ -n "$chroot_home" && -d "$ROOT_MOUNT$chroot_home" ]]; then
+            runtime_home="$chroot_home"
+        else
+            runtime_home="/tmp"
+            use_login_shell=false
+            warning "Home directory ${chroot_home:-unknown} does not exist in chroot; using /tmp as HOME"
+        fi
+
+        su_command="cd '$runtime_home' && env HOME='$runtime_home'"
+        if [[ ${#chroot_env_vars[@]} -gt 0 ]]; then
+            local env_var
+            for env_var in "${chroot_env_vars[@]}"; do
+                su_command+=" '$env_var'"
+            done
+        fi
+        su_command+=" '$chosen_shell'"
+
+        if [[ "$use_login_shell" == true ]]; then
+            sudo chroot "$ROOT_MOUNT" su - "$CHROOT_USER" -c "$su_command"
+        else
+            sudo chroot "$ROOT_MOUNT" su -s /bin/sh "$CHROOT_USER" -c "$su_command"
         fi
     else
         log "Entering chroot as root"
