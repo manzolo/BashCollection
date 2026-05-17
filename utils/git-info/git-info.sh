@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PKG_NAME: git-info
-# PKG_VERSION: 2.2.0
+# PKG_VERSION: 2.3.0
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -245,14 +245,23 @@ spark_char() {
 
 # Debug functions
 debug_cmd() {
-  [[ "$DEBUG" == true ]] && echo -e "${MAGENTA}[DEBUG]${RESET} ${DIM}Running:${RESET} $1" >&2
+  [[ "$DEBUG" == true ]] && printf "%b[DEBUG]%b %b\$ %s%b\n" "$MAGENTA" "$RESET" "$DIM" "$1" "$RESET" >&2
 }
 debug_output() {
   if [[ "$DEBUG" == true ]] && [[ -n "$1" ]]; then
-    echo -e "${MAGENTA}[DEBUG]${RESET} ${DIM}Output:${RESET}" >&2
+    printf "%b[DEBUG]%b %bOutput:%b\n" "$MAGENTA" "$RESET" "$DIM" "$RESET" >&2
     echo "$1" | sed 's/^/        /' >&2
   fi
 }
+
+# In debug mode, wrap `git` so every invocation is logged to stderr.
+# Uses `command git` internally to avoid recursion.
+if [[ "$DEBUG" == true ]]; then
+  git() {
+    printf "%b[DEBUG]%b %b\$ git %s%b\n" "$MAGENTA" "$RESET" "$DIM" "$*" "$RESET" >&2
+    command git "$@"
+  }
+fi
 
 # --- Dependency check ---
 if ! command -v git >/dev/null 2>&1; then
@@ -343,6 +352,9 @@ if [[ "$SHOW_ALL" == true ]] || [[ "$SHOW_STATUS" == true ]]; then
   MODIFIED_FILES=$(git diff --name-only 2>/dev/null | wc -l)
   STAGED_FILES=$(git diff --cached --name-only 2>/dev/null | wc -l)
   UNTRACKED_FILES=$(git ls-files --others --exclude-standard 2>/dev/null | wc -l)
+  # Ignored entries — counts collapsed dirs (e.g. node_modules/) as 1 entry,
+  # matching what `git status --ignored` shows.
+  IGNORED_COUNT=$(git status --ignored --porcelain 2>/dev/null | grep -c '^!!')
   STASH_COUNT=$(git stash list 2>/dev/null | wc -l)
 
   box_top "$ICON_TREE" "WORKING TREE"
@@ -384,16 +396,24 @@ if [[ "$SHOW_ALL" == true ]] || [[ "$SHOW_STATUS" == true ]]; then
   M_COL=$([[ $MODIFIED_FILES -gt 0 ]] && echo "$ORANGE" || echo "$DIM")
   S_COL=$([[ $STAGED_FILES -gt 0 ]] && echo "$GREEN" || echo "$DIM")
   U_COL=$([[ $UNTRACKED_FILES -gt 0 ]] && echo "$YELLOW" || echo "$DIM")
+  I_COL=$([[ $IGNORED_COUNT -gt 0 ]] && echo "$MAGENTA" || echo "$DIM")
   K_COL=$([[ $STASH_COUNT -gt 0 ]] && echo "$CYAN" || echo "$DIM")
 
-  box_line "$(printf "  ${KEY}Modified${RESET}  ${M_COL}%3d${RESET}     ${KEY}Staged${RESET}  ${S_COL}%3d${RESET}     ${KEY}Untracked${RESET}  ${U_COL}%3d${RESET}     ${KEY}Stash${RESET}  ${K_COL}%2d${RESET}" \
-    "$MODIFIED_FILES" "$STAGED_FILES" "$UNTRACKED_FILES" "$STASH_COUNT")"
+  box_line "$(printf "  ${KEY}Modified${RESET} ${M_COL}%3d${RESET}   ${KEY}Staged${RESET} ${S_COL}%3d${RESET}   ${KEY}Untracked${RESET} ${U_COL}%3d${RESET}   ${KEY}Ignored${RESET} ${I_COL}%3d${RESET}   ${KEY}Stash${RESET} ${K_COL}%2d${RESET}" \
+    "$MODIFIED_FILES" "$STAGED_FILES" "$UNTRACKED_FILES" "$IGNORED_COUNT" "$STASH_COUNT")"
 
   if [[ "$DETAILED" == true ]] && [[ $((MODIFIED_FILES + STAGED_FILES + UNTRACKED_FILES)) -gt 0 ]]; then
     box_blank
     box_sub "changed files (first 8)"
     git status --short 2>/dev/null | head -n 8 | while IFS= read -r line; do
       box_line "  ${DIM}${line}${RESET}"
+    done
+  fi
+  if [[ "$DETAILED" == true ]] && [[ $IGNORED_COUNT -gt 0 ]]; then
+    box_blank
+    box_sub "ignored (first 8)"
+    git status --ignored --porcelain 2>/dev/null | grep '^!!' | head -n 8 | while IFS= read -r line; do
+      box_line "  ${MAGENTA}${line}${RESET}"
     done
   fi
   box_bottom
