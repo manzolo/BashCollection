@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # PKG_NAME: git-info
-# PKG_VERSION: 2.3.0
+# PKG_VERSION: 2.4.0
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
 # PKG_DEPENDS: bash (>= 4.0), git
+# PKG_RECOMMENDS: whiptail
 # PKG_MAINTAINER: Manzolo <manzolo@libero.it>
 # PKG_DESCRIPTION: Git repository analysis and reporting tool
 # PKG_LONG_DESCRIPTION: Comprehensive tool for analyzing git repositories
@@ -45,6 +46,9 @@ SHOW_TAGS=false
 SHOW_SUMMARY=false
 SHOW_ALL=false
 DETAILED=false
+RUN_TUI=false
+NO_ARGS=false
+[[ $# -eq 0 ]] && NO_ARGS=true
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -59,6 +63,7 @@ while [[ $# -gt 0 ]]; do
     --tags)     SHOW_TAGS=true;      shift ;;
     --summary)  SHOW_SUMMARY=true;   shift ;;
     --detailed) DETAILED=true;       shift ;;
+    --tui)      RUN_TUI=true;        shift ;;
     --debug)    DEBUG=true;          shift ;;
     --no-color) USE_COLOR=false;     shift ;;
     -h|--help)
@@ -75,6 +80,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --tags        Show tags information"
       echo "  --summary     Show summary"
       echo "  --detailed    Show detailed information for selected sections"
+      echo "  --tui         Open interactive menu to pick sections (needs whiptail)"
       echo "  --debug       Show commands being executed and their output"
       echo "  --no-color    Disable colored output"
       echo ""
@@ -83,6 +89,7 @@ while [[ $# -gt 0 ]]; do
       echo "  $0 --usage --commits       # Show usage and commits"
       echo "  $0 --all --detailed        # Show everything with details"
       echo "  $0 /path/to/repo --status  # Check status of specific repo"
+      echo "  $0 --tui                   # Pick sections from a menu"
       exit 0
       ;;
     -*)
@@ -96,6 +103,56 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# --- TUI mode (whiptail-based section picker) ---
+if [[ "$RUN_TUI" == true ]]; then
+  if ! command -v whiptail >/dev/null 2>&1; then
+    echo "Error: --tui requires 'whiptail' (install with: sudo apt install whiptail)"
+    exit 1
+  fi
+  if [[ ! -t 0 ]] || [[ ! -t 1 ]]; then
+    echo "Error: --tui needs an interactive terminal"
+    exit 1
+  fi
+
+  # Section picker: checklist, all OFF except summary (sensible default)
+  TUI_TITLE="git-info — interactive picker"
+  SELECTED=$(whiptail --title "$TUI_TITLE" \
+    --checklist "Select sections to display (SPACE to toggle, TAB to move, ENTER to confirm):" \
+    20 70 10 \
+    "info"     "Repository information" ON \
+    "status"   "Working tree status"   ON \
+    "branches" "Branches"              OFF \
+    "usage"    "Disk usage"            OFF \
+    "commits"  "Commit statistics"     OFF \
+    "remotes"  "Remotes"               OFF \
+    "tags"     "Tags"                  OFF \
+    "summary"  "Summary"               ON \
+    3>&1 1>&2 2>&3)
+  TUI_RC=$?
+  [[ $TUI_RC -ne 0 ]] && exit 0   # cancelled
+
+  # Parse whiptail output: items are space-separated, quoted
+  eval "TUI_PICKS=($SELECTED)"
+  for s in "${TUI_PICKS[@]}"; do
+    case "$s" in
+      info)     SHOW_INFO=true ;;
+      status)   SHOW_STATUS=true ;;
+      branches) SHOW_BRANCHES=true ;;
+      usage)    SHOW_USAGE=true ;;
+      commits)  SHOW_COMMITS=true ;;
+      remotes)  SHOW_REMOTES=true ;;
+      tags)     SHOW_TAGS=true ;;
+      summary)  SHOW_SUMMARY=true ;;
+    esac
+  done
+
+  # Detailed toggle
+  if whiptail --title "$TUI_TITLE" --yesno "Show detailed information?" 8 50; then
+    DETAILED=true
+  fi
+  clear
+fi
 
 # If no section is specified, show all
 if [[ "$SHOW_INFO" == false ]] && [[ "$SHOW_STATUS" == false ]] && \
@@ -638,4 +695,10 @@ if [[ "$SHOW_ALL" == true ]] || [[ "$SHOW_SUMMARY" == true ]]; then
   box_kv "Disk"         "${BOLD}${GIT_SIZE}${RESET} ${DIM}(.git)${RESET}"
   box_bottom
   echo ""
+fi
+
+# --- TUI hint when invoked with no args on a TTY ---
+if [[ "$NO_ARGS" == true ]] && [[ -t 1 ]] && command -v whiptail >/dev/null 2>&1; then
+  printf "  %b💡 Tip:%b run %b%s --tui%b to pick sections from an interactive menu\n\n" \
+    "$DIM" "$RESET" "$BOLD" "$(basename "$0")" "$RESET"
 fi
