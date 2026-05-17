@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: manzolo-backup-home
-# PKG_VERSION: 2.1.0
+# PKG_VERSION: 2.1.1
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -611,7 +611,7 @@ show_usage() {
     echo -e "${BLUE}║${NC}   sudo $SCRIPT_NAME /mnt/usb --verbose"
     echo -e "${BLUE}║${NC}   sudo $SCRIPT_NAME /backup --dry-run username"
     echo -e "${BLUE}╚══════════════════════════════════════════════════════════════════════════════╝${NC}"
-    exit 1
+    exit "${1:-1}"
 }
 
 # Display final statistics - fixed alignment
@@ -665,7 +665,7 @@ main() {
     while [[ $# -gt 0 ]]; do
         case $1 in
             -h|--help)
-                show_usage
+                show_usage 0
                 ;;
             -n|--dry-run)
                 DRY_RUN=true

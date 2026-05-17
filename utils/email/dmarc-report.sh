@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: dmarc-report
-# PKG_VERSION: 1.0.3
+# PKG_VERSION: 1.0.4
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -48,6 +48,7 @@ TMPDIR_WORK=""
 
 cleanup() {
     [[ -n "$TMPDIR_WORK" && -d "$TMPDIR_WORK" ]] && rm -rf "$TMPDIR_WORK"
+    return 0
 }
 trap cleanup EXIT
 
@@ -83,7 +84,7 @@ Examples:
   $0 /path/to/dmarc/emails/*.eml
 
 EOF
-    exit 1
+    exit "${1:-1}"
 }
 
 # Check mandatory dependencies
@@ -496,7 +497,7 @@ main() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --detail) OPT_DETAIL=true; shift ;;
-            --help|-h) usage ;;
+            --help|-h) usage 0 ;;
             *)  args+=("$1"); shift ;;
         esac
     done
