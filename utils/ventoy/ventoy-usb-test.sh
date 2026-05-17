@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: usb-boot-test
-# PKG_VERSION: 2.1.5
+# PKG_VERSION: 2.1.6
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -54,7 +54,7 @@ esac
 # they appear unused when this file is linted in isolation, so each
 # such var gets an explicit `disable=SC2034` annotation.
 readonly SCRIPT_NAME="USB Boot Tester"
-readonly VERSION="2.1.5"
+readonly VERSION="2.1.6"
 # shellcheck disable=SC2034
 readonly LOG_DIR="/tmp/ventoy_test_logs"
 # shellcheck disable=SC2034
@@ -159,8 +159,9 @@ main_menu() {
                 ;;
             8) test_both_modes ;;
             9) show_help ;;
-            0|"") 
+            0|"")
                 clear
+                revoke_x11_for_root
                 log_info "Thank you for using $SCRIPT_NAME!"
                 exit 0
                 ;;
