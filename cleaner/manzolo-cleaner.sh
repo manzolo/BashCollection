@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: manzolo-cleaner
-# PKG_VERSION: 2.5.1
+# PKG_VERSION: 2.5.2
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -514,6 +514,23 @@ main_menu() {
 
 # MAIN - Script start
 main() {
+    case "${1:-}" in
+        -h|--help)
+            cat <<EOF
+$SCRIPT_NAME - Advanced system cleaning and maintenance tool
+
+Usage: $(basename "$0") [-h|--help]
+
+Interactive dialog-based tool for cleaning and maintaining
+Debian/Ubuntu systems. Provides safe kernel removal, package
+cache cleanup, log rotation, and disk-usage analysis.
+
+Run without arguments to open the interactive menu (requires
+sudo and dialog).
+EOF
+            exit 0
+            ;;
+    esac
     # Welcome banner
     clear
     echo -e "${BLUE}"

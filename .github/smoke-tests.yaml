@@ -15,7 +15,7 @@ mchroot:
   cmd: ["--help"]
 
 mcleaner:
-  skip: "interactive whiptail menu, no safe non-interactive invocation"
+  cmd: ["--help"]
 
 mbackup:
   cmd: ["--help"]
@@ -24,19 +24,19 @@ mtest:
   cmd: ["--help"]
 
 usb-boot-test:
-  skip: "requires real USB device and large ISO download"
+  cmd: ["--help"]
 
 manzolo-firewall:
-  skip: "modifies firewall state, unsafe in CI"
+  cmd: ["--help"]
 
 manzolo-process-monitor:
-  skip: "interactive TUI, no --help flag"
+  cmd: ["--help"]
 
 dmarc-report:
   cmd: ["--help"]
 
 email-domain-check:
-  skip: "requires DNS queries and external email validation, no --help"
+  cmd: ["--help"]
 
 firefox-session-recover:
   cmd: ["--help"]

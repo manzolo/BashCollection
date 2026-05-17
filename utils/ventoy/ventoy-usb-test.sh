@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: usb-boot-test
-# PKG_VERSION: 2.1.4
+# PKG_VERSION: 2.1.5
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -38,17 +38,23 @@
 
 set -euo pipefail
 
-if [ "$EUID" -ne 0 ]; then
-    echo "Please run as root"
-    exit 1
-fi
+# Allow --help even without root so packaging / CI can smoke-test it.
+case "${1:-}" in
+    -h|--help) ;;  # handled later in main()
+    *)
+        if [ "$EUID" -ne 0 ]; then
+            echo "Please run as root"
+            exit 1
+        fi
+        ;;
+esac
 
 # Configuration and global state. Several variables below are consumed
 # by the modules under ventoy-usb-test/*.sh that we source dynamically;
 # they appear unused when this file is linted in isolation, so each
 # such var gets an explicit `disable=SC2034` annotation.
 readonly SCRIPT_NAME="USB Boot Tester"
-readonly VERSION="2.1.4"
+readonly VERSION="2.1.5"
 # shellcheck disable=SC2034
 readonly LOG_DIR="/tmp/ventoy_test_logs"
 # shellcheck disable=SC2034
@@ -193,6 +199,23 @@ show_help() {
 
 # Main function
 main() {
+    case "${1:-}" in
+        -h|--help)
+            cat <<EOF
+$SCRIPT_NAME v$VERSION - Test bootable USB devices and ISOs in QEMU
+
+Usage: $(basename "$0") [-h|--help]
+
+Interactive whiptail-based TUI to boot a USB device or ISO/qcow2/raw
+image in QEMU (UEFI or BIOS) without restarting the host. Useful for
+testing Ventoy, Ubuntu installers, Windows ISOs, rescue media, etc.
+
+Run without arguments to open the interactive menu (requires
+whiptail, qemu-system-x86_64, and root for raw USB devices).
+EOF
+            exit 0
+            ;;
+    esac
     initial_checks
     main_menu
 }

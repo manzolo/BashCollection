@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: email-domain-check
-# PKG_VERSION: 1.0.0
+# PKG_VERSION: 1.0.1
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -28,12 +28,28 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 BOLD='\033[1m'
 
-if [ -z "$1" ]; then
-    echo ""
-    echo "Usage: $0 <domain>"
-    echo "Example: $0 example.com"
-    exit 1
-fi
+show_usage() {
+    cat <<EOF
+
+Usage: $0 <domain>
+Example: $0 example.com
+
+Checks SPF, DKIM, DMARC, and MX DNS records for a given domain
+and prints a colour-coded summary. Requires 'dig' (from
+bind9-dnsutils / dnsutils).
+EOF
+}
+
+case "${1:-}" in
+    -h|--help)
+        show_usage
+        exit 0
+        ;;
+    "")
+        show_usage
+        exit 1
+        ;;
+esac
 
 DOMAIN="$1"
 

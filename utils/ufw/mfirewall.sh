@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: mfirewall
-# PKG_VERSION: 1.2.2
+# PKG_VERSION: 1.2.3
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -1136,6 +1136,22 @@ initialize_script() {
 # =================== MAIN EXECUTION ===================
 
 main() {
+    case "${1:-}" in
+        -h|--help)
+            cat <<EOF
+manzolo-firewall - Professional UFW management TUI
+
+Usage: $(basename "$0") [-h|--help]
+
+Interactive whiptail-based front-end for managing UFW
+(Uncomplicated Firewall): rules, policies, profiles, backups,
+and logs. Requires sudo and ufw.
+
+Run without arguments to open the interactive menu.
+EOF
+            exit 0
+            ;;
+    esac
     initialize_script
     main_menu
 }

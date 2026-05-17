@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: mprocmon
-# PKG_VERSION: 2.0.1
+# PKG_VERSION: 2.0.2
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -861,6 +861,22 @@ show_main_menu() {
 
 # Main execution
 main() {
+    case "${1:-}" in
+        -h|--help)
+            cat <<EOF
+manzolo-process-monitor v$SCRIPT_VERSION - Network & file usage monitor
+
+Usage: $(basename "$0") [-h|--help]
+
+Interactive whiptail-based TUI for inspecting open ports,
+network sockets, processes, and file locks via lsof and ss.
+
+Run without arguments to open the interactive menu (requires
+whiptail; sudo recommended for full visibility).
+EOF
+            exit 0
+            ;;
+    esac
     # Initialize environment
     init_environment
     
