@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: network-viewer
-# PKG_VERSION: 1.0.3
+# PKG_VERSION: 1.0.4
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -45,7 +45,6 @@ msg_err()  { echo -e "  ${RED}[x]${NC} $*" >&2; }
 
 # --- Global state ---
 DEBUG=false
-SHOW_IPV6=false
 
 # Open fd 3 as a persistent debug output channel pointing to the terminal.
 # Unlike stderr, fd 3 is never redirected by callers (e.g. "$(run_cmd ... 2>/dev/null)"),
@@ -92,7 +91,6 @@ Usage: $0 [options]
 
 Options:
   --explain <ip|host>   Show route explanation for the given IP or hostname
-  --ipv6                Include IPv6 addresses and routes (hidden by default)
   --debug               Enable debug mode (print each command before running)
   --help, -h            Show this help message
 
@@ -100,7 +98,6 @@ Without arguments: opens the interactive whiptail menu.
 
 Examples:
   $0
-  $0 --ipv6
   $0 --explain 8.8.8.8
   $0 --explain google.com --debug
 
@@ -132,7 +129,6 @@ main() {
         case "$1" in
             --help|-h)    usage ;;
             --debug)      DEBUG=true;     shift ;;
-            --ipv6)       SHOW_IPV6=true; shift ;;
             --explain)
                 [[ -z "${2:-}" ]] && { msg_err "--explain requires an argument"; exit 1; }
                 explain_target="$2"

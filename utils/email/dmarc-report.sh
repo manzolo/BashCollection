@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: dmarc-report
-# PKG_VERSION: 1.0.4
+# PKG_VERSION: 1.0.5
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -145,6 +145,11 @@ extract_file() {
     extract_dir=$(mktemp -d "$TMPDIR_WORK/extract.XXXXXX")
 
     case "${archive,,}" in
+        *.tar.gz|*.tgz)
+            if check_optional_tool tar tar; then
+                tar -xzf "$archive" -C "$extract_dir" 2>/dev/null
+            fi
+            ;;
         *.xml.gz|*.gz)
             if check_optional_tool gunzip gzip; then
                 gunzip -c "$archive" > "$extract_dir/$(basename "${archive%.gz}")" 2>/dev/null
@@ -153,11 +158,6 @@ extract_file() {
         *.zip)
             if check_optional_tool unzip unzip; then
                 unzip -q -o "$archive" -d "$extract_dir" 2>/dev/null
-            fi
-            ;;
-        *.tar.gz|*.tgz)
-            if check_optional_tool tar tar; then
-                tar -xzf "$archive" -C "$extract_dir" 2>/dev/null
             fi
             ;;
         *)
@@ -206,7 +206,7 @@ PYEOF
             *.xml)
                 echo "$f"
                 ;;
-            *.gz|*.zip|*.tar.gz|*.tgz)
+            *.gz|*.zip|*.tgz)
                 while IFS= read -r extracted; do
                     [[ -n "$extracted" ]] && echo "$extracted"
                 done < <(extract_file "$f")
@@ -228,7 +228,7 @@ collect_xml_files() {
                     *.xml)
                         xml_files+=("$f")
                         ;;
-                    *.gz|*.zip|*.tar.gz|*.tgz)
+                    *.gz|*.zip|*.tgz)
                         while IFS= read -r extracted; do
                             [[ -n "$extracted" ]] && xml_files+=("$extracted")
                         done < <(extract_file "$f")
@@ -246,7 +246,7 @@ collect_xml_files() {
                 *.xml)
                     xml_files+=("$arg")
                     ;;
-                *.gz|*.zip|*.tar.gz|*.tgz)
+                *.gz|*.zip|*.tgz)
                     while IFS= read -r extracted; do
                         [[ -n "$extracted" ]] && xml_files+=("$extracted")
                     done < <(extract_file "$arg")

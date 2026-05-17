@@ -25,6 +25,7 @@
 # Configuration
 SCRIPT_NAME="ManzoloCleaner"
 LOG_FILE="/tmp/manzolo-cleaner.log"
+# shellcheck disable=SC2034  # reserved for future per-user config support
 CONFIG_FILE="$HOME/.manzolo-cleaner.conf"
 TEMP_OUTPUT="/tmp/manzolo-cleaner-output.txt"
 TEMP_COMMAND="/tmp/manzolo_temp_command.sh"  # New: Temp file for complex commands
@@ -105,23 +106,26 @@ run_command_in_terminal() {
     
     if [ "$show_output" = "true" ]; then
         if [[ $command == *'{'* || $command == *';'* ]]; then
+            # shellcheck disable=SC1090  # dynamic temp file built at runtime
             . "$TEMP_COMMAND" >> "$TEMP_OUTPUT" 2>&1
         else
             eval "$actual_cmd" >> "$TEMP_OUTPUT" 2>&1
         fi
     else
         if [[ $command == *'{'* || $command == *';'* ]]; then
+            # shellcheck disable=SC1090
             . "$TEMP_COMMAND" >> "$LOG_FILE" 2>&1
         else
             eval "$actual_cmd" >> "$LOG_FILE" 2>&1
         fi
     fi
     local status=$?
-    
+
     # Calculate space freed if requested
     local space_msg=""
     if [ "$calculate_space" = "true" ]; then
-        local after_space=$(df / --output=used | tail -1 | sed 's/ //g')
+        local after_space
+        after_space=$(df / --output=used | tail -1 | sed 's/ //g')
         local freed=$((before_space - after_space))
         if [ $freed -gt 0 ]; then
             space_msg="\nSpace freed: $(calculate_space_freed $freed)"

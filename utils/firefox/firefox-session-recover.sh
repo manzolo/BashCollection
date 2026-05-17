@@ -277,7 +277,6 @@ select_backup() {
 
     # Collect backup files sorted by modification time (newest first)
     local -a files=()
-    local -a display=()
 
     # Include sessionstore.jsonlz4 from profile root if it exists
     if [[ -f "$session_file" ]]; then
