@@ -2,3 +2,6 @@
 chroot/manzolo-chroot/*
 utils/ventoy/ventoy-usb-test/*
 utils/share-manager/share-manager/*
+# CI functional-test fixtures (consumed by .github/scripts/smoke-test-pkg.sh,
+# not standalone packages)
+tests/*
