@@ -40,6 +40,8 @@ skip_reason=$(printf '%s' "$pkg_json" | python3 -c \
   'import json,sys; print(json.load(sys.stdin).get("skip","") or "")')
 apt_deps=$(printf '%s' "$pkg_json" | python3 -c \
   'import json,sys; print(" ".join(json.load(sys.stdin).get("apt_deps", []) or []))')
+test_script=$(printf '%s' "$pkg_json" | python3 -c \
+  'import json,sys; print(json.load(sys.stdin).get("script","") or "")')
 mapfile -t cmd_args < <(printf '%s' "$pkg_json" | python3 -c \
   'import json,sys
 d = json.load(sys.stdin)
@@ -86,6 +88,10 @@ if [[ ! -x "$bin" ]]; then
   fi
 fi
 
+# If `script:` is set in the config, run the functional test script
+# instead of (or in addition to) the basic cmd invocation. The script
+# is expected to assert behaviour against fixtures and exit 0 on
+# success. The `cmd` smoke run still happens first as a sanity check.
 echo "::group::$PKG ${cmd_args[*]}"
 set +e
 "$bin" "${cmd_args[@]}"
@@ -93,11 +99,34 @@ rc=$?
 set -e
 echo "::endgroup::"
 
-if [[ $rc -eq 0 ]]; then
-  echo "✓ $PKG ${cmd_args[*]} → exit 0"
-  summary_line "✓ ${cmd_args[*]}"
-else
+if [[ $rc -ne 0 ]]; then
   echo "::error title=Smoke failed::$PKG ${cmd_args[*]} exited $rc"
   summary_line "✗ ${cmd_args[*]} (exit $rc)"
   exit "$rc"
+fi
+echo "✓ $PKG ${cmd_args[*]} → exit 0"
+
+if [[ -n "$test_script" ]]; then
+  test_path="$REPO_ROOT/$test_script"
+  if [[ ! -x "$test_path" ]]; then
+    echo "::error title=Test script missing::$test_path not found or not executable"
+    summary_line "✗ test script $test_script missing"
+    exit 1
+  fi
+  echo "::group::$PKG functional test ($test_script)"
+  set +e
+  PKG_BIN="$bin" "$test_path"
+  rc=$?
+  set -e
+  echo "::endgroup::"
+  if [[ $rc -eq 0 ]]; then
+    echo "✓ $PKG functional test → exit 0"
+    summary_line "✓ ${cmd_args[*]} + functional"
+  else
+    echo "::error title=Functional test failed::$test_script exited $rc"
+    summary_line "✗ functional test (exit $rc)"
+    exit "$rc"
+  fi
+else
+  summary_line "✓ ${cmd_args[*]}"
 fi

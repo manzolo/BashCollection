@@ -34,18 +34,23 @@ manzolo-process-monitor:
 
 dmarc-report:
   cmd: ["--help"]
+  apt_deps: [libxml2-utils]
+  script: tests/dmarc-report/test.sh
 
 email-domain-check:
   cmd: ["--help"]
+  script: tests/email-domain-check/test.sh
 
 firefox-session-recover:
   cmd: ["--help"]
+  script: tests/firefox-session-recover/test.sh
 
 network-viewer:
   cmd: ["--help"]
 
 share-manager:
   cmd: ["info"]
+  script: tests/share-manager/test.sh
 
 ollama-claude:
   cmd: ["--version"]
