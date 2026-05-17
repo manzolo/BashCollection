@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: network-viewer
-# PKG_VERSION: 1.0.5
+# PKG_VERSION: 1.0.6
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -45,6 +45,7 @@ msg_err()  { echo -e "  ${RED}[x]${NC} $*" >&2; }
 
 # --- Global state ---
 DEBUG=false
+# shellcheck disable=SC2034
 SHOW_IPV6=false
 
 # Open fd 3 as a persistent debug output channel pointing to the terminal.
