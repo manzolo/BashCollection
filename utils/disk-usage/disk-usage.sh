@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: disk-usage
-# PKG_VERSION: 2.3.0
+# PKG_VERSION: 2.3.1
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -698,7 +698,7 @@ generate_html_report() {
     rm -f "$tmp"
     echo -e "\033[1A\033[K"
     echo -e "${GREEN}✓ HTML report: ${CYAN}$output_file${NC}"
-    echo -e "  ${YELLOW}xdg-open '$output_file'${NC}"
+    xdg-open "$output_file" 2>/dev/null || open "$output_file" 2>/dev/null || echo -e "  Open: ${YELLOW}$output_file${NC}"
 }
 
 # ─── Argument Parsing ────────────────────────────────────────────────────────
@@ -715,8 +715,8 @@ while [[ $# -gt 0 ]]; do
             if [[ $2 =~ ^[0-9]+$ ]]; then TOP_FILES_COUNT="$2"; shift 2; else shift; fi ;;
         -s|--sort)        shift 2 ;;  # kept for compatibility, unused
         --html)
-            if [[ -n $2 && $2 != -* ]]; then HTML_OUTPUT="$2"; shift 2
-            else HTML_OUTPUT="disk-usage-report.html"; shift; fi ;;
+            if [[ -n $2 && $2 != -* && ! -d "$2" ]]; then HTML_OUTPUT="$2"; shift 2
+            else HTML_OUTPUT="$(mktemp /tmp/disk-usage-XXXXXX.html)"; shift; fi ;;
         --html-depth)     HTML_DEPTH="$2"; shift 2 ;;
         -h|--help)        show_help; exit 0 ;;
         *)
