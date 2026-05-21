@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: disk-usage
-# PKG_VERSION: 2.4.1
+# PKG_VERSION: 2.4.2
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -234,7 +234,7 @@ body{background:#0f0f1a;color:#e0e0e0;font-family:'Segoe UI',system-ui,sans-seri
 .tv-ic{flex-shrink:0;font-size:.95rem}
 .tv-nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;font-weight:500}
 .tv-bar-wrap{width:140px;height:7px;background:#1a1a2e;border-radius:3px;overflow:hidden;flex-shrink:0}
-.tv-bar{height:100%;border-radius:3px}
+.tv-bar{display:block;height:100%;border-radius:3px}
 .tv-sz{width:68px;text-align:right;font-family:monospace;color:#7eb8f7;font-size:.77rem;flex-shrink:0}
 .tv-pct{width:38px;text-align:right;color:#555;font-size:.72rem;flex-shrink:0}
 .tv-children{border-left:1px solid #1e1e35;margin-left:20px}
@@ -422,7 +422,7 @@ const _hmap={};let _hi=0;
 function hue(path){const t=(path||'').split('/')[0]||'_root';if(!_hmap[t])_hmap[t]=HUES[_hi++%HUES.length];return _hmap[t];}
 function clr(n,d){const h=hue(n.path||n.name),s=n.type==='dir'?58:40,l=Math.max(18,n.type==='dir'?40-d*5:48-d*5);return`hsl(${h},${s}%,${l}%)`;}
 /* green(120) → yellow(60) → red(0) based on % of parent */
-function barClr(pct){return`hsl(${Math.round(120-Math.min(pct,100)*1.2)},70%,42%)`;}
+function barClr(pct){return`hsl(${Math.round(120-Math.min(pct,100)*1.2)},80%,58%)`;}
 
 /* ── Treemap Renderer ───────────────────────────────────────────────────── */
 let _root=null,_tmStack=[],_cur=null,_dep=0,_bcCurrent=null;
@@ -508,6 +508,7 @@ function tvRow(node,depth,maxSib,parentSz){
     const hasKids=node.type==='dir'&&(node.children||[]).length>0;
     const barW=maxSib>0?Math.round(node.size/maxSib*140):0;
     const pct=parentSz>0?Math.round(node.size/parentSz*100):0;
+    const pctOfMax=maxSib>0?Math.round(node.size/maxSib*100):0;
 
     const item=document.createElement('div');
     item.className='tv-item';
@@ -516,7 +517,7 @@ function tvRow(node,depth,maxSib,parentSz){
         `<span class="tv-tog">${hasKids?'►':''}</span>`+
         `<span class="tv-ic">${icon(node.name,node.type,node.ext)}</span>`+
         `<span class="tv-nm" title="${esc(node.path||node.name)}">${esc(node.name)}</span>`+
-        `<span class="tv-bar-wrap"><span class="tv-bar" style="width:${barW}px;background:${barClr(pct)}"></span></span>`+
+        `<span class="tv-bar-wrap"><span class="tv-bar" style="width:${barW}px;background:${barClr(pctOfMax)}"></span></span>`+
         `<span class="tv-sz">${fmt(node.size)}</span>`+
         `<span class="tv-pct">${pct?pct+'%':''}</span>`;
     outer.appendChild(item);
