@@ -60,3 +60,6 @@ ollama-codex:
 
 openrouter-claude:
   cmd: ["--version"]
+
+disk-usage:
+  cmd: ["--help"]

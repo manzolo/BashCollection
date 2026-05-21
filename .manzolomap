@@ -13,3 +13,4 @@ utils/share-manager/share-manager.sh#share-manager
 utils/ollama-tools/ollama-claude.sh#ollama-claude
 utils/ollama-tools/ollama-codex.sh#ollama-codex
 utils/ollama-tools/openrouter-claude.sh#openrouter-claude
+utils/disk-usage/disk-usage.sh#disk-usage
