@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: disk-usage
-# PKG_VERSION: 2.4.0
+# PKG_VERSION: 2.4.1
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -421,6 +421,8 @@ const HUES=[210,155,42,275,18,335,115,255,185,78];
 const _hmap={};let _hi=0;
 function hue(path){const t=(path||'').split('/')[0]||'_root';if(!_hmap[t])_hmap[t]=HUES[_hi++%HUES.length];return _hmap[t];}
 function clr(n,d){const h=hue(n.path||n.name),s=n.type==='dir'?58:40,l=Math.max(18,n.type==='dir'?40-d*5:48-d*5);return`hsl(${h},${s}%,${l}%)`;}
+/* green(120) → yellow(60) → red(0) based on % of parent */
+function barClr(pct){return`hsl(${Math.round(120-Math.min(pct,100)*1.2)},70%,42%)`;}
 
 /* ── Treemap Renderer ───────────────────────────────────────────────────── */
 let _root=null,_tmStack=[],_cur=null,_dep=0,_bcCurrent=null;
@@ -514,7 +516,7 @@ function tvRow(node,depth,maxSib,parentSz){
         `<span class="tv-tog">${hasKids?'►':''}</span>`+
         `<span class="tv-ic">${icon(node.name,node.type,node.ext)}</span>`+
         `<span class="tv-nm" title="${esc(node.path||node.name)}">${esc(node.name)}</span>`+
-        `<span class="tv-bar-wrap"><span class="tv-bar" style="width:${barW}px;background:${clr(node,depth)}"></span></span>`+
+        `<span class="tv-bar-wrap"><span class="tv-bar" style="width:${barW}px;background:${barClr(pct)}"></span></span>`+
         `<span class="tv-sz">${fmt(node.size)}</span>`+
         `<span class="tv-pct">${pct?pct+'%':''}</span>`;
     outer.appendChild(item);
