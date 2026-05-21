@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: disk-usage
-# PKG_VERSION: 2.3.1
+# PKG_VERSION: 2.3.2
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -442,9 +442,10 @@ function tmRender(node,depth){
         div.addEventListener('mouseenter',e=>ttShow(e,cell));
         div.addEventListener('mousemove',e=>ttMove(e));
         div.addEventListener('mouseleave',ttHide);
-        if(cell.type==='dir'&&(cell.children||[]).length>0){
-            div.addEventListener('click',e=>{e.stopPropagation();_tmStack.push({node,depth});bcRender(cell);tmRender(cell,depth+1);});
-        }
+        div.addEventListener('click',e=>{
+            e.stopPropagation();
+            if(cell.type==='dir'&&(cell.children||[]).length>0){_tmStack.push({node,depth});bcRender(cell);tmRender(cell,depth+1);}
+        });
         c.appendChild(div);
     }
     // click on background goes back one level
