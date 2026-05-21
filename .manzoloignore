@@ -5,3 +5,5 @@ utils/share-manager/share-manager/*
 # CI functional-test fixtures (consumed by .github/scripts/smoke-test-pkg.sh,
 # not standalone packages)
 tests/*
+# CI helper scripts — not user-facing tools
+.github/scripts/*
