@@ -63,3 +63,6 @@ openrouter-claude:
 
 disk-usage:
   cmd: ["--help"]
+
+manzolo-app:
+  cmd: ["--help"]

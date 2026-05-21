@@ -14,3 +14,4 @@ utils/ollama-tools/ollama-claude.sh#ollama-claude
 utils/ollama-tools/ollama-codex.sh#ollama-codex
 utils/ollama-tools/openrouter-claude.sh#openrouter-claude
 utils/disk-usage/disk-usage.sh#disk-usage
+utils/manzolo-app/manzolo-app.sh#manzolo-app
