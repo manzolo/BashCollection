@@ -1494,16 +1494,6 @@ EOF
     # Write homepage
     echo "Homepage: ${PKG_META[HOMEPAGE]}" >> "$pkg_dir/DEBIAN/control"
 
-    # === postinst ===
-    cat > "$pkg_dir/DEBIAN/postinst" << EOF
-#!/bin/bash
-set -e
-echo "$package_name v$version installed successfully!"
-echo "Run: $script_name --help"
-exit 0
-EOF
-    chmod 755 "$pkg_dir/DEBIAN/postinst"
-
     # === Copyright & changelog ===
     cat > "$pkg_dir/usr/share/doc/$package_name/copyright" << EOF
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
