@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: disk-usage
-# PKG_VERSION: 2.3.2
+# PKG_VERSION: 2.4.0
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -33,13 +33,18 @@ SHOW_TOP_FILES=false
 TOP_FILES_COUNT=10
 HTML_OUTPUT=""
 HTML_DEPTH=3
+REMOTE_HOST=""
+REMOTE_PATH=""
+SSH_OPTS=""
 
 show_help() {
     cat << EOF
 Usage: $(basename "$0") [OPTIONS] [DIRECTORY]
+       $(basename "$0") [OPTIONS] --html [user@]host:/remote/path
 
-Analyze folder sizes. Without --html: colored terminal output.
-With --html: generates an interactive Baobab-style HTML report.
+Analyze folder sizes locally or on a remote host via SSH.
+Without --html: colored terminal output (local only).
+With --html: interactive Baobab-style HTML report (local or remote).
 
 OPTIONS:
     -d, --depth DEPTH         Terminal analysis depth (default: 1)
@@ -47,16 +52,19 @@ OPTIONS:
     -a, --all                 Include hidden files/folders
     -f, --files [N]           Show top N largest files (default: 10)
     -s, --sort TYPE           Sort by: size, name (default: size)
-        --html [FILE]         Generate HTML report (default: disk-usage-report.html)
+        --html [FILE]         Generate HTML report (default: temp file, auto-open)
         --html-depth DEPTH    Scan depth for HTML report (default: 3)
+        --ssh-opts OPTS       Extra SSH options (e.g. '-p 2222 -i ~/.ssh/id_rsa')
     -h, --help                Show this help message
 
 EXAMPLES:
-    $(basename "$0")                         # Terminal: current directory
-    $(basename "$0") /var/log                # Terminal: /var/log
-    $(basename "$0") -d 2 -f /home/user      # Terminal: 2 levels + top files
-    $(basename "$0") --html /var/log         # HTML report for /var/log
-    $(basename "$0") --html report.html -a . # HTML report with hidden files
+    $(basename "$0")                              # Terminal: current directory
+    $(basename "$0") /var/log                     # Terminal: /var/log
+    $(basename "$0") -d 2 -f /home/user           # Terminal: 2 levels + top files
+    $(basename "$0") --html /var/log              # HTML report for /var/log
+    $(basename "$0") --html report.html -a .      # HTML report with hidden files
+    $(basename "$0") --html user@server:/var/log  # HTML report from remote host
+    $(basename "$0") --html root@nas:/data        # HTML report from NAS
 
 EOF
 }
@@ -415,17 +423,17 @@ function hue(path){const t=(path||'').split('/')[0]||'_root';if(!_hmap[t])_hmap[
 function clr(n,d){const h=hue(n.path||n.name),s=n.type==='dir'?58:40,l=Math.max(18,n.type==='dir'?40-d*5:48-d*5);return`hsl(${h},${s}%,${l}%)`;}
 
 /* ── Treemap Renderer ───────────────────────────────────────────────────── */
-let _root=null,_tmStack=[],_cur=null,_dep=0;
+let _root=null,_tmStack=[],_cur=null,_dep=0,_bcCurrent=null;
 
 function tmRender(node,depth){
-    _cur=node;_dep=depth;
+    _cur=node;_dep=depth;_bcCurrent=node;
     const c=document.getElementById('treemap');
     const W=c.offsetWidth,H=c.offsetHeight;
     c.innerHTML='';
     const kids=[...(node.children||[])].filter(k=>k.size>0).sort((a,b)=>b.size-a.size);
     if(!kids.length){
         c.innerHTML='<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#444;font-size:.88rem">Empty directory</div>';
-        return;
+        bcRender();return;
     }
     const cells=squarify(kids,0,0,W,H);
     for(const cell of cells){
@@ -444,28 +452,40 @@ function tmRender(node,depth){
         div.addEventListener('mouseleave',ttHide);
         div.addEventListener('click',e=>{
             e.stopPropagation();
-            if(cell.type==='dir'&&(cell.children||[]).length>0){_tmStack.push({node,depth});bcRender(cell);tmRender(cell,depth+1);}
+            if(cell.type==='dir'&&(cell.children||[]).length>0){_tmStack.push({node,depth});tmRender(cell,depth+1);}
         });
         c.appendChild(div);
     }
-    // click on background goes back one level
     c.addEventListener('click',()=>{
-        if(_tmStack.length){const s=_tmStack.pop();bcRender(null);tmRender(s.node,s.depth);}
+        if(_tmStack.length){const s=_tmStack.pop();tmRender(s.node,s.depth);}
     },{once:true});
+    bcRender();
 }
 
-function bcRender(entered){
+/* Breadcrumb: derived from _tmStack (ancestors) + _bcCurrent (displayed node).
+   _tmStack[0] is always the root ancestor, so we never prepend _root separately. */
+function bcRender(){
     const bc=document.getElementById('bc');
     bc.innerHTML='';
-    const chain=[{node:_root,name:_root.name||'root',depth:0},..._tmStack.map((s,i)=>({node:s.node,name:s.node.name,depth:i+1}))];
-    if(entered) chain.push({node:entered,name:entered.name,depth:chain.length,cur:true});
+    // Ancestors: stack items, using root's real name for index 0
+    const chain=_tmStack.length>0
+        ?_tmStack.map((s,i)=>({node:s.node,name:i===0?(_root.name||'root'):s.node.name}))
+        :[{node:_root,name:_root.name||'root'}];
+    // Current displayed node: append if different from last ancestor
+    const last=chain[chain.length-1];
+    if(_bcCurrent&&_bcCurrent!==last.node){
+        chain.push({node:_bcCurrent,name:_bcCurrent.name,cur:true});
+    } else {
+        chain[chain.length-1]={...last,cur:true};
+    }
     chain.forEach((item,i)=>{
         if(i>0){const sp=document.createElement('span');sp.className='bc-sep';sp.textContent=' › ';bc.appendChild(sp);}
         const el=document.createElement('span');
         el.className='bc-item'+(item.cur?' bc-cur':'');
         el.textContent=item.name;
         if(!item.cur){
-            el.addEventListener('click',()=>{_tmStack=_tmStack.slice(0,i);bcRender(null);tmRender(item.node,i);});
+            const cn=item.node,cd=i;
+            el.addEventListener('click',()=>{_tmStack=_tmStack.slice(0,cd);tmRender(cn,cd);});
         }
         bc.appendChild(el);
     });
@@ -605,8 +625,7 @@ function tblRender(){
 document.addEventListener('DOMContentLoaded',()=>{
     _root=buildTree(DATA);
     initTabs();
-    bcRender(null);
-    tmRender(_root,0);
+    tmRender(_root,0);  // bcRender() called inside tmRender
     tvInit(_root);
     tblInit(DATA);
     let _rt;
@@ -619,44 +638,81 @@ document.addEventListener('DOMContentLoaded',()=>{
 HTMLEOF
 }
 
-generate_html_report() {
-    local target_dir="$1" output_file="$2"
-    [ ! -d "$target_dir" ] && { echo -e "${RED}Error: '$target_dir' not found${NC}"; exit 1; }
-    target_dir=$(realpath "$target_dir")
-    local root_name; root_name=$(basename "$target_dir")
-
-    echo -e "${YELLOW}⏳ Scanning for HTML report (depth=${HTML_DEPTH})...${NC}"
-
-    local tmp; tmp=$(mktemp)
-
-    # Root
+_collect_local_data() {
+    local target_dir="$1" depth="$2"
     local root_size; root_size=$(du -sb "$target_dir" 2>/dev/null | cut -f1)
-    printf '%s\tdir\t\n' "$root_size" >> "$tmp"
-
-    # Subdirectories
+    printf '%s\tdir\t\n' "$root_size"
     while IFS= read -r dir; do
         local rel sz
         rel="${dir#"$target_dir"/}"
         sz=$(du -sb "$dir" 2>/dev/null | cut -f1)
         printf '%s\tdir\t%s\n' "$sz" "$rel"
-    done < <(find "$target_dir" -maxdepth "$HTML_DEPTH" -mindepth 1 -type d 2>/dev/null | sort) >> "$tmp"
-
-    # Files
+    done < <(find "$target_dir" -maxdepth "$depth" -mindepth 1 -type d 2>/dev/null | sort)
     while IFS= read -r file; do
         local rel sz
         rel="${file#"$target_dir"/}"
         sz=$(stat -c%s "$file" 2>/dev/null || echo 0)
         printf '%s\tfile\t%s\n' "$sz" "$rel"
-    done < <(find "$target_dir" -maxdepth "$HTML_DEPTH" -mindepth 1 -type f 2>/dev/null | sort) >> "$tmp"
+    done < <(find "$target_dir" -maxdepth "$depth" -mindepth 1 -type f 2>/dev/null | sort)
+}
 
-    local file_count dir_count
+_collect_remote_data() {
+    local host="$1" rpath="$2" depth="$3"
+    # Build script: printf safely quotes the path, then append the logic via quoted heredoc
+    {
+        printf 'TARGET=%q\n' "$rpath"
+        printf 'DEPTH=%q\n' "$depth"
+        cat << 'REMOTE_SCRIPT'
+root_size=$(du -sb "$TARGET" 2>/dev/null | cut -f1)
+printf '%s\tdir\t\n' "$root_size"
+find "$TARGET" -maxdepth "$DEPTH" -mindepth 1 -type d 2>/dev/null | sort | while IFS= read -r dir; do
+    sz=$(du -sb "$dir" 2>/dev/null | cut -f1)
+    rel="${dir#"$TARGET"/}"
+    printf '%s\tdir\t%s\n' "$sz" "$rel"
+done
+find "$TARGET" -maxdepth "$DEPTH" -mindepth 1 -type f 2>/dev/null | sort | while IFS= read -r file; do
+    sz=$(stat -c%s "$file" 2>/dev/null || echo 0)
+    rel="${file#"$TARGET"/}"
+    printf '%s\tfile\t%s\n' "$sz" "$rel"
+done
+REMOTE_SCRIPT
+    } | ssh $SSH_OPTS "$host" bash
+}
+
+generate_html_report() {
+    local output_file="$1"
+    local root_name display_path tmp
+
+    tmp=$(mktemp)
+
+    if [ -n "$REMOTE_HOST" ]; then
+        display_path="${REMOTE_HOST}:${REMOTE_PATH}"
+        root_name=$(basename "$REMOTE_PATH")
+        echo -e "${YELLOW}⏳ Scanning remote ${CYAN}${display_path}${YELLOW} (depth=${HTML_DEPTH})...${NC}"
+        _collect_remote_data "$REMOTE_HOST" "$REMOTE_PATH" "$HTML_DEPTH" > "$tmp"
+        if [ $? -ne 0 ] || [ ! -s "$tmp" ]; then
+            rm -f "$tmp"
+            echo -e "${RED}Error: SSH scan failed — check host, path and credentials${NC}"
+            exit 1
+        fi
+    else
+        local target_dir="$2"
+        [ ! -d "$target_dir" ] && { echo -e "${RED}Error: '$target_dir' not found${NC}"; exit 1; }
+        target_dir=$(realpath "$target_dir")
+        display_path="$target_dir"
+        root_name=$(basename "$target_dir")
+        echo -e "${YELLOW}⏳ Scanning for HTML report (depth=${HTML_DEPTH})...${NC}"
+        _collect_local_data "$target_dir" "$HTML_DEPTH" > "$tmp"
+    fi
+
+    local file_count dir_count root_size
     file_count=$(awk -F'\t' '$2=="file"' "$tmp" | wc -l)
     dir_count=$(awk -F'\t' '$2=="dir"' "$tmp" | wc -l)
     dir_count=$((dir_count - 1))
+    root_size=$(awk -F'\t' 'NR==1{print $1}' "$tmp")
 
-    # Build JSON
     local json
-    json=$(awk -F'\t' '
+    json=$(awk -v rootname="$root_name" -F'\t' '
     function js(s,    r,i,c){
         r=""
         for(i=1;i<=length(s);i++){
@@ -676,9 +732,8 @@ generate_html_report() {
     BEGIN{printf "["}
     {
         sz=$1;tp=$2
-        # path = everything after the 2nd tab
         rest=$0;sub(/^[^\t]+\t[^\t]+\t/,"",rest);path=rest
-        nm=(path=="")?".":bn(path);par=dn(path);e=(tp=="file")?ex(nm):""
+        nm=(path=="")?rootname:bn(path);par=dn(path);e=(tp=="file")?ex(nm):""
         if(NR>1)printf","
         printf "{\"path\":%s,\"name\":%s,\"size\":%s,\"type\":%s,\"parent\":%s,\"ext\":%s}",
             js(path),js(nm),sz,js(tp),js(par),js(e)
@@ -691,7 +746,7 @@ generate_html_report() {
     scan_date=$(date '+%Y-%m-%d %H:%M:%S')
 
     {
-        _html_head "$root_name" "$target_dir" "$scan_date" "$human" "$dir_count" "$file_count"
+        _html_head "$root_name" "$display_path" "$scan_date" "$human" "$dir_count" "$file_count"
         printf '%s\n' "$json"
         _html_tail
     } > "$output_file"
@@ -716,19 +771,41 @@ while [[ $# -gt 0 ]]; do
             if [[ $2 =~ ^[0-9]+$ ]]; then TOP_FILES_COUNT="$2"; shift 2; else shift; fi ;;
         -s|--sort)        shift 2 ;;  # kept for compatibility, unused
         --html)
-            if [[ -n $2 && $2 != -* && ! -d "$2" ]]; then HTML_OUTPUT="$2"; shift 2
-            else HTML_OUTPUT="$(mktemp /tmp/disk-usage-XXXXXX.html)"; shift; fi ;;
+            if [[ -n $2 && $2 != -* && ! -d "$2" ]]; then
+                # Check if the value looks like [user@]host:/path (SSH target)
+                if [[ "$2" =~ ^[A-Za-z0-9._@-]+:.+ ]]; then
+                    # Parse SSH target: split on first ':'
+                    REMOTE_HOST="${2%%:*}"
+                    REMOTE_PATH="${2#*:}"
+                    HTML_OUTPUT="$(mktemp /tmp/disk-usage-XXXXXX.html)"
+                    shift 2
+                else
+                    HTML_OUTPUT="$2"; shift 2
+                fi
+            else
+                HTML_OUTPUT="$(mktemp /tmp/disk-usage-XXXXXX.html)"; shift
+            fi ;;
         --html-depth)     HTML_DEPTH="$2"; shift 2 ;;
+        --ssh-opts)       SSH_OPTS="$2"; shift 2 ;;
         -h|--help)        show_help; exit 0 ;;
         *)
-            if [ -d "$1" ]; then TARGET_DIR="$1"
-            else echo -e "${RED}Error: '$1' is not a valid directory or option${NC}"; show_help; exit 1; fi
+            # Detect [user@]host:/path as positional argument (without --html)
+            if [[ "$1" =~ ^[A-Za-z0-9._@-]+:.+ ]]; then
+                REMOTE_HOST="${1%%:*}"
+                REMOTE_PATH="${1#*:}"
+                [ -z "$HTML_OUTPUT" ] && HTML_OUTPUT="$(mktemp /tmp/disk-usage-XXXXXX.html)"
+            elif [ -d "$1" ]; then
+                TARGET_DIR="$1"
+            else
+                echo -e "${RED}Error: '$1' is not a valid directory, SSH path, or option${NC}"
+                show_help; exit 1
+            fi
             shift ;;
     esac
 done
 
 if [ -n "$HTML_OUTPUT" ]; then
-    generate_html_report "$TARGET_DIR" "$HTML_OUTPUT"
+    generate_html_report "$HTML_OUTPUT" "$TARGET_DIR"
 else
     analyze_directory "$TARGET_DIR" "$MAX_DEPTH"
 fi
