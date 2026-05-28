@@ -479,6 +479,10 @@ select_server_fzf() {
         | awk -F'\t' '{printf "%s\t%-28s\t%-32s\t%s\n",$1,$2,$3,$4}')
     [[ -z "$fzf_input" ]] && return 1
 
+    local back_line
+    back_line=$(printf 'BACK\t%-28s\t%-32s\t' '← Back to main menu' '')
+    fzf_input="${back_line}"$'\n'"${fzf_input}"
+
     clear >/dev/tty
     local selected
     selected=$(echo "$fzf_input" | fzf \
@@ -491,8 +495,10 @@ select_server_fzf() {
         --no-multi \
         --bind='esc:abort') || return 1
 
-    # extract numeric index (field 1) — strip spaces, CR and any whitespace
-    echo "$selected" | cut -f1 | tr -d '[:space:]'
+    local idx
+    idx=$(echo "$selected" | cut -f1 | tr -d '[:space:]')
+    [[ "$idx" == "BACK" ]] && return 1
+    echo "$idx"
 }
 
 # Fuzzy find: exact match first, then case-insensitive substring.
