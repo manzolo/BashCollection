@@ -467,11 +467,14 @@ select_server_fzf() {
     # Field 3: user@host:port
     # Field 4: description
     local fzf_input
-    fzf_input=$(jq -r '.servers[] |
-        [.name,
-         (if (.favorite // false) then "★ " else "  " end) + .name,
-         (.user + "@" + .host + ":" + (.port // 22 | tostring)),
-         (.description // "")] | @tsv' "$CONFIG_FILE" \
+    fzf_input=$(jq -r '
+        .servers
+        | sort_by([(if (.favorite // false) then 0 else 1 end), -(.last_used // 0)])
+        | .[]
+        | [.name,
+           (if (.favorite // false) then "★ " else "  " end) + .name,
+           (.user + "@" + .host + ":" + (.port // 22 | tostring)),
+           (.description // "")] | @tsv' "$CONFIG_FILE" \
         | awk -F'\t' 'BEGIN{OFS="\t"} {printf "%s\t%-28s\t%-32s\t%s\n",$1,$2,$3,$4}')
     [[ -z "$fzf_input" ]] && return 1
 
