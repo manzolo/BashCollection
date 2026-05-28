@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: ssh-manager
-# PKG_VERSION: 2.6.6
+# PKG_VERSION: 2.6.7
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -31,13 +31,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Configuration
 CONFIG_DIR="$HOME/.config/manzolo/ssh-manager"
-CONFIG_FILE="$CONFIG_DIR/config.json"
-LOG_FILE="$CONFIG_DIR/ssh-manager.log"
-VERSION="2.6.6"
+# shellcheck disable=SC2034
+export CONFIG_FILE="$CONFIG_DIR/config.json"
+# shellcheck disable=SC2034
+export LOG_FILE="$CONFIG_DIR/ssh-manager.log"
+# shellcheck disable=SC2034
+export VERSION="2.6.7"
 
 # Source all modules
 for module in "$SCRIPT_DIR/ssh-manager/"*.sh; do
     if [[ -f "$module" ]]; then
+        # shellcheck source=/dev/null
         source "$module"
     fi
 done
@@ -64,8 +68,8 @@ main() {
         fi
     fi
 
-    if ! command -v yq &> /dev/null; then
-        print_message "$RED" "❌ yq is not installed. Run option 9 from the menu."
+    if ! command -v jq &> /dev/null; then
+        print_message "$RED" "❌ jq is not installed. Run option 9 from the menu."
         echo "Do you want to install the prerequisites now? (Y/n)"
         read -r response
         if [[ -z "$response" || "$response" =~ ^[Yy]$ ]]; then
@@ -87,5 +91,18 @@ main() {
 
 # Run if script is called directly
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    case "${1:-}" in
+        -h|--help)
+            echo "Usage: $(basename "$0") [OPTIONS]"
+            echo ""
+            echo "Interactive SSH connection manager with profiles and automation."
+            echo ""
+            echo "Options:"
+            echo "  -h, --help    Show this help message and exit"
+            echo ""
+            echo "Run without arguments to launch the interactive menu."
+            exit 0
+            ;;
+    esac
     main "$@"
 fi
