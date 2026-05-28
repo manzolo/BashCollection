@@ -1,11 +1,11 @@
 #!/bin/bash
 # PKG_NAME: ssh-manager
-# PKG_VERSION: 2.6.9
+# PKG_VERSION: 2.7.0
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
 # PKG_DEPENDS: bash (>= 4.0), openssh-client, jq
-# PKG_RECOMMENDS: sshpass, autossh
+# PKG_RECOMMENDS: sshpass, autossh, fzf
 # PKG_MAINTAINER: Manzolo <manzolo@libero.it>
 # PKG_DESCRIPTION: Enhanced SSH connection manager with profiles and automation
 # PKG_LONG_DESCRIPTION: Comprehensive SSH management tool for managing
@@ -36,7 +36,7 @@ export CONFIG_FILE="$CONFIG_DIR/config.json"
 # shellcheck disable=SC2034
 export LOG_FILE="$CONFIG_DIR/ssh-manager.log"
 # shellcheck disable=SC2034
-export VERSION="2.6.9"
+export VERSION="2.7.0"
 
 # Source all modules
 for module in "$SCRIPT_DIR/ssh-manager/"*.sh; do
@@ -102,7 +102,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
             echo ""
             echo "Commands:"
             echo "  list               List all saved connections"
-            echo "  CONNECTION-NAME    Connect directly (supports partial/case-insensitive match)"
+            echo "  CONNECTION-NAME    Connect directly (partial match; fzf picker if ambiguous)"
             echo ""
             echo "Run without arguments to launch the interactive menu."
             exit 0
@@ -137,17 +137,34 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
                     execute_ssh_action "ssh" "$_fuzzy_matches"
                     exit $?
                     ;;
-                1)
-                    echo "Connection '$1' not found. Use 'ssh-manager list' to see available connections." >&2
-                    exit 1
-                    ;;
-                2)
-                    echo "Multiple matches for '$1':" >&2
-                    while IFS= read -r _idx; do
-                        jq -r --argjson i "$_idx" '"  \(.servers[$i].name)  (\(.servers[$i].user)@\(.servers[$i].host))"' "$CONFIG_FILE" >&2
-                    done <<< "$_fuzzy_matches"
-                    echo "Please be more specific." >&2
-                    exit 1
+                1|2)
+                    if command -v fzf >/dev/null 2>&1; then
+                        _fzf_list=$(jq -r '.servers | to_entries[] |
+                            "\(.key)\t\(.value.name)\t\(.value.user)@\(.value.host):\(.value.port // 22)\t\(.value.description // "")"' \
+                            "$CONFIG_FILE")
+                        _selected=$(echo "$_fzf_list" | fzf \
+                            --delimiter=$'\t' \
+                            --with-nth=2,3,4 \
+                            --query="$1" \
+                            --prompt="Connect to > " \
+                            --height=40% \
+                            --reverse \
+                            --no-multi)
+                        [[ -z "$_selected" ]] && exit 1
+                        _sel_idx=$(echo "$_selected" | cut -f1)
+                        execute_ssh_action "ssh" "$_sel_idx"
+                        exit $?
+                    elif [[ $_fuzzy_status -eq 1 ]]; then
+                        echo "Connection '$1' not found. Use 'ssh-manager list' to see available connections." >&2
+                        exit 1
+                    else
+                        echo "Multiple matches for '$1':" >&2
+                        while IFS= read -r _idx; do
+                            jq -r --argjson i "$_idx" '"  \(.servers[$i].name)  (\(.servers[$i].user)@\(.servers[$i].host))"' "$CONFIG_FILE" >&2
+                        done <<< "$_fuzzy_matches"
+                        echo "Please be more specific." >&2
+                        exit 1
+                    fi
                     ;;
             esac
             ;;
