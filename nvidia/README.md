@@ -33,6 +33,9 @@ Interactive NVIDIA driver and GPU management tool with comprehensive troubleshoo
 - **Safe Operations**: Confirmation prompts before destructive actions
 - **Detailed Feedback**: Clear success/warning/error messages
 - **Reboot Management**: Prompts for reboot when required
+- **Live Dashboard**: Auto-refresh GPU utilization, temperature, memory, power, fan and process view
+- **Performance Controls**: Persistence mode, power limit, fan speed and clock offset workflows
+- **GPU Process Viewer**: Inspect GPU compute processes and terminate selected PIDs
 
 ## Usage
 
@@ -41,15 +44,21 @@ Interactive NVIDIA driver and GPU management tool with comprehensive troubleshoo
 ```bash
 # Launch the interactive interface
 sudo nvidia-manager
+
+# Show command help without requiring root
+nvidia-manager --help
 ```
 
-The main menu provides six options:
+The main menu provides nine options:
 1. Check Driver Status
-2. Clean Drivers
-3. Search and Install Drivers
-4. Manage Container Toolkit
-5. Troubleshoot
-6. Exit
+2. Live GPU Dashboard
+3. Performance Controls
+4. GPU Process Viewer
+5. Clean Drivers
+6. Search and Install Drivers
+7. Manage Container Toolkit
+8. Troubleshoot
+9. Exit
 
 ### Menu Options Explained
 
@@ -73,7 +82,35 @@ Displays detailed NVIDIA driver information using nvidia-smi, including:
 +-------------------------------+----------------------+----------------------+
 ```
 
-#### 2. Clean Drivers
+#### 2. Live GPU Dashboard
+
+Shows an auto-refreshing terminal dashboard with:
+- GPU model and index
+- Utilization, temperature and P-state
+- VRAM usage
+- Power draw and power limit
+- Fan speed when exposed by the driver
+- GPU compute processes reported by `nvidia-smi`
+
+Press `q` or `Ctrl+C` to return to the main menu.
+
+#### 3. Performance Controls
+
+Provides guarded workflows for:
+- Enabling or disabling NVIDIA persistence mode
+- Setting GPU power limits with `nvidia-smi`
+- Setting manual fan speed with `nvidia-settings`
+- Returning fan control to automatic
+- Applying graphics and memory clock offsets with `nvidia-settings`
+- Resetting locked clocks with `nvidia-smi`
+
+Fan and clock offset controls require an X session, proper permissions and Coolbits support.
+
+#### 4. GPU Process Viewer
+
+Lists GPU compute processes reported by `nvidia-smi`, including PID, process name, VRAM usage and GPU UUID. From the viewer you can inspect process details, send `SIGTERM`, or force termination with `SIGKILL`.
+
+#### 5. Clean Drivers
 
 Removes all NVIDIA drivers and related packages from the system.
 
@@ -89,7 +126,7 @@ Removes all NVIDIA drivers and related packages from the system.
 - Preparing for manual driver installation
 - Clean system state before reinstall
 
-#### 3. Search and Install Drivers
+#### 6. Search and Install Drivers
 
 Searches Ubuntu repositories for available NVIDIA driver versions and allows installation.
 
@@ -106,7 +143,7 @@ Searches Ubuntu repositories for available NVIDIA driver versions and allows ins
 - nvidia-driver-470 (Legacy)
 - nvidia-driver-390 (Older GPUs)
 
-#### 4. Manage Container Toolkit
+#### 7. Manage Container Toolkit
 
 Installs and configures NVIDIA Container Toolkit for GPU support in Docker/containerd.
 
@@ -129,7 +166,7 @@ Installs and configures NVIDIA Container Toolkit for GPU support in Docker/conta
 docker run --rm --gpus all nvidia/cuda:12.2.0-base-ubuntu22.04 nvidia-smi
 ```
 
-#### 5. Troubleshoot
+#### 8. Troubleshoot
 
 Runs comprehensive diagnostics and generates a troubleshooting report.
 
