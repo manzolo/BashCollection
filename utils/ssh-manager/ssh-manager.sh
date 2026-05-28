@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: ssh-manager
-# PKG_VERSION: 2.6.8
+# PKG_VERSION: 2.6.9
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -36,7 +36,7 @@ export CONFIG_FILE="$CONFIG_DIR/config.json"
 # shellcheck disable=SC2034
 export LOG_FILE="$CONFIG_DIR/ssh-manager.log"
 # shellcheck disable=SC2034
-export VERSION="2.6.8"
+export VERSION="2.6.9"
 
 # Source all modules
 for module in "$SCRIPT_DIR/ssh-manager/"*.sh; do
@@ -100,13 +100,29 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
             echo "Options:"
             echo "  -h, --help         Show this help message and exit"
             echo ""
-            echo "Arguments:"
-            echo "  CONNECTION-NAME    Connect directly using a saved connection profile"
+            echo "Commands:"
+            echo "  list               List all saved connections"
+            echo "  CONNECTION-NAME    Connect directly (supports partial/case-insensitive match)"
             echo ""
             echo "Run without arguments to launch the interactive menu."
             exit 0
             ;;
         "")
+            ;;
+        list)
+            if [[ "${BASH_VERSINFO[0]}" -lt 4 ]]; then echo "Bash 4+ required." >&2; exit 1; fi
+            init_config
+            printf "%-24s %-30s %s\n" "NAME" "HOST" "DESCRIPTION"
+            printf "%-24s %-30s %s\n" "----" "----" "-----------"
+            jq -r '.servers[] | [
+                .name,
+                (.user + "@" + .host + ":" + (.port // 22 | tostring)),
+                (.description // "")
+            ] | @tsv' "$CONFIG_FILE" | \
+                while IFS=$'\t' read -r name host desc; do
+                    printf "%-24s %-30s %s\n" "$name" "$host" "$desc"
+                done
+            exit 0
             ;;
         *)
             if [[ "${BASH_VERSINFO[0]}" -lt 4 ]]; then
@@ -114,13 +130,26 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
                 exit 1
             fi
             init_config
-            _direct_idx=$(get_server_index_by_name "$1")
-            if [[ -z "$_direct_idx" ]]; then
-                echo "Connection '$1' not found." >&2
-                exit 1
-            fi
-            execute_ssh_action "ssh" "$_direct_idx"
-            exit $?
+            _fuzzy_matches=$(find_server_fuzzy "$1")
+            _fuzzy_status=$?
+            case $_fuzzy_status in
+                0)
+                    execute_ssh_action "ssh" "$_fuzzy_matches"
+                    exit $?
+                    ;;
+                1)
+                    echo "Connection '$1' not found. Use 'ssh-manager list' to see available connections." >&2
+                    exit 1
+                    ;;
+                2)
+                    echo "Multiple matches for '$1':" >&2
+                    while IFS= read -r _idx; do
+                        jq -r --argjson i "$_idx" '"  \(.servers[$i].name)  (\(.servers[$i].user)@\(.servers[$i].host))"' "$CONFIG_FILE" >&2
+                    done <<< "$_fuzzy_matches"
+                    echo "Please be more specific." >&2
+                    exit 1
+                    ;;
+            esac
             ;;
     esac
     main "$@"

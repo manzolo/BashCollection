@@ -454,3 +454,34 @@ get_server_index_by_name() {
     [[ -n "$idx" ]] && { echo "$idx"; return 0; }
     return 1
 }
+
+# Fuzzy find: exact match first, then case-insensitive substring.
+# Prints matching index/indices. Returns 0 (one match), 1 (no match), 2 (ambiguous).
+find_server_fuzzy() {
+    local query="$1"
+    local idx
+
+    # exact match
+    idx=$(jq -r --arg q "$query" '.servers | to_entries[] | select(.value.name == $q) | .key' "$CONFIG_FILE")
+    if [[ -n "$idx" ]]; then echo "$idx"; return 0; fi
+
+    # case-insensitive substring
+    local matches
+    matches=$(jq -r --arg q "${query,,}" '
+        .servers | to_entries[] |
+        select(.value.name | ascii_downcase | contains($q)) |
+        .key' "$CONFIG_FILE")
+
+    local count
+    count=$(echo "$matches" | grep -c '[0-9]' 2>/dev/null || echo 0)
+
+    if [[ "$count" -eq 0 ]]; then
+        return 1
+    elif [[ "$count" -eq 1 ]]; then
+        echo "$matches"
+        return 0
+    else
+        echo "$matches"
+        return 2
+    fi
+}
