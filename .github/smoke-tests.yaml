@@ -66,3 +66,9 @@ disk-usage:
 
 manzolo-app:
   cmd: ["--help"]
+
+nvidia-manager:
+  cmd: ["--help"]
+
+ssh-manager:
+  cmd: ["--help"]

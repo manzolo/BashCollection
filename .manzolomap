@@ -15,3 +15,5 @@ utils/ollama-tools/ollama-codex.sh#ollama-codex
 utils/ollama-tools/openrouter-claude.sh#openrouter-claude
 utils/disk-usage/disk-usage.sh#disk-usage
 utils/manzolo-app/manzolo-app.sh#manzolo-app
+nvidia/nvidia-manager.sh#nvidia-manager
+utils/ssh-manager/ssh-manager.sh#ssh-manager
