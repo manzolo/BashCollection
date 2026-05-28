@@ -61,7 +61,7 @@ ollama-codex:
 openrouter-claude:
   cmd: ["--version"]
 
-disk-usage:
+mdu:
   cmd: ["--help"]
 
 manzolo-app:
