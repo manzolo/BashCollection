@@ -258,9 +258,11 @@ record_server_usage() {
     use_count=$(yq eval ".servers[$index].use_count // 0" "$CONFIG_FILE")
     [[ "$use_count" == "null" || -z "$use_count" ]] && use_count=0
 
-    yq eval "(.servers[$index].last_used) = $now" -i "$CONFIG_FILE"
-    yq eval "(.servers[$index].last_action) = \"$action\"" -i "$CONFIG_FILE"
-    yq eval "(.servers[$index].use_count) = $((use_count + 1))" -i "$CONFIG_FILE"
+    yq eval "
+        (.servers[$index].last_used) = $now |
+        (.servers[$index].last_action) = \"$action\" |
+        (.servers[$index].use_count) = $((use_count + 1))
+    " -i "$CONFIG_FILE"
 }
 
 get_sorted_server_indices() {
