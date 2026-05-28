@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: ssh-manager
-# PKG_VERSION: 2.6.7
+# PKG_VERSION: 2.6.8
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -36,7 +36,7 @@ export CONFIG_FILE="$CONFIG_DIR/config.json"
 # shellcheck disable=SC2034
 export LOG_FILE="$CONFIG_DIR/ssh-manager.log"
 # shellcheck disable=SC2034
-export VERSION="2.6.7"
+export VERSION="2.6.8"
 
 # Source all modules
 for module in "$SCRIPT_DIR/ssh-manager/"*.sh; do
@@ -93,15 +93,34 @@ main() {
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     case "${1:-}" in
         -h|--help)
-            echo "Usage: $(basename "$0") [OPTIONS]"
+            echo "Usage: $(basename "$0") [OPTIONS] [CONNECTION-NAME]"
             echo ""
             echo "Interactive SSH connection manager with profiles and automation."
             echo ""
             echo "Options:"
-            echo "  -h, --help    Show this help message and exit"
+            echo "  -h, --help         Show this help message and exit"
+            echo ""
+            echo "Arguments:"
+            echo "  CONNECTION-NAME    Connect directly using a saved connection profile"
             echo ""
             echo "Run without arguments to launch the interactive menu."
             exit 0
+            ;;
+        "")
+            ;;
+        *)
+            if [[ "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+                echo "Bash 4+ required." >&2
+                exit 1
+            fi
+            init_config
+            _direct_idx=$(get_server_index_by_name "$1")
+            if [[ -z "$_direct_idx" ]]; then
+                echo "Connection '$1' not found." >&2
+                exit 1
+            fi
+            execute_ssh_action "ssh" "$_direct_idx"
+            exit $?
             ;;
     esac
     main "$@"
