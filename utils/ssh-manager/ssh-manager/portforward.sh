@@ -99,16 +99,9 @@ add_portforward() {
 
     # Select server
     local menu_items=()
-    local server_count
-    server_count=$(yq eval '.servers | length' "$CONFIG_FILE")
-
-    for ((i=0; i<server_count; i++)); do
-        local name host user
-        name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
-        host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
-        user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
+    while IFS= read -r name && IFS= read -r host && IFS= read -r user; do
         menu_items+=("$name" "$name ($user@$host)")
-    done
+    done < <(jq -r '.servers[] | .name, .host, .user' "$CONFIG_FILE")
 
     local server_choice
     server_choice=$(dialog --clear --title "Add Port Forward" --menu \
@@ -141,7 +134,8 @@ add_portforward() {
     [[ -z "$pf_name" ]] && return
 
     # Check for duplicate name
-    if PF_NAME="$pf_name" yq eval ".servers[$server_index].portforwards[]? | select(.name == strenv(PF_NAME)) | .name" "$CONFIG_FILE" 2>/dev/null | grep -Fxq "$pf_name"; then
+    if jq -e --argjson i "$server_index" --arg n "$pf_name" \
+        '.servers[$i].portforwards[]? | select(.name == $n)' "$CONFIG_FILE" &>/dev/null; then
         dialog --title "Error" --msgbox "Port forward profile '$pf_name' already exists!" 8 50
         return 1
     fi
@@ -210,34 +204,23 @@ add_portforward() {
     # Build YAML entry
     backup_config
 
-    # Initialize portforwards array if it doesn't exist
-    if ! yq eval ".servers[$server_index].portforwards" "$CONFIG_FILE" &>/dev/null || \
-       [[ "$(yq eval ".servers[$server_index].portforwards" "$CONFIG_FILE")" == "null" ]]; then
-        yq eval ".servers[$server_index].portforwards = []" -i "$CONFIG_FILE"
-    fi
-
-    PF_NAME="$pf_name" TUNNEL_TYPE="$tunnel_type" LOCAL_PORT="$local_port" \
-        yq eval ".servers[$server_index].portforwards += [{
-            \"name\": strenv(PF_NAME),
-            \"type\": strenv(TUNNEL_TYPE),
-            \"local_port\": (strenv(LOCAL_PORT) | tonumber)
-        }]" -i "$CONFIG_FILE"
-
-    if [[ -n "$remote_host" ]]; then
-        REMOTE_HOST="$remote_host" \
-            yq eval "(.servers[$server_index].portforwards[-1].remote_host) = strenv(REMOTE_HOST)" -i "$CONFIG_FILE"
-    fi
-    if [[ -n "$remote_port" ]]; then
-        REMOTE_PORT="$remote_port" \
-            yq eval "(.servers[$server_index].portforwards[-1].remote_port) = (strenv(REMOTE_PORT) | tonumber)" -i "$CONFIG_FILE"
-    fi
-    if [[ -n "$description" ]]; then
-        DESCRIPTION="$description" \
-            yq eval "(.servers[$server_index].portforwards[-1].description) = strenv(DESCRIPTION)" -i "$CONFIG_FILE"
-    fi
-    if [[ "$autoreconnect" == "true" ]]; then
-        yq eval "(.servers[$server_index].portforwards[-1].autoreconnect) = true" -i "$CONFIG_FILE"
-    fi
+    jq_inplace "$CONFIG_FILE" \
+        --argjson idx "$server_index" \
+        --arg pf_name "$pf_name" --arg tunnel_type "$tunnel_type" \
+        --argjson local_port "$local_port" \
+        --arg remote_host "$remote_host" --arg remote_port "$remote_port" \
+        --arg description "$description" --arg autoreconnect "$autoreconnect" '
+        (.servers[$idx].portforwards) //= [] |
+        .servers[$idx].portforwards += [{
+            "name": $pf_name,
+            "type": $tunnel_type,
+            "local_port": $local_port
+        }] |
+        if $remote_host != "" then (.servers[$idx].portforwards[-1].remote_host) = $remote_host else . end |
+        if $remote_port != "" then (.servers[$idx].portforwards[-1].remote_port) = ($remote_port | tonumber) else . end |
+        if $description != "" then (.servers[$idx].portforwards[-1].description) = $description else . end |
+        if $autoreconnect == "true" then (.servers[$idx].portforwards[-1].autoreconnect) = true else . end
+    '
 
     dialog --title "Success" --msgbox "Port forward profile '$pf_name' added successfully!" 8 50
     log_message "INFO" "Port forward profile added: $pf_name (type: $tunnel_type)"
@@ -252,44 +235,30 @@ list_portforwards() {
 
     local info_text="PORT FORWARD PROFILES\n\n"
     local found_any=false
-    local server_count
-    server_count=$(yq eval '.servers | length' "$CONFIG_FILE")
 
-    for ((i=0; i<server_count; i++)); do
-        local server_name
-        server_name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
-
+    while IFS= read -r server_name && IFS= read -r pf_json; do
+        [[ "$pf_json" == "[]" || "$pf_json" == "null" ]] && continue
         local pf_count
-        pf_count=$(yq eval ".servers[$i].portforwards | length" "$CONFIG_FILE" 2>/dev/null)
-
-        if [[ -n "$pf_count" && "$pf_count" != "null" && "$pf_count" -gt 0 ]]; then
-            found_any=true
-            info_text+="Server: $server_name\n"
-
-            for ((j=0; j<pf_count; j++)); do
-                local name type local_port remote_host remote_port desc autoreconnect
-                name=$(yq eval ".servers[$i].portforwards[$j].name" "$CONFIG_FILE")
-                type=$(yq eval ".servers[$i].portforwards[$j].type" "$CONFIG_FILE")
-                local_port=$(yq eval ".servers[$i].portforwards[$j].local_port" "$CONFIG_FILE")
-                remote_host=$(yq eval ".servers[$i].portforwards[$j].remote_host // \"\"" "$CONFIG_FILE")
-                remote_port=$(yq eval ".servers[$i].portforwards[$j].remote_port // \"\"" "$CONFIG_FILE")
-                desc=$(yq eval ".servers[$i].portforwards[$j].description // \"\"" "$CONFIG_FILE")
-                autoreconnect=$(yq eval ".servers[$i].portforwards[$j].autoreconnect // false" "$CONFIG_FILE")
-
-                info_text+="  [$((j+1))] $name ($type)\n"
-
-                case "$type" in
-                    "L") info_text+="      Local: $local_port → $remote_host:$remote_port\n" ;;
-                    "R") info_text+="      Remote: $remote_port → $remote_host:$local_port\n" ;;
-                    "D") info_text+="      SOCKS: localhost:$local_port\n" ;;
-                esac
-
-                [[ -n "$desc" && "$desc" != "null" ]] && info_text+="      Desc: $desc\n"
-                [[ "$autoreconnect" == "true" ]] && info_text+="      Auto-reconnect: Yes\n"
-            done
-            info_text+="\n"
-        fi
-    done
+        pf_count=$(jq 'length' <<< "$pf_json")
+        [[ "$pf_count" -eq 0 ]] && continue
+        found_any=true
+        info_text+="Server: $server_name\n"
+        local j=1
+        while IFS= read -r name && IFS= read -r type && IFS= read -r local_port && \
+              IFS= read -r remote_host && IFS= read -r remote_port && \
+              IFS= read -r desc && IFS= read -r autoreconnect; do
+            info_text+="  [$j] $name ($type)\n"
+            case "$type" in
+                "L") info_text+="      Local: $local_port → $remote_host:$remote_port\n" ;;
+                "R") info_text+="      Remote: $remote_port → $remote_host:$local_port\n" ;;
+                "D") info_text+="      SOCKS: localhost:$local_port\n" ;;
+            esac
+            [[ -n "$desc" && "$desc" != "null" ]] && info_text+="      Desc: $desc\n"
+            [[ "$autoreconnect" == "true" ]] && info_text+="      Auto-reconnect: Yes\n"
+            ((j++))
+        done < <(jq -r '.[] | (.name, .type, (.local_port | tostring), (.remote_host // ""), (.remote_port // "" | tostring), (.description // ""), (.autoreconnect // false | tostring))' <<< "$pf_json")
+        info_text+="\n"
+    done < <(jq -r '.servers[] | .name, (.portforwards // [] | tojson)' "$CONFIG_FILE")
 
     if [[ "$found_any" == "false" ]]; then
         dialog --title "Port Forwards" --msgbox "No port forward profiles configured" 8 50
@@ -310,37 +279,28 @@ start_portforward() {
     # Build menu of available port forwards
     local menu_items=()
     local pf_map=()
-    local server_count
-    server_count=$(yq eval '.servers | length' "$CONFIG_FILE")
 
-    for ((i=0; i<server_count; i++)); do
-        local server_name
-        server_name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
-
-        local pf_count
-        pf_count=$(yq eval ".servers[$i].portforwards | length" "$CONFIG_FILE" 2>/dev/null)
-
-        if [[ -n "$pf_count" && "$pf_count" != "null" && "$pf_count" -gt 0 ]]; then
-            for ((j=0; j<pf_count; j++)); do
-                local name type local_port remote_host remote_port
-                name=$(yq eval ".servers[$i].portforwards[$j].name" "$CONFIG_FILE")
-                type=$(yq eval ".servers[$i].portforwards[$j].type" "$CONFIG_FILE")
-                local_port=$(yq eval ".servers[$i].portforwards[$j].local_port" "$CONFIG_FILE")
-                remote_host=$(yq eval ".servers[$i].portforwards[$j].remote_host // \"\"" "$CONFIG_FILE")
-                remote_port=$(yq eval ".servers[$i].portforwards[$j].remote_port // \"\"" "$CONFIG_FILE")
-
-                local display_text="$name @ $server_name"
-                case "$type" in
-                    "L") display_text+=" (Local :$local_port → $remote_host:$remote_port)" ;;
-                    "R") display_text+=" (Remote :$remote_port → $local_port)" ;;
-                    "D") display_text+=" (SOCKS :$local_port)" ;;
-                esac
-
-                menu_items+=("$i:$j" "$display_text")
-                pf_map+=("$i:$j")
-            done
-        fi
-    done
+    while IFS= read -r sidx && IFS= read -r server_name && \
+          IFS= read -r jidx && IFS= read -r name && IFS= read -r type && \
+          IFS= read -r local_port && IFS= read -r remote_host && IFS= read -r remote_port; do
+        local display_text="$name @ $server_name"
+        case "$type" in
+            "L") display_text+=" (Local :$local_port → $remote_host:$remote_port)" ;;
+            "R") display_text+=" (Remote :$remote_port → $local_port)" ;;
+            "D") display_text+=" (SOCKS :$local_port)" ;;
+        esac
+        menu_items+=("$sidx:$jidx" "$display_text")
+        pf_map+=("$sidx:$jidx")
+    done < <(jq -r '
+        .servers | to_entries[] |
+        .key as $si | .value.name as $sn |
+        (.value.portforwards // []) | to_entries[] |
+        ($si | tostring), $sn, (.key | tostring),
+        .value.name, .value.type,
+        (.value.local_port | tostring),
+        (.value.remote_host // ""),
+        (.value.remote_port // "" | tostring)
+    ' "$CONFIG_FILE")
 
     if [[ ${#menu_items[@]} -eq 0 ]]; then
         dialog --title "Error" --msgbox "No port forward profiles configured" 8 50
@@ -357,16 +317,21 @@ start_portforward() {
     local pf_idx="${choice#*:}"
 
     # Get server and port forward details
-    local server_name
-    server_name=$(yq eval ".servers[$server_idx].name" "$CONFIG_FILE")
-
+    local server_name fields
     local pf_name pf_type pf_local_port pf_remote_host pf_remote_port autoreconnect
-    pf_name=$(yq eval ".servers[$server_idx].portforwards[$pf_idx].name" "$CONFIG_FILE")
-    pf_type=$(yq eval ".servers[$server_idx].portforwards[$pf_idx].type" "$CONFIG_FILE")
-    pf_local_port=$(yq eval ".servers[$server_idx].portforwards[$pf_idx].local_port" "$CONFIG_FILE")
-    pf_remote_host=$(yq eval ".servers[$server_idx].portforwards[$pf_idx].remote_host // \"\"" "$CONFIG_FILE")
-    pf_remote_port=$(yq eval ".servers[$server_idx].portforwards[$pf_idx].remote_port // \"\"" "$CONFIG_FILE")
-    autoreconnect=$(yq eval ".servers[$server_idx].portforwards[$pf_idx].autoreconnect // false" "$CONFIG_FILE")
+    readarray -t fields < <(jq -r --argjson si "$server_idx" --argjson pi "$pf_idx" '
+        .servers[$si].name,
+        .servers[$si].portforwards[$pi] | (
+            .name, .type,
+            (.local_port | tostring),
+            (.remote_host // ""),
+            (.remote_port // "" | tostring),
+            (.autoreconnect // false | tostring)
+        )
+    ' "$CONFIG_FILE")
+    server_name="${fields[0]}"
+    pf_name="${fields[1]}" pf_type="${fields[2]}" pf_local_port="${fields[3]}"
+    pf_remote_host="${fields[4]}" pf_remote_port="${fields[5]}" autoreconnect="${fields[6]}"
     local ssh_cmd=()
     local error_log
     local tunnel_marker
@@ -606,7 +571,7 @@ stop_portforward() {
         while IFS=: read -r server_idx pf_idx pid name; do
             if ps -p "$pid" &>/dev/null; then
                 local server_name
-                server_name=$(yq eval ".servers[$server_idx].name" "$CONFIG_FILE" 2>/dev/null || echo "Unknown")
+                server_name=$(jq -r --argjson i "$server_idx" '.servers[$i].name // "Unknown"' "$CONFIG_FILE" 2>/dev/null || echo "Unknown")
                 menu_items+=("$server_idx:$pf_idx:$pid" "$name @ $server_name (PID: $pid)")
                 cleaned_entries+=("${server_idx}:${pf_idx}:${pid}:${name}")
             else
@@ -716,7 +681,7 @@ stop_portforward() {
                 grep -v "^${server_idx}:${pf_idx}:${pid}:" "$PF_PIDS_FILE" | rewrite_pf_pids_file
 
                 local pf_name
-                pf_name=$(yq eval ".servers[$server_idx].portforwards[$pf_idx].name" "$CONFIG_FILE" 2>/dev/null || echo "Unknown")
+                pf_name=$(jq -r --argjson si "$server_idx" --argjson pi "$pf_idx" '.servers[$si].portforwards[$pi].name // "Unknown"' "$CONFIG_FILE" 2>/dev/null || echo "Unknown")
 
                 print_message "$GREEN" "✅ Port forward stopped: $pf_name (PID: $pid)"
                 log_message "INFO" "Port forward stopped: $pf_name (PID: $pid)"
@@ -749,15 +714,21 @@ show_active_tunnels() {
         if ps -p "$pid" &>/dev/null; then
             found_active=true
 
-            local server_name host
-            server_name=$(yq eval ".servers[$server_idx].name" "$CONFIG_FILE" 2>/dev/null || echo "Unknown")
-            host=$(yq eval ".servers[$server_idx].host" "$CONFIG_FILE" 2>/dev/null || echo "unknown")
-
+            local server_name host fields
             local pf_type local_port remote_host remote_port
-            pf_type=$(yq eval ".servers[$server_idx].portforwards[$pf_idx].type" "$CONFIG_FILE" 2>/dev/null)
-            local_port=$(yq eval ".servers[$server_idx].portforwards[$pf_idx].local_port" "$CONFIG_FILE" 2>/dev/null)
-            remote_host=$(yq eval ".servers[$server_idx].portforwards[$pf_idx].remote_host // \"\"" "$CONFIG_FILE" 2>/dev/null)
-            remote_port=$(yq eval ".servers[$server_idx].portforwards[$pf_idx].remote_port // \"\"" "$CONFIG_FILE" 2>/dev/null)
+            readarray -t fields < <(jq -r --argjson si "$server_idx" --argjson pi "$pf_idx" '
+                .servers[$si].name // "Unknown",
+                .servers[$si].host // "unknown",
+                .servers[$si].portforwards[$pi] | (
+                    .type,
+                    (.local_port | tostring),
+                    (.remote_host // ""),
+                    (.remote_port // "" | tostring)
+                )
+            ' "$CONFIG_FILE" 2>/dev/null)
+            server_name="${fields[0]}" host="${fields[1]}"
+            pf_type="${fields[2]}" local_port="${fields[3]}"
+            remote_host="${fields[4]}" remote_port="${fields[5]}"
 
             status_text+="[$pid] $name @ $server_name ($host)\n"
             status_text+="  Type: $pf_type | "
@@ -794,26 +765,15 @@ remove_portforward() {
 
     # Build menu of available port forwards
     local menu_items=()
-    local server_count
-    server_count=$(yq eval '.servers | length' "$CONFIG_FILE")
-
-    for ((i=0; i<server_count; i++)); do
-        local server_name
-        server_name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
-
-        local pf_count
-        pf_count=$(yq eval ".servers[$i].portforwards | length" "$CONFIG_FILE" 2>/dev/null)
-
-        if [[ -n "$pf_count" && "$pf_count" != "null" && "$pf_count" -gt 0 ]]; then
-            for ((j=0; j<pf_count; j++)); do
-                local name type
-                name=$(yq eval ".servers[$i].portforwards[$j].name" "$CONFIG_FILE")
-                type=$(yq eval ".servers[$i].portforwards[$j].type" "$CONFIG_FILE")
-
-                menu_items+=("$i:$j" "$name @ $server_name (Type: $type)")
-            done
-        fi
-    done
+    while IFS= read -r sidx && IFS= read -r server_name && \
+          IFS= read -r jidx && IFS= read -r name && IFS= read -r type; do
+        menu_items+=("$sidx:$jidx" "$name @ $server_name (Type: $type)")
+    done < <(jq -r '
+        .servers | to_entries[] |
+        .key as $si | .value.name as $sn |
+        (.value.portforwards // []) | to_entries[] |
+        ($si | tostring), $sn, (.key | tostring), .value.name, .value.type
+    ' "$CONFIG_FILE")
 
     if [[ ${#menu_items[@]} -eq 0 ]]; then
         dialog --title "Error" --msgbox "No port forward profiles configured" 8 50
@@ -835,14 +795,16 @@ remove_portforward() {
     local pf_idx="${choice#*:}"
 
     local pf_name
-    pf_name=$(yq eval ".servers[$server_idx].portforwards[$pf_idx].name" "$CONFIG_FILE")
+    pf_name=$(jq -r --argjson si "$server_idx" --argjson pi "$pf_idx" \
+        '.servers[$si].portforwards[$pi].name' "$CONFIG_FILE")
 
     dialog --clear --title "Confirm Removal" --yesno \
         "Are you sure you want to remove port forward profile:\n\n$pf_name" \
         10 60 || return
 
     backup_config
-    yq eval "del(.servers[$server_idx].portforwards[$pf_idx])" -i "$CONFIG_FILE"
+    jq_inplace "$CONFIG_FILE" --argjson si "$server_idx" --argjson pi "$pf_idx" \
+        'del(.servers[$si].portforwards[$pi])'
 
     dialog --title "Success" --msgbox "Port forward profile removed successfully!" 8 50
     log_message "INFO" "Port forward profile removed: $pf_name"

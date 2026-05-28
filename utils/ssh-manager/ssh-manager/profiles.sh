@@ -14,13 +14,12 @@ toggle_favorite_server() {
 
     while IFS= read -r i; do
         [[ -z "$i" ]] && continue
-        local name host user favorite label
-        name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
-        host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
-        user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
-        favorite=$(yq eval ".servers[$i].favorite // false" "$CONFIG_FILE")
+        local fields name host user fav label
+        readarray -t fields < <(jq -r --argjson i "$i" \
+            '.servers[$i] | .name, .host, .user, (.favorite // false | tostring)' "$CONFIG_FILE")
+        name="${fields[0]}" host="${fields[1]}" user="${fields[2]}" fav="${fields[3]}"
         label="$name ($user@$host)"
-        [[ "$favorite" == "true" ]] && label="★ $label"
+        [[ "$fav" == "true" ]] && label="★ $label"
         menu_items+=("$name" "$label")
     done <<< "$sorted_indices"
 
@@ -31,14 +30,14 @@ toggle_favorite_server() {
 
     local index current_state
     index=$(get_server_index_by_name "$choice") || return 1
-    current_state=$(yq eval ".servers[$index].favorite // false" "$CONFIG_FILE")
+    current_state=$(jq -r --argjson i "$index" '.servers[$i].favorite // false' "$CONFIG_FILE")
 
     backup_config
     if [[ "$current_state" == "true" ]]; then
-        yq eval "del(.servers[$index].favorite)" -i "$CONFIG_FILE"
+        jq_inplace "$CONFIG_FILE" --argjson i "$index" 'del(.servers[$i].favorite)'
         dialog --title "Favorite Updated" --msgbox "'$choice' removed from favorites" 8 50
     else
-        yq eval "(.servers[$index].favorite) = true" -i "$CONFIG_FILE"
+        jq_inplace "$CONFIG_FILE" --argjson i "$index" '(.servers[$i].favorite) = true'
         dialog --title "Favorite Updated" --msgbox "'$choice' added to favorites" 8 50
     fi
 }
@@ -55,14 +54,16 @@ show_recent_and_favorites() {
 
     while IFS= read -r i; do
         [[ -z "$i" ]] && continue
-        local name host user favorite last_used use_count last_action prefix
-        name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
-        host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
-        user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
-        favorite=$(yq eval ".servers[$i].favorite // false" "$CONFIG_FILE")
-        last_used=$(yq eval ".servers[$i].last_used // 0" "$CONFIG_FILE")
-        use_count=$(yq eval ".servers[$i].use_count // 0" "$CONFIG_FILE")
-        last_action=$(yq eval ".servers[$i].last_action // \"\"" "$CONFIG_FILE")
+        local fields name host user favorite last_used use_count last_action prefix
+        readarray -t fields < <(jq -r --argjson i "$i" '.servers[$i] | (
+            .name, .host, .user,
+            (.favorite // false | tostring),
+            (.last_used // 0 | tostring),
+            (.use_count // 0 | tostring),
+            (.last_action // "")
+        )' "$CONFIG_FILE")
+        name="${fields[0]}" host="${fields[1]}" user="${fields[2]}"
+        favorite="${fields[3]}" last_used="${fields[4]}" use_count="${fields[5]}" last_action="${fields[6]}"
         [[ "$last_action" == "null" ]] && last_action=""
 
         prefix=" "
@@ -129,29 +130,31 @@ import_from_ssh_config() {
         [[ -z "$user" ]] && user="$USER"
         [[ -z "$port" ]] && port="22"
 
-        if yq eval '.servers[]?.name' "$CONFIG_FILE" 2>/dev/null | grep -Fxq "$alias"; then
+        if jq -r --arg name "$alias" '[.servers[]? | select(.name == $name)] | length' "$CONFIG_FILE" 2>/dev/null | grep -qx '[^0]'; then
             ((skipped++))
             continue
         fi
-        if yq eval '.servers[]? | .host + "|" + .user' "$CONFIG_FILE" 2>/dev/null | grep -Fxq "${host}|${user}"; then
+        if jq -r --arg host "$host" --arg user "$user" \
+            '[.servers[]? | select(.host == $host and .user == $user)] | length' "$CONFIG_FILE" 2>/dev/null | grep -qx '[^0]'; then
             ((skipped++))
             continue
         fi
 
         description="Imported from ~/.ssh/config"
-        NAME="$alias" HOST="$host" USERNAME="$user" PORT="$port" SSH_ALIAS="$alias" DESCRIPTION="$description" \
-            yq eval '.servers += [{
-                "name": strenv(NAME),
-                "host": strenv(HOST),
-                "user": strenv(USERNAME),
-                "port": (strenv(PORT) | tonumber),
-                "ssh_alias": strenv(SSH_ALIAS),
-                "description": strenv(DESCRIPTION)
-            }]' -i "$CONFIG_FILE"
-
-        if [[ -n "$proxy_jump" ]]; then
-            JUMP_HOST="$proxy_jump" yq eval '(.servers[-1].jump_host) = strenv(JUMP_HOST)' -i "$CONFIG_FILE"
-        fi
+        jq_inplace "$CONFIG_FILE" \
+            --arg name "$alias" --arg host "$host" --arg user "$user" \
+            --argjson port "$port" --arg alias "$alias" --arg desc "$description" \
+            --arg jump "$proxy_jump" '
+            .servers += [{
+                "name": $name,
+                "host": $host,
+                "user": $user,
+                "port": $port,
+                "ssh_alias": $alias,
+                "description": $desc
+            }] |
+            if $jump != "" then (.servers[-1].jump_host) = $jump else . end
+        '
 
         ((imported++))
     done <<< "$selected"
@@ -168,23 +171,20 @@ export_profiles_to_ssh_config() {
     ensure_manager_runtime_dirs
 
     local export_file="$EXPORT_DIR/ssh-manager-export-$(date +%Y%m%d%H%M%S).conf"
-    local server_count
-    server_count=$(yq eval '.servers | length' "$CONFIG_FILE")
-
+    local idx=0
     {
         echo "# SSH Manager export generated on $(date '+%Y-%m-%d %H:%M:%S')"
         echo
-        for ((i=0; i<server_count; i++)); do
-            local alias host user port description jump_host
-            alias=$(generate_export_host_alias "$i")
-            host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
-            user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
-            port=$(yq eval ".servers[$i].port // 22" "$CONFIG_FILE")
-            description=$(yq eval ".servers[$i].description // \"\"" "$CONFIG_FILE")
-            jump_host=$(yq eval ".servers[$i].jump_host // \"\"" "$CONFIG_FILE")
-            [[ "$description" == "null" ]] && description=""
-            [[ "$jump_host" == "null" ]] && jump_host=""
-
+        while IFS= read -r ssh_alias && IFS= read -r host && IFS= read -r user && \
+              IFS= read -r port && IFS= read -r description && IFS= read -r jump_host && \
+              IFS= read -r name; do
+            local alias
+            if [[ -n "$ssh_alias" ]]; then
+                alias="$ssh_alias"
+            else
+                alias=$(echo "$name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g; s/-\{2,\}/-/g; s/^-//; s/-$//')
+                [[ -z "$alias" ]] && alias="ssh-manager-$idx"
+            fi
             echo "Host $alias"
             echo "    HostName $host"
             echo "    User $user"
@@ -192,7 +192,14 @@ export_profiles_to_ssh_config() {
             [[ -n "$jump_host" ]] && echo "    ProxyJump $jump_host"
             [[ -n "$description" ]] && echo "    # $description"
             echo
-        done
+            ((idx++))
+        done < <(jq -r '.servers[] | (
+            (.ssh_alias // ""), .host, .user,
+            (.port // 22 | tostring),
+            (.description // ""),
+            (.jump_host // ""),
+            .name
+        )' "$CONFIG_FILE")
     } > "$export_file"
 
     dialog --title "Export Complete" --msgbox "Profiles exported to:\n$export_file" 10 70

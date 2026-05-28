@@ -1,10 +1,10 @@
 #!/bin/bash
 # PKG_NAME: ssh-manager
-# PKG_VERSION: 2.6.5
+# PKG_VERSION: 2.6.6
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
-# PKG_DEPENDS: bash (>= 4.0), openssh-client
+# PKG_DEPENDS: bash (>= 4.0), openssh-client, jq
 # PKG_RECOMMENDS: sshpass, autossh
 # PKG_MAINTAINER: Manzolo <manzolo@libero.it>
 # PKG_DESCRIPTION: Enhanced SSH connection manager with profiles and automation
@@ -19,7 +19,7 @@
 #  - Auto-reconnect tunnels with autossh
 #  - Connection logging and history
 #  - Batch operations across multiple hosts
-#  - YAML-based configuration
+#  - JSON-based configuration
 #  - Modular architecture for easy extension
 # PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
@@ -31,9 +31,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Configuration
 CONFIG_DIR="$HOME/.config/manzolo/ssh-manager"
-CONFIG_FILE="$CONFIG_DIR/config.yaml"
+CONFIG_FILE="$CONFIG_DIR/config.json"
 LOG_FILE="$CONFIG_DIR/ssh-manager.log"
-VERSION="2.6.5"
+VERSION="2.6.6"
 
 # Source all modules
 for module in "$SCRIPT_DIR/ssh-manager/"*.sh; do

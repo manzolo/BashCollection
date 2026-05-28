@@ -159,13 +159,23 @@ resolve_server_connection() {
     local ssh_g_output=""
     local configured_jump_host=""
 
-    RESOLVED_SERVER_NAME=$(yq eval ".servers[$index].name" "$CONFIG_FILE")
-    RESOLVED_HOST=$(yq eval ".servers[$index].host" "$CONFIG_FILE")
-    RESOLVED_USER=$(yq eval ".servers[$index].user" "$CONFIG_FILE")
-    RESOLVED_PORT=$(yq eval ".servers[$index].port // 22" "$CONFIG_FILE")
-    RESOLVED_SSH_ALIAS=$(yq eval ".servers[$index].ssh_alias // \"\"" "$CONFIG_FILE")
-    configured_jump_host=$(yq eval ".servers[$index].jump_host // \"\"" "$CONFIG_FILE")
-    ssh_options=$(yq eval ".servers[$index].ssh_options // \"\"" "$CONFIG_FILE")
+    local fields
+    readarray -t fields < <(jq -r --argjson index "$index" '.servers[$index] | (
+        .name,
+        .host,
+        .user,
+        (.port // 22 | tostring),
+        (.ssh_alias // ""),
+        (.jump_host // ""),
+        (.ssh_options // "")
+    )' "$CONFIG_FILE")
+    RESOLVED_SERVER_NAME="${fields[0]}"
+    RESOLVED_HOST="${fields[1]}"
+    RESOLVED_USER="${fields[2]}"
+    RESOLVED_PORT="${fields[3]}"
+    RESOLVED_SSH_ALIAS="${fields[4]}"
+    configured_jump_host="${fields[5]}"
+    ssh_options="${fields[6]}"
     [[ "$RESOLVED_SSH_ALIAS" == "null" ]] && RESOLVED_SSH_ALIAS=""
     [[ "$configured_jump_host" == "null" ]] && configured_jump_host=""
 
@@ -252,33 +262,27 @@ format_last_used() {
 record_server_usage() {
     local index="$1"
     local action="$2"
-    local now use_count
+    local now
 
     now=$(date +%s)
-    use_count=$(yq eval ".servers[$index].use_count // 0" "$CONFIG_FILE")
-    [[ "$use_count" == "null" || -z "$use_count" ]] && use_count=0
-
-    yq eval "
+    jq_inplace "$CONFIG_FILE" --argjson index "$index" --argjson now "$now" --arg action "$action" '
+        (.servers[$index].use_count) = ((.servers[$index].use_count // 0) + 1) |
         (.servers[$index].last_used) = $now |
-        (.servers[$index].last_action) = \"$action\" |
-        (.servers[$index].use_count) = $((use_count + 1))
-    " -i "$CONFIG_FILE"
+        (.servers[$index].last_action) = $action
+    '
 }
 
 get_sorted_server_indices() {
-    local server_count
     local sortable_lines=()
-    server_count=$(yq eval '.servers | length' "$CONFIG_FILE")
+    local i=0
+    local name favorite last_used
 
-    for ((i=0; i<server_count; i++)); do
-        local name favorite last_used
-        name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
-        favorite=$(yq eval ".servers[$i].favorite // false" "$CONFIG_FILE")
-        last_used=$(yq eval ".servers[$i].last_used // 0" "$CONFIG_FILE")
+    while IFS= read -r name && IFS= read -r favorite && IFS= read -r last_used; do
         [[ "$favorite" == "true" ]] && favorite=0 || favorite=1
         [[ "$last_used" == "null" || -z "$last_used" ]] && last_used=0
         sortable_lines+=("${favorite}|${last_used}|${name}|${i}")
-    done
+        ((i++))
+    done < <(jq -r '.servers[] | (.name, (.favorite // false | tostring), (.last_used // 0 | tostring))' "$CONFIG_FILE")
 
     if [[ ${#sortable_lines[@]} -eq 0 ]]; then
         return 0
@@ -288,32 +292,42 @@ get_sorted_server_indices() {
 }
 
 build_server_menu_items() {
-    local indices
     local menu_items=()
-    local i
+    local sortable=()
+    local i=0
+    local name host user port desc fav lu
+    local -a all_names all_hosts all_users all_ports all_descs all_favs all_lus
 
-    indices=$(get_sorted_server_indices)
-    while IFS= read -r i; do
-        [[ -z "$i" ]] && continue
+    while IFS= read -r name && IFS= read -r host && IFS= read -r user && \
+          IFS= read -r port && IFS= read -r desc && IFS= read -r fav && \
+          IFS= read -r lu; do
+        all_names+=("$name")
+        all_hosts+=("$host")
+        all_users+=("$user")
+        all_ports+=("$port")
+        all_descs+=("$desc")
+        all_favs+=("$fav")
+        all_lus+=("$lu")
+        local fav_sort=1 lu_sort="$lu"
+        [[ "$fav" == "true" ]] && fav_sort=0
+        [[ "$lu_sort" == "null" || -z "$lu_sort" ]] && lu_sort=0
+        sortable+=("${fav_sort}|${lu_sort}|${name}|${i}")
+        ((i++))
+    done < <(jq -r '.servers[] | (.name, .host, .user, (.port // 22 | tostring), (.description // ""), (.favorite // false | tostring), (.last_used // 0 | tostring))' "$CONFIG_FILE")
 
-        local name host user port description favorite last_used recent_label display_text
-        name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
-        host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
-        user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
-        port=$(yq eval ".servers[$i].port // 22" "$CONFIG_FILE")
-        description=$(yq eval ".servers[$i].description // \"\"" "$CONFIG_FILE")
-        favorite=$(yq eval ".servers[$i].favorite // false" "$CONFIG_FILE")
-        last_used=$(yq eval ".servers[$i].last_used // 0" "$CONFIG_FILE")
+    if [[ ${#sortable[@]} -eq 0 ]]; then
+        return 0
+    fi
 
-        display_text="$name ($user@$host:$port)"
-        [[ "$favorite" == "true" ]] && display_text="★ $display_text"
-
-        recent_label=$(format_last_used "$last_used")
+    local idx display_text recent_label
+    while IFS='|' read -r _ _ _ idx; do
+        display_text="${all_names[$idx]} (${all_users[$idx]}@${all_hosts[$idx]}:${all_ports[$idx]})"
+        [[ "${all_favs[$idx]}" == "true" ]] && display_text="★ $display_text"
+        recent_label=$(format_last_used "${all_lus[$idx]}")
         [[ "$recent_label" != "never" ]] && display_text="$display_text - recent: $recent_label"
-        [[ -n "$description" && "$description" != "null" ]] && display_text="$display_text - $description"
-
-        menu_items+=("$name" "$display_text")
-    done <<< "$indices"
+        [[ -n "${all_descs[$idx]}" && "${all_descs[$idx]}" != "null" ]] && display_text="$display_text - ${all_descs[$idx]}"
+        menu_items+=("${all_names[$idx]}" "$display_text")
+    done < <(printf '%s\n' "${sortable[@]}" | sort -t'|' -k1,1n -k2,2nr -k3,3f)
 
     printf '%s\0' "${menu_items[@]}"
 }
@@ -334,15 +348,11 @@ list_ssh_config_aliases() {
 
 generate_export_host_alias() {
     local index="$1"
-    local alias name
-
-    alias=$(yq eval ".servers[$index].ssh_alias // \"\"" "$CONFIG_FILE")
-    [[ "$alias" != "null" && -n "$alias" ]] && {
-        printf '%s\n' "$alias"
-        return 0
-    }
-
-    name=$(yq eval ".servers[$index].name" "$CONFIG_FILE")
+    local alias name fields
+    readarray -t fields < <(jq -r --argjson i "$index" '.servers[$i] | (.ssh_alias // ""), .name' "$CONFIG_FILE")
+    alias="${fields[0]}"
+    name="${fields[1]}"
+    [[ -n "$alias" ]] && { printf '%s\n' "$alias"; return 0; }
     name=$(echo "$name" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g; s/-\{2,\}/-/g; s/^-//; s/-$//')
     [[ -z "$name" ]] && name="ssh-manager-$index"
     printf '%s\n' "$name"
@@ -361,7 +371,7 @@ run_server_health_check() {
     print_message "$BLUE" "🔎 Health check: $RESOLVED_SERVER_NAME"
     print_message "$BLUE" "   Target: $RESOLVED_DISPLAY_TARGET"
 
-    tunnel_count=$(yq eval ".servers[$index].portforwards | length" "$CONFIG_FILE" 2>/dev/null)
+    tunnel_count=$(jq --argjson i "$index" '.servers[$i].portforwards | length' "$CONFIG_FILE" 2>/dev/null)
     [[ "$tunnel_count" == "null" || -z "$tunnel_count" ]] && tunnel_count=0
     print_message "$BLUE" "   Port forward profiles: $tunnel_count"
 
@@ -439,17 +449,8 @@ check_ssh_key() {
 # Get server index by name
 get_server_index_by_name() {
     local server_name="$1"
-    local server_count
-    server_count=$(yq eval '.servers | length' "$CONFIG_FILE")
-
-    for ((i=0; i<server_count; i++)); do
-        local name
-        name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
-        if [[ "$name" == "$server_name" ]]; then
-            echo "$i"
-            return 0
-        fi
-    done
-
+    local idx
+    idx=$(jq -r --arg name "$server_name" '.servers | to_entries[] | select(.value.name == $name) | .key' "$CONFIG_FILE")
+    [[ -n "$idx" ]] && { echo "$idx"; return 0; }
     return 1
 }

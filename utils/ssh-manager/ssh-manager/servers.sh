@@ -48,33 +48,24 @@ add_server() {
     fi
 
     backup_config
-    NAME="$name" HOST="$host" USERNAME="$user" PORT="$port" \
-        yq eval '.servers += [{
-            "name": strenv(NAME),
-            "host": strenv(HOST),
-            "user": strenv(USERNAME),
-            "port": (strenv(PORT) | tonumber)
-        }]' -i "$CONFIG_FILE"
-
-    if [[ -n "$description" && "$description" != "null" ]]; then
-        DESCRIPTION="$description" \
-            yq eval '(.servers[-1].description) = strenv(DESCRIPTION)' -i "$CONFIG_FILE"
-    fi
-    if [[ -n "$ssh_options" && "$ssh_options" != "null" ]]; then
-        SSH_OPTIONS="$ssh_options" \
-            yq eval '(.servers[-1].ssh_options) = strenv(SSH_OPTIONS)' -i "$CONFIG_FILE"
-    fi
-    if [[ -n "$ssh_alias" && "$ssh_alias" != "null" ]]; then
-        SSH_ALIAS="$ssh_alias" \
-            yq eval '(.servers[-1].ssh_alias) = strenv(SSH_ALIAS)' -i "$CONFIG_FILE"
-    fi
-    if [[ -n "$jump_host" && "$jump_host" != "null" ]]; then
-        JUMP_HOST="$jump_host" \
-            yq eval '(.servers[-1].jump_host) = strenv(JUMP_HOST)' -i "$CONFIG_FILE"
-    fi
-    if [[ "$favorite" == "true" ]]; then
-        yq eval '(.servers[-1].favorite) = true' -i "$CONFIG_FILE"
-    fi
+    jq_inplace "$CONFIG_FILE" \
+        --arg name "$name" --arg host "$host" --arg user "$user" \
+        --argjson port "$port" \
+        --arg desc "$description" --arg opts "$ssh_options" \
+        --arg alias "$ssh_alias" --arg jump "$jump_host" \
+        --arg fav "$favorite" '
+        .servers += [{
+            "name": $name,
+            "host": $host,
+            "user": $user,
+            "port": $port
+        }] |
+        if $desc != "" then (.servers[-1].description) = $desc else . end |
+        if $opts != "" then (.servers[-1].ssh_options) = $opts else . end |
+        if $alias != "" then (.servers[-1].ssh_alias) = $alias else . end |
+        if $jump != "" then (.servers[-1].jump_host) = $jump else . end |
+        if $fav == "true" then (.servers[-1].favorite) = true else . end
+    '
 
     dialog --title "Success" --msgbox "Server '$name' added successfully!" 8 50
     log_message "INFO" "New server added: $name ($user@$host:$port)"
@@ -88,16 +79,9 @@ edit_server() {
     fi
 
     local menu_items=()
-    local server_count
-    server_count=$(yq eval '.servers | length' "$CONFIG_FILE")
-
-    for ((i=0; i<server_count; i++)); do
-        local name host user
-        name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
-        host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
-        user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
+    while IFS= read -r name && IFS= read -r host && IFS= read -r user; do
         menu_items+=("$name" "$name ($user@$host)")
-    done
+    done < <(jq -r '.servers[] | .name, .host, .user' "$CONFIG_FILE")
 
     local choice
     choice=$(dialog --clear --title "Edit Server" --menu \
@@ -111,16 +95,19 @@ edit_server() {
         return 1
     fi
 
-    local name host user port description ssh_options ssh_alias jump_host favorite
-    name=$(yq eval ".servers[$server_index].name" "$CONFIG_FILE")
-    host=$(yq eval ".servers[$server_index].host" "$CONFIG_FILE")
-    user=$(yq eval ".servers[$server_index].user" "$CONFIG_FILE")
-    port=$(yq eval ".servers[$server_index].port // 22" "$CONFIG_FILE")
-    description=$(yq eval ".servers[$server_index].description // \"\"" "$CONFIG_FILE")
-    ssh_options=$(yq eval ".servers[$server_index].ssh_options // \"\"" "$CONFIG_FILE")
-    ssh_alias=$(yq eval ".servers[$server_index].ssh_alias // \"\"" "$CONFIG_FILE")
-    jump_host=$(yq eval ".servers[$server_index].jump_host // \"\"" "$CONFIG_FILE")
-    favorite=$(yq eval ".servers[$server_index].favorite // false" "$CONFIG_FILE")
+    local fields name host user port description ssh_options ssh_alias jump_host favorite
+    readarray -t fields < <(jq -r --argjson i "$server_index" '.servers[$i] | (
+        .name, .host, .user,
+        (.port // 22 | tostring),
+        (.description // ""),
+        (.ssh_options // ""),
+        (.ssh_alias // ""),
+        (.jump_host // ""),
+        (.favorite // false | tostring)
+    )' "$CONFIG_FILE")
+    name="${fields[0]}" host="${fields[1]}" user="${fields[2]}" port="${fields[3]}"
+    description="${fields[4]}" ssh_options="${fields[5]}" ssh_alias="${fields[6]}"
+    jump_host="${fields[7]}" favorite="${fields[8]}"
     [[ "$description" == "null" ]] && description=""
     [[ "$ssh_options" == "null" ]] && ssh_options=""
     [[ "$ssh_alias" == "null" ]] && ssh_alias=""
@@ -167,40 +154,23 @@ edit_server() {
     fi
 
     backup_config
-    NAME="$new_name" yq eval "(.servers[$server_index].name) = strenv(NAME)" -i "$CONFIG_FILE"
-    HOST="$new_host" yq eval "(.servers[$server_index].host) = strenv(HOST)" -i "$CONFIG_FILE"
-    USERNAME="$new_user" yq eval "(.servers[$server_index].user) = strenv(USERNAME)" -i "$CONFIG_FILE"
-    PORT="$new_port" yq eval "(.servers[$server_index].port) = (strenv(PORT) | tonumber)" -i "$CONFIG_FILE"
-
-    if [[ -n "$new_description" ]]; then
-        DESCRIPTION="$new_description" yq eval "(.servers[$server_index].description) = strenv(DESCRIPTION)" -i "$CONFIG_FILE"
-    else
-        yq eval "del(.servers[$server_index].description)" -i "$CONFIG_FILE"
-    fi
-
-    if [[ -n "$new_ssh_options" ]]; then
-        SSH_OPTIONS="$new_ssh_options" yq eval "(.servers[$server_index].ssh_options) = strenv(SSH_OPTIONS)" -i "$CONFIG_FILE"
-    else
-        yq eval "del(.servers[$server_index].ssh_options)" -i "$CONFIG_FILE"
-    fi
-
-    if [[ -n "$new_ssh_alias" ]]; then
-        SSH_ALIAS="$new_ssh_alias" yq eval "(.servers[$server_index].ssh_alias) = strenv(SSH_ALIAS)" -i "$CONFIG_FILE"
-    else
-        yq eval "del(.servers[$server_index].ssh_alias)" -i "$CONFIG_FILE"
-    fi
-
-    if [[ -n "$new_jump_host" ]]; then
-        JUMP_HOST="$new_jump_host" yq eval "(.servers[$server_index].jump_host) = strenv(JUMP_HOST)" -i "$CONFIG_FILE"
-    else
-        yq eval "del(.servers[$server_index].jump_host)" -i "$CONFIG_FILE"
-    fi
-
-    if [[ "$new_favorite" == "true" ]]; then
-        yq eval "(.servers[$server_index].favorite) = true" -i "$CONFIG_FILE"
-    else
-        yq eval "del(.servers[$server_index].favorite)" -i "$CONFIG_FILE"
-    fi
+    jq_inplace "$CONFIG_FILE" \
+        --argjson idx "$server_index" \
+        --arg name "$new_name" --arg host "$new_host" --arg user "$new_user" \
+        --argjson port "$new_port" \
+        --arg desc "$new_description" --arg opts "$new_ssh_options" \
+        --arg alias "$new_ssh_alias" --arg jump "$new_jump_host" \
+        --arg fav "$new_favorite" '
+        (.servers[$idx].name) = $name |
+        (.servers[$idx].host) = $host |
+        (.servers[$idx].user) = $user |
+        (.servers[$idx].port) = $port |
+        if $desc != "" then (.servers[$idx].description) = $desc else del(.servers[$idx].description) end |
+        if $opts != "" then (.servers[$idx].ssh_options) = $opts else del(.servers[$idx].ssh_options) end |
+        if $alias != "" then (.servers[$idx].ssh_alias) = $alias else del(.servers[$idx].ssh_alias) end |
+        if $jump != "" then (.servers[$idx].jump_host) = $jump else del(.servers[$idx].jump_host) end |
+        if $fav == "true" then (.servers[$idx].favorite) = true else del(.servers[$idx].favorite) end
+    '
 
     dialog --title "Success" --msgbox "Server edited successfully!" 8 50
     log_message "INFO" "Server edited: $new_name"
@@ -214,17 +184,9 @@ remove_server() {
     fi
 
     local menu_items=()
-    local server_count
-    server_count=$(yq eval '.servers | length' "$CONFIG_FILE")
-
-    for ((i=0; i<server_count; i++)); do
-        local name host user port
-        name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
-        host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
-        user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
-        port=$(yq eval ".servers[$i].port // 22" "$CONFIG_FILE")
+    while IFS= read -r name && IFS= read -r host && IFS= read -r user && IFS= read -r port; do
         menu_items+=("$name" "$name ($user@$host:$port)")
-    done
+    done < <(jq -r '.servers[] | .name, .host, .user, (.port // 22 | tostring)' "$CONFIG_FILE")
 
     local choice
     choice=$(dialog --clear --title "Remove Server" --menu \
@@ -238,18 +200,17 @@ remove_server() {
         return 1
     fi
 
-    local name host user port
-    name=$(yq eval ".servers[$server_index].name" "$CONFIG_FILE")
-    host=$(yq eval ".servers[$server_index].host" "$CONFIG_FILE")
-    user=$(yq eval ".servers[$server_index].user" "$CONFIG_FILE")
-    port=$(yq eval ".servers[$server_index].port // 22" "$CONFIG_FILE")
+    local fields name host user port
+    readarray -t fields < <(jq -r --argjson i "$server_index" \
+        '.servers[$i] | .name, .host, .user, (.port // 22 | tostring)' "$CONFIG_FILE")
+    name="${fields[0]}" host="${fields[1]}" user="${fields[2]}" port="${fields[3]}"
 
     dialog --clear --title "Confirm Removal" --yesno \
         "Are you sure you want to remove this server?\n\nName: $name\nHost: $host\nUser: $user\nPort: $port" \
         12 60 || return
 
     backup_config
-    yq eval "del(.servers[$server_index])" -i "$CONFIG_FILE"
+    jq_inplace "$CONFIG_FILE" --argjson idx "$server_index" 'del(.servers[$idx])'
     dialog --title "Success" --msgbox "Server removed successfully!" 8 50
     log_message "INFO" "Server removed: $name"
 }
@@ -263,29 +224,20 @@ show_server_info() {
 
     local info_text=""
     local server_count
-    server_count=$(yq eval '.servers | length' "$CONFIG_FILE")
-
+    server_count=$(jq '.servers | length' "$CONFIG_FILE")
     info_text+="Total configured servers: $server_count\n\n"
 
-    for ((i=0; i<server_count; i++)); do
-        local name host user port description ssh_options ssh_alias jump_host favorite last_used use_count
-        name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
-        host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
-        user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
-        port=$(yq eval ".servers[$i].port // 22" "$CONFIG_FILE")
-        description=$(yq eval ".servers[$i].description // \"\"" "$CONFIG_FILE")
-        ssh_options=$(yq eval ".servers[$i].ssh_options // \"\"" "$CONFIG_FILE")
-        ssh_alias=$(yq eval ".servers[$i].ssh_alias // \"\"" "$CONFIG_FILE")
-        jump_host=$(yq eval ".servers[$i].jump_host // \"\"" "$CONFIG_FILE")
-        favorite=$(yq eval ".servers[$i].favorite // false" "$CONFIG_FILE")
-        last_used=$(yq eval ".servers[$i].last_used // 0" "$CONFIG_FILE")
-        use_count=$(yq eval ".servers[$i].use_count // 0" "$CONFIG_FILE")
+    local idx=1
+    while IFS= read -r name && IFS= read -r host && IFS= read -r user && \
+          IFS= read -r port && IFS= read -r description && IFS= read -r ssh_options && \
+          IFS= read -r ssh_alias && IFS= read -r jump_host && IFS= read -r favorite && \
+          IFS= read -r last_used && IFS= read -r use_count; do
         [[ "$description" == "null" ]] && description=""
         [[ "$ssh_options" == "null" ]] && ssh_options=""
         [[ "$ssh_alias" == "null" ]] && ssh_alias=""
         [[ "$jump_host" == "null" ]] && jump_host=""
 
-        info_text+="[$(($i+1))] $name\n"
+        info_text+="[$idx] $name\n"
         info_text+="    Host: $host\n"
         info_text+="    User: $user\n"
         info_text+="    Port: $port\n"
@@ -297,7 +249,18 @@ show_server_info() {
         info_text+="    Last Used: $(format_last_used "$last_used")\n"
         info_text+="    Use Count: ${use_count:-0}\n"
         info_text+="\n"
-    done
+        ((idx++))
+    done < <(jq -r '.servers[] | (
+        .name, .host, .user,
+        (.port // 22 | tostring),
+        (.description // ""),
+        (.ssh_options // ""),
+        (.ssh_alias // ""),
+        (.jump_host // ""),
+        (.favorite // false | tostring),
+        (.last_used // 0 | tostring),
+        (.use_count // 0 | tostring)
+    )' "$CONFIG_FILE")
 
     dialog --title "Server Information" --msgbox "$info_text" 20 70
 }

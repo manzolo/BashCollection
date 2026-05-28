@@ -3,10 +3,17 @@
 # Provides: prerequisite installation, dependency checking
 
 # Install prerequisites
+jq_inplace() {
+    local file="$1"; shift
+    local tmp
+    tmp=$(mktemp "${file}.XXXXXX")
+    jq "$@" "$file" > "$tmp" && mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+}
+
 install_prerequisites() {
     print_message "$BLUE" "🔧 Installing prerequisites..."
 
-    if command -v dialog &> /dev/null && command -v yq &> /dev/null; then
+    if command -v dialog &> /dev/null && command -v jq &> /dev/null; then
         print_message "$GREEN" "✅ Prerequisites already installed"
         return 0
     fi
@@ -27,37 +34,21 @@ install_prerequisites() {
 
     case "$pkg_manager" in
         "apt")
-            sudo apt update -qq && sudo apt install -qqy dialog wget
+            sudo apt update -qq && sudo apt install -qqy dialog jq
             ;;
         "yum")
-            sudo yum install -y dialog wget
+            sudo yum install -y dialog jq
             ;;
         "dnf")
-            sudo dnf install -y dialog wget
+            sudo dnf install -y dialog jq
             ;;
         "pacman")
-            sudo pacman -Syu --noconfirm dialog wget
+            sudo pacman -Syu --noconfirm dialog jq
             ;;
     esac || {
-        print_message "$RED" "❌ Error installing dialog and wget"
+        print_message "$RED" "❌ Error installing dialog and jq"
         return 1
     }
-
-    if ! command -v yq &> /dev/null; then
-        local arch
-        arch=$(uname -m)
-        local yq_url
-        case "$arch" in
-            x86_64) yq_url="https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64" ;;
-            aarch64) yq_url="https://github.com/mikefarah/yq/releases/latest/download/yq_linux_arm64" ;;
-            *) print_message "$RED" "❌ Unsupported architecture: $arch"; return 1 ;;
-        esac
-        sudo wget -q "$yq_url" -O /usr/local/bin/yq || {
-            print_message "$RED" "❌ Error downloading yq"
-            return 1
-        }
-        sudo chmod +x /usr/local/bin/yq
-    fi
 
     print_message "$GREEN" "✅ Prerequisites installed successfully"
     log_message "INFO" "Prerequisites installed"

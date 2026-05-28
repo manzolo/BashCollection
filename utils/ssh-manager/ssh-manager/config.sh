@@ -2,18 +2,47 @@
 # Configuration management for SSH Manager
 # Provides: configuration init, backup, validation
 
+migrate_config_to_json() {
+    local yaml_file="${CONFIG_FILE%.json}.yaml"
+    [[ ! -f "$yaml_file" ]] && return 0
+    [[ -f "$CONFIG_FILE" ]] && return 0
+
+    print_message "$BLUE" "🔄 Migrating config from YAML to JSON..."
+    if command -v yq &>/dev/null; then
+        yq -o=json "$yaml_file" > "$CONFIG_FILE" && rm -f "$yaml_file" && \
+            print_message "$GREEN" "✅ Config migrated to JSON" && return 0
+    fi
+    if command -v python3 &>/dev/null && python3 -c "import yaml" 2>/dev/null; then
+        python3 -c "
+import yaml, json
+with open('$yaml_file') as f:
+    data = yaml.safe_load(f)
+with open('$CONFIG_FILE', 'w') as f:
+    json.dump(data, f, indent=2)
+" && rm -f "$yaml_file" && print_message "$GREEN" "✅ Config migrated to JSON" && return 0
+    fi
+    print_message "$RED" "❌ Cannot migrate config: install yq or python3-yaml"
+    return 1
+}
+
 # Configuration initialization
 init_config() {
     ensure_manager_runtime_dirs
+    migrate_config_to_json
 
     if [[ ! -f "$CONFIG_FILE" ]]; then
-        cat > "$CONFIG_FILE" << EOF
-servers:
-  - name: "Example Server"
-    host: "example.com"
-    user: "root"
-    port: 22
-    description: "Example server"
+        cat > "$CONFIG_FILE" << 'EOF'
+{
+  "servers": [
+    {
+      "name": "Example Server",
+      "host": "example.com",
+      "user": "root",
+      "port": 22,
+      "description": "Example server"
+    }
+  ]
+}
 EOF
         chmod 600 "$CONFIG_FILE" 2>/dev/null
         print_message "$GREEN" "✅ Configuration file created: $CONFIG_FILE"
@@ -27,15 +56,15 @@ backup_config() {
     log_message "INFO" "Configuration backed up"
 }
 
-# Validate YAML configuration
+# Validate JSON configuration
 validate_config() {
-    if ! yq eval '.servers' "$CONFIG_FILE" &> /dev/null; then
-        print_message "$RED" "❌ Invalid YAML in configuration file"
+    if ! jq '.servers' "$CONFIG_FILE" &> /dev/null; then
+        print_message "$RED" "❌ Invalid JSON in configuration file"
         return 1
     fi
 
     local server_count
-    server_count=$(yq eval '.servers | length' "$CONFIG_FILE")
+    server_count=$(jq '.servers | length' "$CONFIG_FILE")
 
     if [[ "$server_count" == "0" || "$server_count" == "null" ]]; then
         print_message "$YELLOW" "⚠️ No servers configured"
@@ -43,11 +72,14 @@ validate_config() {
     fi
 
     for ((i=0; i<server_count; i++)); do
-        local name host user port
-        name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
-        host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
-        user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
-        port=$(yq eval ".servers[$i].port // 22" "$CONFIG_FILE")
+        local fields name host user port
+        readarray -t fields < <(jq -r --argjson i "$i" \
+            '.servers[$i] | (.name // "null"), (.host // "null"), (.user // "null"), (.port // 22 | tostring)' \
+            "$CONFIG_FILE")
+        name="${fields[0]}"
+        host="${fields[1]}"
+        user="${fields[2]}"
+        port="${fields[3]}"
 
         [[ -z "$name" || "$name" == "null" ]] && { print_message "$RED" "❌ Server $i: Missing name"; return 1; }
         [[ -z "$host" || "$host" == "null" ]] && { print_message "$RED" "❌ Server $i: Missing host"; return 1; }
@@ -65,49 +97,33 @@ validate_config() {
 check_duplicate_server() {
     local host="$1"
     local user="$2"
-    local exclude_name="$3"  # Nome da escludere durante l'edit
-    local server_count
-    server_count=$(yq eval '.servers | length' "$CONFIG_FILE")
+    local exclude_name="$3"
 
-    for ((i=0; i<server_count; i++)); do
-        local existing_host existing_user existing_name
-        existing_host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
-        existing_user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
-        existing_name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
+    local count
+    count=$(jq -r --arg host "$host" --arg user "$user" --arg exclude "$exclude_name" '
+        [.servers[] | select(.host == $host and .user == $user and .name != $exclude)] | length
+    ' "$CONFIG_FILE")
 
-        # Skip se è il server che stiamo modificando
-        if [[ -n "$exclude_name" && "$existing_name" == "$exclude_name" ]]; then
-            continue
-        fi
-
-        if [[ "$existing_host" == "$host" && "$existing_user" == "$user" ]]; then
-            dialog --title "Error" --msgbox "Server with host '$host' and user '$user' already exists!" 8 50
-            return 1
-        fi
-    done
+    if [[ "$count" -gt 0 ]]; then
+        dialog --title "Error" --msgbox "Server with host '$host' and user '$user' already exists!" 8 50
+        return 1
+    fi
     return 0
 }
 
 # Check for duplicate server name
 check_duplicate_name() {
     local name="$1"
-    local exclude_name="$2"  # Nome da escludere durante l'edit
-    local server_count
-    server_count=$(yq eval '.servers | length' "$CONFIG_FILE")
+    local exclude_name="$2"
 
-    for ((i=0; i<server_count; i++)); do
-        local existing_name
-        existing_name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
+    local count
+    count=$(jq -r --arg name "$name" --arg exclude "$exclude_name" '
+        [.servers[] | select(.name == $name and .name != $exclude)] | length
+    ' "$CONFIG_FILE")
 
-        # Skip se è il server che stiamo modificando
-        if [[ -n "$exclude_name" && "$existing_name" == "$exclude_name" ]]; then
-            continue
-        fi
-
-        if [[ "$existing_name" == "$name" ]]; then
-            dialog --title "Error" --msgbox "Server name '$name' already exists!" 8 50
-            return 1
-        fi
-    done
+    if [[ "$count" -gt 0 ]]; then
+        dialog --title "Error" --msgbox "Server name '$name' already exists!" 8 50
+        return 1
+    fi
     return 0
 }

@@ -13,28 +13,7 @@ handle_ssh_action() {
 
     while true; do
         local menu_items=()
-        local sorted_indices
-        sorted_indices=$(get_sorted_server_indices)
-
-        while IFS= read -r i; do
-            [[ -z "$i" ]] && continue
-            local name host user port description favorite last_used display_text recent_label
-            name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
-            host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
-            user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
-            port=$(yq eval ".servers[$i].port // 22" "$CONFIG_FILE")
-            description=$(yq eval ".servers[$i].description // \"\"" "$CONFIG_FILE")
-            favorite=$(yq eval ".servers[$i].favorite // false" "$CONFIG_FILE")
-            last_used=$(yq eval ".servers[$i].last_used // 0" "$CONFIG_FILE")
-
-            display_text="$name ($user@$host:$port)"
-            [[ "$favorite" == "true" ]] && display_text="★ $display_text"
-            recent_label=$(format_last_used "$last_used")
-            [[ "$recent_label" != "never" ]] && display_text="$display_text - recent: $recent_label"
-            [[ -n "$description" && "$description" != "null" ]] && display_text="$display_text - $description"
-            menu_items+=("$name" "$display_text")
-        done <<< "$sorted_indices"
-
+        mapfile -d '' menu_items < <(build_server_menu_items)
         menu_items+=("T" "🔍 Test connectivity")
         menu_items+=("Q" "← Back to main menu")
 
@@ -267,13 +246,12 @@ test_connectivity_menu() {
 
     while IFS= read -r i; do
         [[ -z "$i" ]] && continue
-        local name host user favorite label
-        name=$(yq eval ".servers[$i].name" "$CONFIG_FILE")
-        host=$(yq eval ".servers[$i].host" "$CONFIG_FILE")
-        user=$(yq eval ".servers[$i].user" "$CONFIG_FILE")
-        favorite=$(yq eval ".servers[$i].favorite // false" "$CONFIG_FILE")
+        local fields name host user fav label
+        readarray -t fields < <(jq -r --argjson i "$i" \
+            '.servers[$i] | .name, .host, .user, (.favorite // false | tostring)' "$CONFIG_FILE")
+        name="${fields[0]}" host="${fields[1]}" user="${fields[2]}" fav="${fields[3]}"
         label="$name ($user@$host)"
-        [[ "$favorite" == "true" ]] && label="★ $label"
+        [[ "$fav" == "true" ]] && label="★ $label"
         menu_items+=("$name" "$label")
     done <<< "$sorted_indices"
 
