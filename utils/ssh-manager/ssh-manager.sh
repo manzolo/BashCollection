@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: ssh-manager
-# PKG_VERSION: 2.7.1
+# PKG_VERSION: 2.7.2
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -36,7 +36,7 @@ export CONFIG_FILE="$CONFIG_DIR/config.json"
 # shellcheck disable=SC2034
 export LOG_FILE="$CONFIG_DIR/ssh-manager.log"
 # shellcheck disable=SC2034
-export VERSION="2.7.1"
+export VERSION="2.7.2"
 
 # Source all modules
 for module in "$SCRIPT_DIR/ssh-manager/"*.sh; do

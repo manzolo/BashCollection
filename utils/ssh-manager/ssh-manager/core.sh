@@ -462,25 +462,32 @@ select_server_fzf() {
     command -v fzf >/dev/null 2>&1 || return 1
     [[ ! -f "$CONFIG_FILE" ]] && return 1
 
+    # Field 1 (hidden): raw name for extraction
+    # Field 2: [★] padded name
+    # Field 3: user@host:port
+    # Field 4: description
     local fzf_input
     fzf_input=$(jq -r '.servers[] |
-        [(if (.favorite // false) then "★" else " " end),
-         .name,
+        [.name,
+         (if (.favorite // false) then "★ " else "  " end) + .name,
          (.user + "@" + .host + ":" + (.port // 22 | tostring)),
-         (.description // "")] | @tsv' "$CONFIG_FILE")
+         (.description // "")] | @tsv' "$CONFIG_FILE" \
+        | awk -F'\t' 'BEGIN{OFS="\t"} {printf "%s\t%-28s\t%-32s\t%s\n",$1,$2,$3,$4}')
     [[ -z "$fzf_input" ]] && return 1
 
+    clear
     local selected
     selected=$(echo "$fzf_input" | fzf \
         --delimiter=$'\t' \
-        --with-nth=1,2,3,4 \
+        --with-nth=2,3,4 \
+        --nth=2,3,4 \
         --prompt="$prompt > " \
-        --height=60% \
+        --height=100% \
         --reverse \
         --no-multi \
         --bind='esc:abort') || return 1
 
-    echo "$selected" | cut -f2
+    echo "$selected" | cut -f1
 }
 
 # Fuzzy find: exact match first, then case-insensitive substring.
