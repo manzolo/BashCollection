@@ -455,27 +455,28 @@ get_server_index_by_name() {
     return 1
 }
 
-# Interactive fzf server picker. Prints selected server name on stdout.
+# Interactive fzf server picker. Prints selected server INDEX on stdout.
 # Returns 0 on selection, 1 on cancel or fzf unavailable.
+# Using numeric index as hidden field avoids any name-parsing/encoding issues.
 select_server_fzf() {
     local prompt="${1:-Server}"
     command -v fzf >/dev/null 2>&1 || return 1
     [[ ! -f "$CONFIG_FILE" ]] && return 1
 
-    # Field 1 (hidden): raw name for extraction
-    # Field 2: [★] padded name
-    # Field 3: user@host:port
+    # Field 1 (hidden): numeric JSON index
+    # Field 2: [★] name  (padded)
+    # Field 3: user@host:port  (padded)
     # Field 4: description
     local fzf_input
     fzf_input=$(jq -r '
-        .servers
-        | sort_by([(if (.favorite // false) then 0 else 1 end), -(.last_used // 0)])
+        .servers | to_entries
+        | sort_by([(if (.value.favorite // false) then 0 else 1 end), -(.value.last_used // 0)])
         | .[]
-        | [.name,
-           (if (.favorite // false) then "★ " else "  " end) + .name,
-           (.user + "@" + .host + ":" + (.port // 22 | tostring)),
-           (.description // "")] | @tsv' "$CONFIG_FILE" \
-        | awk -F'\t' 'BEGIN{OFS="\t"} {printf "%s\t%-28s\t%-32s\t%s\n",$1,$2,$3,$4}')
+        | [(.key | tostring),
+           (if (.value.favorite // false) then "★ " else "  " end) + .value.name,
+           (.value.user + "@" + .value.host + ":" + (.value.port // 22 | tostring)),
+           (.value.description // "")] | @tsv' "$CONFIG_FILE" \
+        | awk -F'\t' '{printf "%s\t%-28s\t%-32s\t%s\n",$1,$2,$3,$4}')
     [[ -z "$fzf_input" ]] && return 1
 
     clear
@@ -490,7 +491,8 @@ select_server_fzf() {
         --no-multi \
         --bind='esc:abort') || return 1
 
-    echo "$selected" | cut -f1
+    # extract numeric index (field 1, no spaces)
+    echo "$selected" | cut -f1 | tr -d ' '
 }
 
 # Fuzzy find: exact match first, then case-insensitive substring.

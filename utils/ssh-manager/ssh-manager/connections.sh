@@ -13,9 +13,8 @@ handle_ssh_action() {
 
     if command -v fzf >/dev/null 2>&1; then
         while true; do
-            local server_name server_index
-            server_name=$(select_server_fzf "$action") || return
-            server_index=$(get_server_index_by_name "$server_name") || continue
+            local server_index
+            server_index=$(select_server_fzf "$action") || return
             execute_ssh_action "$action" "$server_index"
             if [[ "$INTERRUPTED" -eq 1 ]]; then
                 clear_interrupt_state
