@@ -11,6 +11,20 @@ handle_ssh_action() {
         return 1
     fi
 
+    if command -v fzf >/dev/null 2>&1; then
+        while true; do
+            local server_name server_index
+            server_name=$(select_server_fzf "$action") || return
+            server_index=$(get_server_index_by_name "$server_name") || continue
+            execute_ssh_action "$action" "$server_index"
+            if [[ "$INTERRUPTED" -eq 1 ]]; then
+                clear_interrupt_state
+                clear_main_menu_request
+            fi
+        done
+        return
+    fi
+
     while true; do
         local menu_items=()
         mapfile -d '' menu_items < <(build_server_menu_items)
@@ -31,7 +45,6 @@ handle_ssh_action() {
             ""|"Q") clear; return ;;
             "T") test_connectivity_menu; continue ;;
             *)
-                # Trova l'indice del server dal nome
                 local server_index
                 server_index=$(get_server_index_by_name "$choice")
                 if [[ $? -eq 0 ]]; then

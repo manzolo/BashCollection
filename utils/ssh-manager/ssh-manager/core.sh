@@ -455,6 +455,34 @@ get_server_index_by_name() {
     return 1
 }
 
+# Interactive fzf server picker. Prints selected server name on stdout.
+# Returns 0 on selection, 1 on cancel or fzf unavailable.
+select_server_fzf() {
+    local prompt="${1:-Server}"
+    command -v fzf >/dev/null 2>&1 || return 1
+    [[ ! -f "$CONFIG_FILE" ]] && return 1
+
+    local fzf_input
+    fzf_input=$(jq -r '.servers[] |
+        [(if (.favorite // false) then "★" else " " end),
+         .name,
+         (.user + "@" + .host + ":" + (.port // 22 | tostring)),
+         (.description // "")] | @tsv' "$CONFIG_FILE")
+    [[ -z "$fzf_input" ]] && return 1
+
+    local selected
+    selected=$(echo "$fzf_input" | fzf \
+        --delimiter=$'\t' \
+        --with-nth=1,2,3,4 \
+        --prompt="$prompt > " \
+        --height=60% \
+        --reverse \
+        --no-multi \
+        --bind='esc:abort') || return 1
+
+    echo "$selected" | cut -f2
+}
+
 # Fuzzy find: exact match first, then case-insensitive substring.
 # Prints matching index/indices. Returns 0 (one match), 1 (no match), 2 (ambiguous).
 find_server_fuzzy() {
