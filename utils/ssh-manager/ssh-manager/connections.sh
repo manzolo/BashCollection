@@ -15,6 +15,11 @@ handle_ssh_action() {
         while true; do
             local server_index
             server_index=$(select_server_fzf "$action") || return
+            if ! [[ "$server_index" =~ ^[0-9]+$ ]]; then
+                print_message "$RED" "❌ Invalid selection (got '$server_index')"
+                pause_for_key
+                continue
+            fi
             execute_ssh_action "$action" "$server_index"
             if [[ "$INTERRUPTED" -eq 1 ]]; then
                 clear_interrupt_state
