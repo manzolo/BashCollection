@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: compose-stack-manager
-# PKG_VERSION: 1.0.6
+# PKG_VERSION: 1.0.7
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -11,7 +11,7 @@
 
 set -uo pipefail
 
-readonly VERSION="1.0.6"
+readonly VERSION="1.0.7"
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
 
@@ -53,12 +53,14 @@ CHECK_STACK_NAMES=()
 CHECK_STACK_ROWS=()
 CHECK_STACK_WIDTH_SERVICE=()
 CHECK_STACK_WIDTH_STATUS=()
-CHECK_STACK_WIDTH_PORTS=()
+CHECK_STACK_WIDTH_HOST_PORTS=()
+CHECK_STACK_WIDTH_INTERNAL_PORTS=()
 CHECK_STACK_WIDTH_IMAGE=()
 CHECK_SERVICES=()
 CHECK_STATUSES=()
 CHECK_STATUS_KINDS=()
-CHECK_PORTS=()
+CHECK_HOST_PORTS=()
+CHECK_INTERNAL_PORTS=()
 CHECK_IMAGES=()
 
 UPDATE_STACKS=()
@@ -136,13 +138,13 @@ colorize_status() {
 
 extract_ports() {
     local ports="$1"
-    local results=()
+    local host_ports=()
+    local internal_ports=()
     local chunks=()
     local chunk
     local cleaned
     local target_port
     local published_port
-    local display_port
 
     # Compose's non-JSON formatter renders publishers as Go structs:
     # [{0.0.0.0 80 8080 tcp} {:: 80 8080 tcp} { 6379 0 tcp}]
@@ -164,12 +166,10 @@ extract_ports() {
             if [[ ! "$target_port" =~ ^[0-9]+$ ]]; then
                 continue
             fi
-            if [[ "$published_port" =~ ^[0-9]+$ ]] && [ "$published_port" -gt 0 ] && [ "$published_port" != "$target_port" ]; then
-                display_port="${published_port}->${target_port}"
-            else
-                display_port="$target_port"
+            internal_ports+=("$target_port")
+            if [[ "$published_port" =~ ^[0-9]+$ ]] && [ "$published_port" -gt 0 ]; then
+                host_ports+=("$published_port")
             fi
-            results+=("$display_port")
         done
     fi
 
@@ -192,37 +192,31 @@ extract_ports() {
             continue
         fi
 
-        if [ "$published_port" -gt 0 ] && [ "$published_port" != "$target_port" ]; then
-            display_port="${published_port}->${target_port}"
-        else
-            display_port="$target_port"
+        internal_ports+=("$target_port")
+        if [ "$published_port" -gt 0 ]; then
+            host_ports+=("$published_port")
         fi
-        results+=("$display_port")
     done
 
-    if [ ${#results[@]} -eq 0 ]; then
-        printf '%s' "-"
-        return
-    fi
+    printf '%s|%s' "$(join_unique_ports "${host_ports[@]}")" "$(join_unique_ports "${internal_ports[@]}")"
+}
 
-    local unique=()
+join_unique_ports() {
+    local ports=("$@")
     local item
     local seen="|"
-    for item in "${results[@]}"; do
+    local joined=""
+
+    for item in "${ports[@]}"; do
+        [ -n "$item" ] || continue
         if [[ "$seen" != *"|$item|"* ]]; then
-            unique+=("$item")
+            [ -n "$joined" ] && joined+=", "
+            joined+="$item"
             seen+="$item|"
         fi
     done
 
-    local joined=""
-    for item in "${unique[@]}"; do
-        if [ -n "$joined" ]; then
-            joined+=", "
-        fi
-        joined+="$item"
-    done
-    printf '%s' "$joined"
+    printf '%s' "${joined:--}"
 }
 
 find_compose_in_dir() {
@@ -320,10 +314,7 @@ for item in data:
                 published = port.get("PublishedPort")
                 target = port.get("TargetPort")
                 if target is not None:
-                    if published and published != target:
-                        port_chunks.append(f"{published}->{target}")
-                    else:
-                        port_chunks.append(str(target))
+                    port_chunks.append(f"{published or 0}->{target}")
             elif isinstance(port, str):
                 port_chunks.append(port)
         ports = ",".join(port_chunks)
@@ -371,26 +362,30 @@ record_check_row() {
     local stack_index="$1"
     local service="$2"
     local status="$3"
-    local ports="$4"
-    local image="$5"
-    local kind="$6"
+    local row_host_ports="$4"
+    local row_internal_ports="$5"
+    local image="$6"
+    local kind="$7"
     local row_id="${stack_index}:${#CHECK_SERVICES[@]}"
 
     CHECK_STACK_ROWS[stack_index]+="${row_id} "
     CHECK_SERVICES+=("$service")
     CHECK_STATUSES+=("$status")
     CHECK_STATUS_KINDS+=("$kind")
-    CHECK_PORTS+=("$ports")
+    CHECK_HOST_PORTS+=("$row_host_ports")
+    CHECK_INTERNAL_PORTS+=("$row_internal_ports")
     CHECK_IMAGES+=("$image")
 
     local width_service="${CHECK_STACK_WIDTH_SERVICE[$stack_index]}"
     local width_status="${CHECK_STACK_WIDTH_STATUS[$stack_index]}"
-    local width_ports="${CHECK_STACK_WIDTH_PORTS[$stack_index]}"
+    local width_host_ports="${CHECK_STACK_WIDTH_HOST_PORTS[$stack_index]}"
+    local width_internal_ports="${CHECK_STACK_WIDTH_INTERNAL_PORTS[$stack_index]}"
     local width_image="${CHECK_STACK_WIDTH_IMAGE[$stack_index]}"
 
     [ ${#service} -gt "$width_service" ] && CHECK_STACK_WIDTH_SERVICE[stack_index]=${#service}
     [ ${#status} -gt "$width_status" ] && CHECK_STACK_WIDTH_STATUS[stack_index]=${#status}
-    [ ${#ports} -gt "$width_ports" ] && CHECK_STACK_WIDTH_PORTS[stack_index]=${#ports}
+    [ ${#row_host_ports} -gt "$width_host_ports" ] && CHECK_STACK_WIDTH_HOST_PORTS[stack_index]=${#row_host_ports}
+    [ ${#row_internal_ports} -gt "$width_internal_ports" ] && CHECK_STACK_WIDTH_INTERNAL_PORTS[stack_index]=${#row_internal_ports}
     [ ${#image} -gt "$width_image" ] && CHECK_STACK_WIDTH_IMAGE[stack_index]=${#image}
 }
 
@@ -404,6 +399,8 @@ collect_stack_rows() {
     local service
     local status
     local ports
+    local host_ports
+    local internal_ports
     local image
     local kind
     local any_running=false
@@ -411,17 +408,18 @@ collect_stack_rows() {
     CHECK_STACK_NAMES[stack_index]="$stack_label"
     CHECK_STACK_WIDTH_SERVICE[stack_index]=7
     CHECK_STACK_WIDTH_STATUS[stack_index]=6
-    CHECK_STACK_WIDTH_PORTS[stack_index]=5
+    CHECK_STACK_WIDTH_HOST_PORTS[stack_index]=10
+    CHECK_STACK_WIDTH_INTERNAL_PORTS[stack_index]=14
     CHECK_STACK_WIDTH_IMAGE[stack_index]=5
     CHECK_STACK_ROWS[stack_index]=""
 
     if ! command_exists docker; then
-        record_check_row "$stack_index" "-" "docker missing" "-" "-" "$STATUS_ERROR"
+        record_check_row "$stack_index" "-" "docker missing" "-" "-" "-" "$STATUS_ERROR"
         return 1
     fi
 
     if ! docker_accessible; then
-        record_check_row "$stack_index" "-" "docker unavailable" "-" "-" "$STATUS_ERROR"
+        record_check_row "$stack_index" "-" "docker unavailable" "-" "-" "-" "$STATUS_ERROR"
         return 1
     fi
 
@@ -433,18 +431,18 @@ collect_stack_rows() {
     fi
 
     if [ -z "$parsed" ]; then
-        record_check_row "$stack_index" "-" "no containers" "-" "$(basename "$stack_file")" "$STATUS_STOPPED"
+        record_check_row "$stack_index" "-" "no containers" "-" "-" "$(basename "$stack_file")" "$STATUS_STOPPED"
         return 1
     fi
 
     while IFS='|' read -r service status ports image; do
         [ -n "$service$status$ports$image" ] || continue
-        ports="$(extract_ports "$ports")"
+        IFS='|' read -r host_ports internal_ports <<< "$(extract_ports "$ports")"
         kind="$(status_kind "$status")"
         if [ "$kind" = "$STATUS_RUNNING" ]; then
             any_running=true
         fi
-        record_check_row "$stack_index" "$service" "$status" "$ports" "$image" "$kind"
+        record_check_row "$stack_index" "$service" "$status" "$host_ports" "$internal_ports" "$image" "$kind"
     done <<< "$parsed"
 
     $any_running
@@ -455,23 +453,26 @@ print_stack_table() {
     local rows="${CHECK_STACK_ROWS[$stack_index]}"
     local service_width="${CHECK_STACK_WIDTH_SERVICE[$stack_index]}"
     local status_width="${CHECK_STACK_WIDTH_STATUS[$stack_index]}"
-    local ports_width="${CHECK_STACK_WIDTH_PORTS[$stack_index]}"
+    local host_ports_width="${CHECK_STACK_WIDTH_HOST_PORTS[$stack_index]}"
+    local internal_ports_width="${CHECK_STACK_WIDTH_INTERNAL_PORTS[$stack_index]}"
     local image_width="${CHECK_STACK_WIDTH_IMAGE[$stack_index]}"
-    local total_width=$((service_width + status_width + ports_width + image_width + 13))
+    local total_width=$((service_width + status_width + host_ports_width + internal_ports_width + image_width + 16))
     local separator
     local row_ref
     local row_index
     local service
     local status_plain
     local status_colored
-    local ports
+    local host_ports
+    local internal_ports
     local image
     local kind
 
     printf '\n%b%s%b\n' "$BOLD$BLUE" "${CHECK_STACK_NAMES[$stack_index]}" "$NC"
     separator="$(repeat_char '-' "$total_width")"
     printf '%s\n' "$separator"
-    printf "| %-${service_width}s | %-${status_width}s | %-${ports_width}s | %-${image_width}s |\n" "SERVICE" "STATUS" "PORTS" "IMAGE"
+    printf "| %-${service_width}s | %-${status_width}s | %-${host_ports_width}s | %-${internal_ports_width}s | %-${image_width}s |\n" \
+        "SERVICE" "STATUS" "HOST PORTS" "INTERNAL PORTS" "IMAGE"
     printf '%s\n' "$separator"
 
     for row_ref in $rows; do
@@ -480,12 +481,14 @@ print_stack_table() {
         status_plain="${CHECK_STATUSES[$row_index]}"
         kind="${CHECK_STATUS_KINDS[$row_index]}"
         status_colored="$(colorize_status "$status_plain" "$kind")"
-        ports="${CHECK_PORTS[$row_index]}"
+        host_ports="${CHECK_HOST_PORTS[$row_index]}"
+        internal_ports="${CHECK_INTERNAL_PORTS[$row_index]}"
         image="${CHECK_IMAGES[$row_index]}"
-        printf "| %-${service_width}s | %b | %-${ports_width}s | %-${image_width}s |\n" \
+        printf "| %-${service_width}s | %b | %-${host_ports_width}s | %-${internal_ports_width}s | %-${image_width}s |\n" \
             "$service" \
             "${status_colored}$(repeat_char ' ' $((status_width - ${#status_plain} > 0 ? status_width - ${#status_plain} : 0)))" \
-            "$ports" \
+            "$host_ports" \
+            "$internal_ports" \
             "$image"
     done
     printf '%s\n' "$separator"
