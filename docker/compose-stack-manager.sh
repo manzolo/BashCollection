@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: compose-stack-manager
-# PKG_VERSION: 1.0.2
+# PKG_VERSION: 1.0.3
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -11,8 +11,9 @@
 
 set -uo pipefail
 
-readonly VERSION="1.0.2"
-readonly SCRIPT_NAME="$(basename "$0")"
+readonly VERSION="1.0.3"
+SCRIPT_NAME="$(basename "$0")"
+readonly SCRIPT_NAME
 
 readonly GREEN='\033[0;32m'
 readonly YELLOW='\033[1;33m'
@@ -146,6 +147,26 @@ extract_host_ports() {
     local cleaned
     local host_part
 
+    # Compose's non-JSON formatter renders publishers as Go structs:
+    # [{0.0.0.0 80 8080 tcp} {:: 80 8080 tcp} { 6379 0 tcp}]
+    if [[ "$ports" == *"{"*"}"* ]]; then
+        while [[ "$ports" =~ \{([^}]*)\} ]]; do
+            chunk="$(trim "${BASH_REMATCH[1]}")"
+            ports="${ports#*"${BASH_REMATCH[0]}"}"
+            read -ra chunks <<< "$chunk"
+            if [ "${#chunks[@]}" -ge 4 ]; then
+                host_part="${chunks[2]}"
+            elif [ "${#chunks[@]}" -ge 3 ]; then
+                host_part="${chunks[1]}"
+            else
+                host_part="0"
+            fi
+            if [[ "$host_part" =~ ^[0-9]+$ ]] && [ "$host_part" -gt 0 ]; then
+                results+=("$host_part")
+            fi
+        done
+    fi
+
     ports="${ports//$'\n'/,}"
     IFS=',' read -ra chunks <<< "$ports"
     for chunk in "${chunks[@]}"; do
@@ -187,17 +208,6 @@ extract_host_ports() {
         joined+="$item"
     done
     printf '%s' "$joined"
-}
-
-relative_stack_path() {
-    local path="$1"
-    if [ "$path" = "$START_DIR" ]; then
-        printf '.'
-    elif [[ "$path" == "$START_DIR/"* ]]; then
-        printf '%s' "${path#"$START_DIR"/}"
-    else
-        printf '%s' "$path"
-    fi
 }
 
 find_compose_in_dir() {
@@ -252,7 +262,7 @@ collect_compose_ps_json() {
     local stack_dir="$1"
     (
         cd "$stack_dir" || exit 1
-        docker compose ps --format json 2>/dev/null
+        docker compose ps --all --format json 2>/dev/null
     )
 }
 
@@ -274,14 +284,17 @@ if not raw:
 try:
     data = json.loads(raw)
 except json.JSONDecodeError:
-    sys.exit(1)
+    try:
+        data = [json.loads(line) for line in raw.splitlines() if line.strip()]
+    except json.JSONDecodeError:
+        sys.exit(1)
 
 if isinstance(data, dict):
     data = [data]
 
 for item in data:
     service = item.get("Service") or item.get("Name") or "-"
-    status = item.get("State") or item.get("Status") or "unknown"
+    status = item.get("Status") or item.get("State") or "unknown"
     ports = item.get("Publishers") or item.get("Ports") or ""
     image = item.get("Image") or "-"
 
@@ -292,7 +305,7 @@ for item in data:
                 published = port.get("PublishedPort")
                 target = port.get("TargetPort")
                 protocol = port.get("Protocol") or "tcp"
-                if published is not None and target is not None:
+                if published and target is not None:
                     port_chunks.append(f"{published}->{target}/{protocol}")
             elif isinstance(port, str):
                 port_chunks.append(port)
@@ -308,13 +321,12 @@ collect_compose_ps_table() {
     local stack_dir="$1"
     (
         cd "$stack_dir" || exit 1
-        docker compose ps --format "table {{.Service}}\t{{.Status}}\t{{.Publishers}}\t{{.Image}}" 2>/dev/null
+        docker compose ps --all --format '{{.Service}}|{{.Status}}|{{.Publishers}}|{{.Image}}' 2>/dev/null
     )
 }
 
 parse_ps_table() {
-    awk -F '\t' '
-        NR == 1 { next }
+    awk -F '|' '
         NF == 0 { next }
         {
             service = $1
@@ -347,7 +359,7 @@ record_check_row() {
     local kind="$6"
     local row_id="${stack_index}:${#CHECK_SERVICES[@]}"
 
-    CHECK_STACK_ROWS[$stack_index]+="${row_id} "
+    CHECK_STACK_ROWS[stack_index]+="${row_id} "
     CHECK_SERVICES+=("$service")
     CHECK_STATUSES+=("$status")
     CHECK_STATUS_KINDS+=("$kind")
@@ -359,10 +371,10 @@ record_check_row() {
     local width_ports="${CHECK_STACK_WIDTH_PORTS[$stack_index]}"
     local width_image="${CHECK_STACK_WIDTH_IMAGE[$stack_index]}"
 
-    [ ${#service} -gt "$width_service" ] && CHECK_STACK_WIDTH_SERVICE[$stack_index]=${#service}
-    [ ${#status} -gt "$width_status" ] && CHECK_STACK_WIDTH_STATUS[$stack_index]=${#status}
-    [ ${#ports} -gt "$width_ports" ] && CHECK_STACK_WIDTH_PORTS[$stack_index]=${#ports}
-    [ ${#image} -gt "$width_image" ] && CHECK_STACK_WIDTH_IMAGE[$stack_index]=${#image}
+    [ ${#service} -gt "$width_service" ] && CHECK_STACK_WIDTH_SERVICE[stack_index]=${#service}
+    [ ${#status} -gt "$width_status" ] && CHECK_STACK_WIDTH_STATUS[stack_index]=${#status}
+    [ ${#ports} -gt "$width_ports" ] && CHECK_STACK_WIDTH_PORTS[stack_index]=${#ports}
+    [ ${#image} -gt "$width_image" ] && CHECK_STACK_WIDTH_IMAGE[stack_index]=${#image}
 }
 
 collect_stack_rows() {
@@ -372,7 +384,6 @@ collect_stack_rows() {
     local stack_index="$4"
     local json_output=""
     local parsed=""
-    local line
     local service
     local status
     local ports
@@ -380,12 +391,12 @@ collect_stack_rows() {
     local kind
     local any_running=false
 
-    CHECK_STACK_NAMES[$stack_index]="$stack_label ($(relative_stack_path "$stack_dir"))"
-    CHECK_STACK_WIDTH_SERVICE[$stack_index]=7
-    CHECK_STACK_WIDTH_STATUS[$stack_index]=6
-    CHECK_STACK_WIDTH_PORTS[$stack_index]=5
-    CHECK_STACK_WIDTH_IMAGE[$stack_index]=5
-    CHECK_STACK_ROWS[$stack_index]=""
+    CHECK_STACK_NAMES[stack_index]="$stack_label"
+    CHECK_STACK_WIDTH_SERVICE[stack_index]=7
+    CHECK_STACK_WIDTH_STATUS[stack_index]=6
+    CHECK_STACK_WIDTH_PORTS[stack_index]=5
+    CHECK_STACK_WIDTH_IMAGE[stack_index]=5
+    CHECK_STACK_ROWS[stack_index]=""
 
     if ! command_exists docker; then
         record_check_row "$stack_index" "-" "docker missing" "-" "-" "$STATUS_ERROR"
@@ -612,11 +623,10 @@ run_update_mode() {
         stack_dir="${STACK_DIRS[$idx]}"
         stack_label="${STACK_LABELS[$idx]}"
 
-        pull_output="$(
+        if ! pull_output="$(
             cd "$stack_dir" &&
             docker compose pull 2>&1
-        )"
-        if [ $? -ne 0 ]; then
+        )"; then
             if printf '%s' "$pull_output" | grep -qi 'permission denied'; then
                 log_warn "Update failed for $stack_label: permission denied. Add the user to the docker group or run with sufficient privileges."
                 record_update_result "$stack_label" "$UPDATE_FAILED" "docker compose pull permission denied"
@@ -643,8 +653,7 @@ run_update_mode() {
             continue
         fi
 
-        restart_output="$(restart_stack "$stack_dir")"
-        if [ $? -ne 0 ]; then
+        if ! restart_output="$(restart_stack "$stack_dir")"; then
             if printf '%s' "$restart_output" | grep -qi 'permission denied'; then
                 log_warn "Restart failed for $stack_label: permission denied."
                 record_update_result "$stack_label" "$UPDATE_FAILED" "restart permission denied"
