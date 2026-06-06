@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: compose-stack-manager
-# PKG_VERSION: 1.0.7
+# PKG_VERSION: 1.0.8
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -11,7 +11,7 @@
 
 set -uo pipefail
 
-readonly VERSION="1.0.7"
+readonly VERSION="1.0.8"
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
 
@@ -31,6 +31,9 @@ readonly UPDATE_UPDATED="updated"
 readonly UPDATE_UNCHANGED="unchanged"
 readonly UPDATE_FAILED="failed"
 readonly UPDATE_SKIPPED="skipped"
+
+readonly MAX_HOST_PORTS_WIDTH=18
+readonly MAX_INTERNAL_PORTS_WIDTH=24
 
 readonly COMPOSE_FILES=(
     "docker-compose.yml"
@@ -217,6 +220,36 @@ join_unique_ports() {
     done
 
     printf '%s' "${joined:--}"
+}
+
+wrap_port_list() {
+    local value="$1"
+    local width="$2"
+    local items=()
+    local item
+    local line=""
+
+    if [ "$value" = "-" ]; then
+        printf '%s\n' "-"
+        return
+    fi
+
+    IFS=',' read -ra items <<< "$value"
+    for item in "${items[@]}"; do
+        item="$(trim "$item")"
+        [ -n "$item" ] || continue
+
+        if [ -z "$line" ]; then
+            line="$item"
+        elif [ $((${#line} + ${#item} + 2)) -le "$width" ]; then
+            line+=", $item"
+        else
+            printf '%s\n' "$line"
+            line="$item"
+        fi
+    done
+
+    [ -n "$line" ] && printf '%s\n' "$line"
 }
 
 find_compose_in_dir() {
@@ -456,6 +489,8 @@ print_stack_table() {
     local host_ports_width="${CHECK_STACK_WIDTH_HOST_PORTS[$stack_index]}"
     local internal_ports_width="${CHECK_STACK_WIDTH_INTERNAL_PORTS[$stack_index]}"
     local image_width="${CHECK_STACK_WIDTH_IMAGE[$stack_index]}"
+    [ "$host_ports_width" -gt "$MAX_HOST_PORTS_WIDTH" ] && host_ports_width="$MAX_HOST_PORTS_WIDTH"
+    [ "$internal_ports_width" -gt "$MAX_INTERNAL_PORTS_WIDTH" ] && internal_ports_width="$MAX_INTERNAL_PORTS_WIDTH"
     local total_width=$((service_width + status_width + host_ports_width + internal_ports_width + image_width + 16))
     local separator
     local row_ref
@@ -467,6 +502,15 @@ print_stack_table() {
     local internal_ports
     local image
     local kind
+    local host_port_lines=()
+    local internal_port_lines=()
+    local port_line_count
+    local port_line_index
+    local row_service
+    local row_status
+    local row_host_ports
+    local row_internal_ports
+    local row_image
 
     printf '\n%b%s%b\n' "$BOLD$BLUE" "${CHECK_STACK_NAMES[$stack_index]}" "$NC"
     separator="$(repeat_char '-' "$total_width")"
@@ -484,12 +528,32 @@ print_stack_table() {
         host_ports="${CHECK_HOST_PORTS[$row_index]}"
         internal_ports="${CHECK_INTERNAL_PORTS[$row_index]}"
         image="${CHECK_IMAGES[$row_index]}"
-        printf "| %-${service_width}s | %b | %-${host_ports_width}s | %-${internal_ports_width}s | %-${image_width}s |\n" \
-            "$service" \
-            "${status_colored}$(repeat_char ' ' $((status_width - ${#status_plain} > 0 ? status_width - ${#status_plain} : 0)))" \
-            "$host_ports" \
-            "$internal_ports" \
-            "$image"
+
+        mapfile -t host_port_lines < <(wrap_port_list "$host_ports" "$host_ports_width")
+        mapfile -t internal_port_lines < <(wrap_port_list "$internal_ports" "$internal_ports_width")
+        port_line_count="${#host_port_lines[@]}"
+        [ "${#internal_port_lines[@]}" -gt "$port_line_count" ] && port_line_count="${#internal_port_lines[@]}"
+
+        for ((port_line_index = 0; port_line_index < port_line_count; port_line_index++)); do
+            row_host_ports="${host_port_lines[$port_line_index]:-}"
+            row_internal_ports="${internal_port_lines[$port_line_index]:-}"
+            if [ "$port_line_index" -eq 0 ]; then
+                row_service="$service"
+                row_status="${status_colored}$(repeat_char ' ' $((status_width - ${#status_plain} > 0 ? status_width - ${#status_plain} : 0)))"
+                row_image="$image"
+            else
+                row_service=""
+                row_status="$(repeat_char ' ' "$status_width")"
+                row_image=""
+            fi
+
+            printf "| %-${service_width}s | %b | %-${host_ports_width}s | %-${internal_ports_width}s | %-${image_width}s |\n" \
+                "$row_service" \
+                "$row_status" \
+                "$row_host_ports" \
+                "$row_internal_ports" \
+                "$row_image"
+        done
     done
     printf '%s\n' "$separator"
 }
