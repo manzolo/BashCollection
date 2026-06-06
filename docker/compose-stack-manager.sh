@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: compose-stack-manager
-# PKG_VERSION: 1.0.5
+# PKG_VERSION: 1.0.6
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -11,7 +11,7 @@
 
 set -uo pipefail
 
-readonly VERSION="1.0.5"
+readonly VERSION="1.0.6"
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
 
@@ -134,13 +134,15 @@ colorize_status() {
     esac
 }
 
-extract_host_ports() {
+extract_ports() {
     local ports="$1"
     local results=()
     local chunks=()
     local chunk
     local cleaned
-    local host_part
+    local target_port
+    local published_port
+    local display_port
 
     # Compose's non-JSON formatter renders publishers as Go structs:
     # [{0.0.0.0 80 8080 tcp} {:: 80 8080 tcp} { 6379 0 tcp}]
@@ -150,15 +152,24 @@ extract_host_ports() {
             ports="${ports#*"${BASH_REMATCH[0]}"}"
             read -ra chunks <<< "$chunk"
             if [ "${#chunks[@]}" -ge 4 ]; then
-                host_part="${chunks[2]}"
+                target_port="${chunks[1]}"
+                published_port="${chunks[2]}"
             elif [ "${#chunks[@]}" -ge 3 ]; then
-                host_part="${chunks[1]}"
+                target_port="${chunks[0]}"
+                published_port="${chunks[1]}"
             else
-                host_part="0"
+                continue
             fi
-            if [[ "$host_part" =~ ^[0-9]+$ ]] && [ "$host_part" -gt 0 ]; then
-                results+=("$host_part")
+
+            if [[ ! "$target_port" =~ ^[0-9]+$ ]]; then
+                continue
             fi
+            if [[ "$published_port" =~ ^[0-9]+$ ]] && [ "$published_port" -gt 0 ] && [ "$published_port" != "$target_port" ]; then
+                display_port="${published_port}->${target_port}"
+            else
+                display_port="$target_port"
+            fi
+            results+=("$display_port")
         done
     fi
 
@@ -168,16 +179,25 @@ extract_host_ports() {
         cleaned="$(trim "$chunk")"
         [ -n "$cleaned" ] || continue
 
-        if [[ "$cleaned" =~ ^[^:]+:([0-9]+)(-[0-9]+)?-\> ]]; then
-            host_part="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
-            results+=("$host_part")
-        elif [[ "$cleaned" =~ ^([0-9]+)(-[0-9]+)?-\> ]]; then
-            host_part="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
-            results+=("$host_part")
-        elif [[ "$cleaned" =~ :([0-9]+)(-[0-9]+)?$ ]]; then
-            host_part="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
-            results+=("$host_part")
+        if [[ "$cleaned" =~ ^[^:]+:([0-9]+)-\>([0-9]+) ]]; then
+            published_port="${BASH_REMATCH[1]}"
+            target_port="${BASH_REMATCH[2]}"
+        elif [[ "$cleaned" =~ ^([0-9]+)-\>([0-9]+) ]]; then
+            published_port="${BASH_REMATCH[1]}"
+            target_port="${BASH_REMATCH[2]}"
+        elif [[ "$cleaned" =~ ^([0-9]+)(/[^[:space:]]+)?$ ]]; then
+            published_port="0"
+            target_port="${BASH_REMATCH[1]}"
+        else
+            continue
         fi
+
+        if [ "$published_port" -gt 0 ] && [ "$published_port" != "$target_port" ]; then
+            display_port="${published_port}->${target_port}"
+        else
+            display_port="$target_port"
+        fi
+        results+=("$display_port")
     done
 
     if [ ${#results[@]} -eq 0 ]; then
@@ -299,9 +319,11 @@ for item in data:
             if isinstance(port, dict):
                 published = port.get("PublishedPort")
                 target = port.get("TargetPort")
-                protocol = port.get("Protocol") or "tcp"
-                if published and target is not None:
-                    port_chunks.append(f"{published}->{target}/{protocol}")
+                if target is not None:
+                    if published and published != target:
+                        port_chunks.append(f"{published}->{target}")
+                    else:
+                        port_chunks.append(str(target))
             elif isinstance(port, str):
                 port_chunks.append(port)
         ports = ",".join(port_chunks)
@@ -417,7 +439,7 @@ collect_stack_rows() {
 
     while IFS='|' read -r service status ports image; do
         [ -n "$service$status$ports$image" ] || continue
-        ports="$(extract_host_ports "$ports")"
+        ports="$(extract_ports "$ports")"
         kind="$(status_kind "$status")"
         if [ "$kind" = "$STATUS_RUNNING" ]; then
             any_running=true
