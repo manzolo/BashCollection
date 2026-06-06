@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: compose-stack-manager
-# PKG_VERSION: 1.0.1
+# PKG_VERSION: 1.0.2
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -11,7 +11,7 @@
 
 set -uo pipefail
 
-readonly VERSION="1.0.1"
+readonly VERSION="1.0.2"
 readonly SCRIPT_NAME="$(basename "$0")"
 
 readonly GREEN='\033[0;32m'
@@ -313,23 +313,25 @@ collect_compose_ps_table() {
 }
 
 parse_ps_table() {
-    local table_input="$1"
-    TABLE_INPUT="$table_input" awk '
+    awk -F '\t' '
         NR == 1 { next }
         NF == 0 { next }
         {
             service = $1
             status = $2
-            ports = $NF
-            image = $(NF-1)
-            if (NF > 4) {
-                status = $2
-                for (i = 3; i <= NF - 2; i++) {
-                    status = status " " $i
-                }
-            }
-            if (ports == "<none>") {
+            ports = $3
+            image = $4
+            if (ports == "<none>" || ports == "") {
                 ports = ""
+            }
+            if (service == "") {
+                service = "-"
+            }
+            if (status == "") {
+                status = "unknown"
+            }
+            if (image == "") {
+                image = "-"
             }
             print service "|" status "|" ports "|" image
         }
