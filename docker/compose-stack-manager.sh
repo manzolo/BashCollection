@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: compose-stack-manager
-# PKG_VERSION: 1.0.0
+# PKG_VERSION: 1.0.1
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -11,7 +11,7 @@
 
 set -uo pipefail
 
-readonly VERSION="1.0.0"
+readonly VERSION="1.0.1"
 readonly SCRIPT_NAME="$(basename "$0")"
 
 readonly GREEN='\033[0;32m'
@@ -222,39 +222,26 @@ scan_directory_recursive() {
         return 0
     fi
 
-    if ! compose_path="$(find_compose_in_dir "$dir")"; then
-        compose_path=""
-    fi
+    shopt -s nullglob
+    for entry in "$dir"/*; do
+        [ -d "$entry" ] || continue
+        [ -L "$entry" ] && continue
 
-    if [ -n "$compose_path" ]; then
-        STACK_DIRS+=("$dir")
+        if [ ! -r "$entry" ] || [ ! -x "$entry" ]; then
+            log_warn "Permission denied while scanning: $entry"
+            continue
+        fi
+
+        if ! compose_path="$(find_compose_in_dir "$entry")"; then
+            continue
+        fi
+
+        STACK_DIRS+=("$entry")
         STACK_FILES+=("$compose_path")
-        label="$(basename "$dir")"
-        if [ "$label" = "." ] || [ -z "$label" ]; then
-            label="$dir"
-        fi
+        label="$(basename "$entry")"
         STACK_LABELS+=("$label")
-    fi
-
-    if ! compgen -G "$dir/*" >/dev/null && ! compgen -G "$dir/.*" >/dev/null; then
-        return 0
-    fi
-
-    shopt -s nullglob dotglob
-    for entry in "$dir"/* "$dir"/.*; do
-        [ -e "$entry" ] || continue
-        case "$(basename "$entry")" in
-            .|..) continue ;;
-        esac
-        if [ -d "$entry" ] && [ ! -L "$entry" ]; then
-            if [ -r "$entry" ] && [ -x "$entry" ]; then
-                scan_directory_recursive "$entry"
-            else
-                log_warn "Permission denied while scanning: $entry"
-            fi
-        fi
     done
-    shopt -u nullglob dotglob
+    shopt -u nullglob
 }
 
 docker_accessible() {
