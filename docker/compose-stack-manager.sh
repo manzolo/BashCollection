@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: compose-stack-manager
-# PKG_VERSION: 1.0.3
+# PKG_VERSION: 1.0.4
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -11,7 +11,7 @@
 
 set -uo pipefail
 
-readonly VERSION="1.0.3"
+readonly VERSION="1.0.4"
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
 
@@ -66,19 +66,14 @@ UPDATE_RESULTS=()
 UPDATE_DETAILS=()
 
 print_help() {
-    cat <<EOF
-${BOLD}Compose Stack Manager${NC} v${VERSION}
-
-Usage: ${SCRIPT_NAME} [OPTIONS]
-
-Modes:
-  default                 Check mode: scan stacks and show an ASCII dashboard
-  --update                Pull images and restart stacks only when updates exist
-
-Options:
-  -i, --interactive       With --update, ask confirmation before down/rm/up
-  -h, --help              Show this help and exit
-EOF
+    printf '%bCompose Stack Manager%b v%s\n' "$BOLD" "$NC" "$VERSION"
+    printf '\nUsage: %s [OPTIONS]\n' "$SCRIPT_NAME"
+    printf '\nModes:\n'
+    printf '  default                 Check mode: scan stacks and show an ASCII dashboard\n'
+    printf '  --update                Pull images and restart stacks only when updates exist\n'
+    printf '\nOptions:\n'
+    printf '  -i, --interactive       With --update, ask confirmation before down/rm/up\n'
+    printf '  -h, --help              Show this help and exit\n'
 }
 
 log_warn() {
