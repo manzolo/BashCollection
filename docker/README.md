@@ -82,6 +82,68 @@ If Docker service is not running, the script will prompt to start it automatical
 
 ---
 
+### compose-stack-manager
+
+Scans directories recursively for Docker Compose stacks and shows a color-coded ASCII dashboard with service status, ports, and images. Also handles image pulls and rolling restarts with automatic old-image cleanup.
+
+**Features:**
+- Recursive discovery of compose files (`docker-compose.yml`, `docker-compose.yaml`, `compose.yml`, `compose.yaml`)
+- ASCII dashboard with adaptive column widths and colored status (green/yellow/red)
+- Per-stack table: SERVICE | STATUS | PORTS | IMAGE
+- Summary line: N stacks, X running, Y stopped
+- `--update` mode: pulls new images, restarts only stacks with actual updates
+- Automatic retention of the last 2 image versions per repository (for rollback)
+- Interactive confirmation per stack with `--interactive`
+- Graceful handling of Docker not running or permission errors
+- No root required for check mode (requires docker group membership)
+
+**Usage:**
+```bash
+# Check mode (default): show status dashboard
+compose-stack-manager
+
+# Update mode: pull and restart stacks with new images
+compose-stack-manager --update
+
+# Update mode with per-stack confirmation
+compose-stack-manager --update --interactive
+compose-stack-manager --update -i
+
+# Show help
+compose-stack-manager --help
+```
+
+**Example check output:**
+```
+myapp (docker/myapp)
+-------------------------------------------------------
+| SERVICE  | STATUS  | PORTS    | IMAGE               |
+-------------------------------------------------------
+| nginx    | running | 80, 443  | nginx:1.25          |
+| app      | running | -        | myapp:latest        |
+| db       | exited  | -        | postgres:15         |
+-------------------------------------------------------
+
+Summary: 2 stacks, 1 running, 1 stopped
+```
+
+**Update workflow:**
+1. Scans all compose stacks under the current directory
+2. For each stack: runs `docker compose pull`
+3. If new images found: `down` → `rm -f` → `up -d`
+4. Removes image versions beyond the newest 2 per repository
+5. Prints a summary table with updated / unchanged / failed per stack
+
+**Requirements:**
+- Docker (docker group membership for non-root check mode)
+- docker-compose-plugin (for `docker compose` plugin syntax)
+- python3 (optional, improves JSON parsing of `docker compose ps`)
+
+**Rollback:**
+Because the last 2 image versions are retained, a rollback can be done manually with `docker compose up -d` after pinning the previous image tag in the compose file.
+
+---
+
 ### update-docker-compose
 
 Automatically discovers and updates Docker Compose projects in subdirectories.

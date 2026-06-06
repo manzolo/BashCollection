@@ -72,3 +72,6 @@ nvidia-manager:
 
 ssh-manager:
   cmd: ["--help"]
+
+compose-stack-manager:
+  cmd: ["--help"]

@@ -1,0 +1,790 @@
+#!/bin/bash
+# PKG_NAME: compose-stack-manager
+# PKG_VERSION: 1.0.0
+# PKG_SECTION: admin
+# PKG_PRIORITY: optional
+# PKG_ARCHITECTURE: all
+# PKG_DEPENDS: bash (>= 4.0), docker-ce
+# PKG_RECOMMENDS: docker-compose-plugin
+# PKG_MAINTAINER: Manzolo <manzolo@libero.it>
+# PKG_DESCRIPTION: Docker Compose stack monitor and updater with ASCII dashboard
+
+set -uo pipefail
+
+readonly VERSION="1.0.0"
+readonly SCRIPT_NAME="$(basename "$0")"
+
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly RED='\033[0;31m'
+readonly BLUE='\033[0;34m'
+readonly BOLD='\033[1m'
+readonly NC='\033[0m'
+
+readonly STATUS_RUNNING="running"
+readonly STATUS_WARN="warning"
+readonly STATUS_STOPPED="stopped"
+readonly STATUS_ERROR="error"
+
+readonly UPDATE_UPDATED="updated"
+readonly UPDATE_UNCHANGED="unchanged"
+readonly UPDATE_FAILED="failed"
+readonly UPDATE_SKIPPED="skipped"
+
+readonly COMPOSE_FILES=(
+    "docker-compose.yml"
+    "docker-compose.yaml"
+    "compose.yml"
+    "compose.yaml"
+)
+
+MODE="check"
+INTERACTIVE=false
+START_DIR="$(pwd)"
+HAS_PYTHON3=false
+LOG_ERRORS=()
+
+STACK_DIRS=()
+STACK_FILES=()
+STACK_LABELS=()
+
+CHECK_STACK_NAMES=()
+CHECK_STACK_ROWS=()
+CHECK_STACK_WIDTH_SERVICE=()
+CHECK_STACK_WIDTH_STATUS=()
+CHECK_STACK_WIDTH_PORTS=()
+CHECK_STACK_WIDTH_IMAGE=()
+CHECK_SERVICES=()
+CHECK_STATUSES=()
+CHECK_STATUS_KINDS=()
+CHECK_PORTS=()
+CHECK_IMAGES=()
+
+UPDATE_STACKS=()
+UPDATE_RESULTS=()
+UPDATE_DETAILS=()
+
+print_help() {
+    cat <<EOF
+${BOLD}Compose Stack Manager${NC} v${VERSION}
+
+Usage: ${SCRIPT_NAME} [OPTIONS]
+
+Modes:
+  default                 Check mode: scan stacks and show an ASCII dashboard
+  --update                Pull images and restart stacks only when updates exist
+
+Options:
+  -i, --interactive       With --update, ask confirmation before down/rm/up
+  -h, --help              Show this help and exit
+EOF
+}
+
+log_warn() {
+    LOG_ERRORS+=("$1")
+}
+
+print_errors() {
+    local message
+    for message in "${LOG_ERRORS[@]}"; do
+        printf '%bWarning:%b %s\n' "$YELLOW" "$NC" "$message" >&2
+    done
+}
+
+repeat_char() {
+    local char="$1"
+    local count="$2"
+    local out=""
+    local i
+    for ((i = 0; i < count; i++)); do
+        out+="$char"
+    done
+    printf '%s' "$out"
+}
+
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+trim() {
+    local value="$1"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s' "$value"
+}
+
+status_kind() {
+    local status_lc
+    status_lc="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+
+    if [[ "$status_lc" == *"running"* ]] || [[ "$status_lc" == up* ]]; then
+        printf '%s' "$STATUS_RUNNING"
+    elif [[ "$status_lc" == *"paused"* ]] || [[ "$status_lc" == *"restarting"* ]]; then
+        printf '%s' "$STATUS_WARN"
+    elif [[ "$status_lc" == *"not running"* ]] || [[ "$status_lc" == *"exited"* ]] || [[ "$status_lc" == *"dead"* ]]; then
+        printf '%s' "$STATUS_STOPPED"
+    else
+        printf '%s' "$STATUS_ERROR"
+    fi
+}
+
+colorize_status() {
+    local status="$1"
+    local kind="$2"
+    case "$kind" in
+        "$STATUS_RUNNING") printf '%b%s%b' "$GREEN" "$status" "$NC" ;;
+        "$STATUS_WARN") printf '%b%s%b' "$YELLOW" "$status" "$NC" ;;
+        *) printf '%b%s%b' "$RED" "$status" "$NC" ;;
+    esac
+}
+
+extract_host_ports() {
+    local ports="$1"
+    local results=()
+    local chunks=()
+    local chunk
+    local cleaned
+    local host_part
+
+    ports="${ports//$'\n'/,}"
+    IFS=',' read -ra chunks <<< "$ports"
+    for chunk in "${chunks[@]}"; do
+        cleaned="$(trim "$chunk")"
+        [ -n "$cleaned" ] || continue
+
+        if [[ "$cleaned" =~ ^[^:]+:([0-9]+)(-[0-9]+)?-\> ]]; then
+            host_part="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+            results+=("$host_part")
+        elif [[ "$cleaned" =~ ^([0-9]+)(-[0-9]+)?-\> ]]; then
+            host_part="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+            results+=("$host_part")
+        elif [[ "$cleaned" =~ :([0-9]+)(-[0-9]+)?$ ]]; then
+            host_part="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+            results+=("$host_part")
+        fi
+    done
+
+    if [ ${#results[@]} -eq 0 ]; then
+        printf '%s' "-"
+        return
+    fi
+
+    local unique=()
+    local item
+    local seen="|"
+    for item in "${results[@]}"; do
+        if [[ "$seen" != *"|$item|"* ]]; then
+            unique+=("$item")
+            seen+="$item|"
+        fi
+    done
+
+    local joined=""
+    for item in "${unique[@]}"; do
+        if [ -n "$joined" ]; then
+            joined+=", "
+        fi
+        joined+="$item"
+    done
+    printf '%s' "$joined"
+}
+
+relative_stack_path() {
+    local path="$1"
+    if [ "$path" = "$START_DIR" ]; then
+        printf '.'
+    elif [[ "$path" == "$START_DIR/"* ]]; then
+        printf '%s' "${path#"$START_DIR"/}"
+    else
+        printf '%s' "$path"
+    fi
+}
+
+find_compose_in_dir() {
+    local dir="$1"
+    local file
+    for file in "${COMPOSE_FILES[@]}"; do
+        if [ -f "$dir/$file" ]; then
+            printf '%s' "$dir/$file"
+            return 0
+        fi
+    done
+    return 1
+}
+
+scan_directory_recursive() {
+    local dir="$1"
+    local compose_path
+    local entry
+    local label
+
+    if [ ! -d "$dir" ]; then
+        return 0
+    fi
+
+    if ! compose_path="$(find_compose_in_dir "$dir")"; then
+        compose_path=""
+    fi
+
+    if [ -n "$compose_path" ]; then
+        STACK_DIRS+=("$dir")
+        STACK_FILES+=("$compose_path")
+        label="$(basename "$dir")"
+        if [ "$label" = "." ] || [ -z "$label" ]; then
+            label="$dir"
+        fi
+        STACK_LABELS+=("$label")
+    fi
+
+    if ! compgen -G "$dir/*" >/dev/null && ! compgen -G "$dir/.*" >/dev/null; then
+        return 0
+    fi
+
+    shopt -s nullglob dotglob
+    for entry in "$dir"/* "$dir"/.*; do
+        [ -e "$entry" ] || continue
+        case "$(basename "$entry")" in
+            .|..) continue ;;
+        esac
+        if [ -d "$entry" ] && [ ! -L "$entry" ]; then
+            if [ -r "$entry" ] && [ -x "$entry" ]; then
+                scan_directory_recursive "$entry"
+            else
+                log_warn "Permission denied while scanning: $entry"
+            fi
+        fi
+    done
+    shopt -u nullglob dotglob
+}
+
+docker_accessible() {
+    docker info >/dev/null 2>&1
+}
+
+collect_compose_ps_json() {
+    local stack_dir="$1"
+    (
+        cd "$stack_dir" || exit 1
+        docker compose ps --format json 2>/dev/null
+    )
+}
+
+parse_ps_json() {
+    local json_input="$1"
+    if ! $HAS_PYTHON3; then
+        return 1
+    fi
+
+    JSON_INPUT="$json_input" python3 - <<'PY'
+import json
+import os
+import sys
+
+raw = os.environ.get("JSON_INPUT", "").strip()
+if not raw:
+    sys.exit(1)
+
+try:
+    data = json.loads(raw)
+except json.JSONDecodeError:
+    sys.exit(1)
+
+if isinstance(data, dict):
+    data = [data]
+
+for item in data:
+    service = item.get("Service") or item.get("Name") or "-"
+    status = item.get("State") or item.get("Status") or "unknown"
+    ports = item.get("Publishers") or item.get("Ports") or ""
+    image = item.get("Image") or "-"
+
+    if isinstance(ports, list):
+        port_chunks = []
+        for port in ports:
+            if isinstance(port, dict):
+                published = port.get("PublishedPort")
+                target = port.get("TargetPort")
+                protocol = port.get("Protocol") or "tcp"
+                if published is not None and target is not None:
+                    port_chunks.append(f"{published}->{target}/{protocol}")
+            elif isinstance(port, str):
+                port_chunks.append(port)
+        ports = ",".join(port_chunks)
+    else:
+        ports = str(ports)
+
+    print(f"{service}|{status}|{ports}|{image}")
+PY
+}
+
+collect_compose_ps_table() {
+    local stack_dir="$1"
+    (
+        cd "$stack_dir" || exit 1
+        docker compose ps --format "table {{.Service}}\t{{.Status}}\t{{.Publishers}}\t{{.Image}}" 2>/dev/null
+    )
+}
+
+parse_ps_table() {
+    local table_input="$1"
+    TABLE_INPUT="$table_input" awk '
+        NR == 1 { next }
+        NF == 0 { next }
+        {
+            service = $1
+            status = $2
+            ports = $NF
+            image = $(NF-1)
+            if (NF > 4) {
+                status = $2
+                for (i = 3; i <= NF - 2; i++) {
+                    status = status " " $i
+                }
+            }
+            if (ports == "<none>") {
+                ports = ""
+            }
+            print service "|" status "|" ports "|" image
+        }
+    '
+}
+
+record_check_row() {
+    local stack_index="$1"
+    local service="$2"
+    local status="$3"
+    local ports="$4"
+    local image="$5"
+    local kind="$6"
+    local row_id="${stack_index}:${#CHECK_SERVICES[@]}"
+
+    CHECK_STACK_ROWS[$stack_index]+="${row_id} "
+    CHECK_SERVICES+=("$service")
+    CHECK_STATUSES+=("$status")
+    CHECK_STATUS_KINDS+=("$kind")
+    CHECK_PORTS+=("$ports")
+    CHECK_IMAGES+=("$image")
+
+    local width_service="${CHECK_STACK_WIDTH_SERVICE[$stack_index]}"
+    local width_status="${CHECK_STACK_WIDTH_STATUS[$stack_index]}"
+    local width_ports="${CHECK_STACK_WIDTH_PORTS[$stack_index]}"
+    local width_image="${CHECK_STACK_WIDTH_IMAGE[$stack_index]}"
+
+    [ ${#service} -gt "$width_service" ] && CHECK_STACK_WIDTH_SERVICE[$stack_index]=${#service}
+    [ ${#status} -gt "$width_status" ] && CHECK_STACK_WIDTH_STATUS[$stack_index]=${#status}
+    [ ${#ports} -gt "$width_ports" ] && CHECK_STACK_WIDTH_PORTS[$stack_index]=${#ports}
+    [ ${#image} -gt "$width_image" ] && CHECK_STACK_WIDTH_IMAGE[$stack_index]=${#image}
+}
+
+collect_stack_rows() {
+    local stack_dir="$1"
+    local stack_file="$2"
+    local stack_label="$3"
+    local stack_index="$4"
+    local json_output=""
+    local parsed=""
+    local line
+    local service
+    local status
+    local ports
+    local image
+    local kind
+    local any_running=false
+
+    CHECK_STACK_NAMES[$stack_index]="$stack_label ($(relative_stack_path "$stack_dir"))"
+    CHECK_STACK_WIDTH_SERVICE[$stack_index]=7
+    CHECK_STACK_WIDTH_STATUS[$stack_index]=6
+    CHECK_STACK_WIDTH_PORTS[$stack_index]=5
+    CHECK_STACK_WIDTH_IMAGE[$stack_index]=5
+    CHECK_STACK_ROWS[$stack_index]=""
+
+    if ! command_exists docker; then
+        record_check_row "$stack_index" "-" "docker missing" "-" "-" "$STATUS_ERROR"
+        return 1
+    fi
+
+    if ! docker_accessible; then
+        record_check_row "$stack_index" "-" "docker unavailable" "-" "-" "$STATUS_ERROR"
+        return 1
+    fi
+
+    json_output="$(collect_compose_ps_json "$stack_dir")"
+    if [ -n "$json_output" ] && parsed="$(parse_ps_json "$json_output" 2>/dev/null)"; then
+        :
+    else
+        parsed="$(collect_compose_ps_table "$stack_dir" | parse_ps_table 2>/dev/null || true)"
+    fi
+
+    if [ -z "$parsed" ]; then
+        record_check_row "$stack_index" "-" "no containers" "-" "$(basename "$stack_file")" "$STATUS_STOPPED"
+        return 1
+    fi
+
+    while IFS='|' read -r service status ports image; do
+        [ -n "$service$status$ports$image" ] || continue
+        ports="$(extract_host_ports "$ports")"
+        kind="$(status_kind "$status")"
+        if [ "$kind" = "$STATUS_RUNNING" ]; then
+            any_running=true
+        fi
+        record_check_row "$stack_index" "$service" "$status" "$ports" "$image" "$kind"
+    done <<< "$parsed"
+
+    $any_running
+}
+
+print_stack_table() {
+    local stack_index="$1"
+    local rows="${CHECK_STACK_ROWS[$stack_index]}"
+    local service_width="${CHECK_STACK_WIDTH_SERVICE[$stack_index]}"
+    local status_width="${CHECK_STACK_WIDTH_STATUS[$stack_index]}"
+    local ports_width="${CHECK_STACK_WIDTH_PORTS[$stack_index]}"
+    local image_width="${CHECK_STACK_WIDTH_IMAGE[$stack_index]}"
+    local total_width=$((service_width + status_width + ports_width + image_width + 13))
+    local separator
+    local row_ref
+    local row_index
+    local service
+    local status_plain
+    local status_colored
+    local ports
+    local image
+    local kind
+
+    printf '\n%b%s%b\n' "$BOLD$BLUE" "${CHECK_STACK_NAMES[$stack_index]}" "$NC"
+    separator="$(repeat_char '-' "$total_width")"
+    printf '%s\n' "$separator"
+    printf "| %-${service_width}s | %-${status_width}s | %-${ports_width}s | %-${image_width}s |\n" "SERVICE" "STATUS" "PORTS" "IMAGE"
+    printf '%s\n' "$separator"
+
+    for row_ref in $rows; do
+        row_index="${row_ref#*:}"
+        service="${CHECK_SERVICES[$row_index]}"
+        status_plain="${CHECK_STATUSES[$row_index]}"
+        kind="${CHECK_STATUS_KINDS[$row_index]}"
+        status_colored="$(colorize_status "$status_plain" "$kind")"
+        ports="${CHECK_PORTS[$row_index]}"
+        image="${CHECK_IMAGES[$row_index]}"
+        printf "| %-${service_width}s | %b | %-${ports_width}s | %-${image_width}s |\n" \
+            "$service" \
+            "${status_colored}$(repeat_char ' ' $((status_width - ${#status_plain} > 0 ? status_width - ${#status_plain} : 0)))" \
+            "$ports" \
+            "$image"
+    done
+    printf '%s\n' "$separator"
+}
+
+run_check_mode() {
+    local idx
+    local running_stacks=0
+    local stopped_stacks=0
+
+    if [ ${#STACK_DIRS[@]} -eq 0 ]; then
+        printf '%bNo compose stacks found under %s%b\n' "$YELLOW" "$START_DIR" "$NC"
+        print_errors
+        return 0
+    fi
+
+    for idx in "${!STACK_DIRS[@]}"; do
+        if collect_stack_rows "${STACK_DIRS[$idx]}" "${STACK_FILES[$idx]}" "${STACK_LABELS[$idx]}" "$idx"; then
+            running_stacks=$((running_stacks + 1))
+        else
+            stopped_stacks=$((stopped_stacks + 1))
+        fi
+    done
+
+    for idx in "${!STACK_DIRS[@]}"; do
+        print_stack_table "$idx"
+    done
+
+    stopped_stacks=$((${#STACK_DIRS[@]} - running_stacks))
+    printf '\n%bSummary:%b %d stacks, %d running, %d stopped\n' "$BOLD" "$NC" "${#STACK_DIRS[@]}" "$running_stacks" "$stopped_stacks"
+    print_errors
+}
+
+pull_has_updates() {
+    local output="$1"
+    if printf '%s' "$output" | grep -Eqi '(downloaded newer image|status: downloaded newer image|pull complete|extracting|download complete)'; then
+        return 0
+    fi
+    return 1
+}
+
+confirm_update() {
+    local stack_label="$1"
+    local answer
+    printf 'Update stack %s? [Y/n] ' "$stack_label"
+    read -r answer
+    answer="${answer:-Y}"
+    [[ "$answer" =~ ^[Yy]$ ]]
+}
+
+collect_stack_images() {
+    local stack_dir="$1"
+    (
+        cd "$stack_dir" || exit 1
+        docker compose config 2>/dev/null
+    ) | awk '
+        $1 == "image:" {
+            image = $2
+            if (!seen[image]++) {
+                print image
+            }
+        }
+    '
+}
+
+image_repository() {
+    local image_ref="$1"
+    local tail_part="${image_ref##*/}"
+    if [[ "$image_ref" == *"@"* ]]; then
+        printf '%s' "${image_ref%@*}"
+    elif [[ "$tail_part" == *:* ]]; then
+        printf '%s' "${image_ref%:*}"
+    else
+        printf '%s' "$image_ref"
+    fi
+}
+
+cleanup_old_images_for_ref() {
+    local image_ref="$1"
+    local repository
+    local image_lines
+    local index=0
+    local image_id
+
+    repository="$(image_repository "$image_ref")"
+
+    [ -n "$repository" ] || return 0
+
+    image_lines="$(docker images --no-trunc --format '{{.Repository}}|{{.Tag}}|{{.Digest}}|{{.ID}}|{{.CreatedAt}}' "$repository" 2>/dev/null \
+        | awk -F'|' -v repo="$repository" '$1 == repo { print }' \
+        | sort -t'|' -k5,5r)"
+
+    [ -n "$image_lines" ] || return 0
+
+    while IFS='|' read -r _ _ _ image_id _; do
+        [ -n "$image_id" ] || continue
+        index=$((index + 1))
+        if [ "$index" -le 2 ]; then
+            continue
+        fi
+        docker rmi "$image_id" >/dev/null 2>&1 || true
+    done <<< "$image_lines"
+}
+
+restart_stack() {
+    local stack_dir="$1"
+    local output
+
+    output="$(
+        cd "$stack_dir" &&
+        {
+            docker compose down &&
+            docker compose rm -f &&
+            docker compose up -d
+        } 2>&1
+    )"
+    local exit_code=$?
+    printf '%s' "$output"
+    return "$exit_code"
+}
+
+record_update_result() {
+    UPDATE_STACKS+=("$1")
+    UPDATE_RESULTS+=("$2")
+    UPDATE_DETAILS+=("$3")
+}
+
+run_update_mode() {
+    local idx
+    local stack_dir
+    local stack_label
+    local pull_output
+    local restart_output
+    local images
+    local image_ref
+    local updated_count=0
+    local unchanged_count=0
+    local failed_count=0
+
+    if [ ${#STACK_DIRS[@]} -eq 0 ]; then
+        printf '%bNo compose stacks found under %s%b\n' "$YELLOW" "$START_DIR" "$NC"
+        print_errors
+        return 0
+    fi
+
+    if ! command_exists docker; then
+        printf '%bDocker is not installed or not in PATH.%b\n' "$RED" "$NC" >&2
+        return 1
+    fi
+
+    for idx in "${!STACK_DIRS[@]}"; do
+        stack_dir="${STACK_DIRS[$idx]}"
+        stack_label="${STACK_LABELS[$idx]}"
+
+        pull_output="$(
+            cd "$stack_dir" &&
+            docker compose pull 2>&1
+        )"
+        if [ $? -ne 0 ]; then
+            if printf '%s' "$pull_output" | grep -qi 'permission denied'; then
+                log_warn "Update failed for $stack_label: permission denied. Add the user to the docker group or run with sufficient privileges."
+                record_update_result "$stack_label" "$UPDATE_FAILED" "docker compose pull permission denied"
+            else
+                log_warn "Update failed for $stack_label during pull."
+                record_update_result "$stack_label" "$UPDATE_FAILED" "docker compose pull failed"
+            fi
+            printf '✖ %s\n' "$stack_label"
+            failed_count=$((failed_count + 1))
+            continue
+        fi
+
+        if ! pull_has_updates "$pull_output"; then
+            record_update_result "$stack_label" "$UPDATE_UNCHANGED" "No new images downloaded."
+            printf 'ℹ %s\n' "$stack_label"
+            unchanged_count=$((unchanged_count + 1))
+            continue
+        fi
+
+        if $INTERACTIVE && ! confirm_update "$stack_label"; then
+            record_update_result "$stack_label" "$UPDATE_SKIPPED" "Update found but restart skipped by user."
+            printf 'ℹ %s\n' "$stack_label"
+            unchanged_count=$((unchanged_count + 1))
+            continue
+        fi
+
+        restart_output="$(restart_stack "$stack_dir")"
+        if [ $? -ne 0 ]; then
+            if printf '%s' "$restart_output" | grep -qi 'permission denied'; then
+                log_warn "Restart failed for $stack_label: permission denied."
+                record_update_result "$stack_label" "$UPDATE_FAILED" "restart permission denied"
+            else
+                log_warn "Restart failed for $stack_label after image update."
+                record_update_result "$stack_label" "$UPDATE_FAILED" "stack restart failed"
+            fi
+            printf '✖ %s\n' "$stack_label"
+            failed_count=$((failed_count + 1))
+            continue
+        fi
+
+        images="$(collect_stack_images "$stack_dir")"
+        while IFS= read -r image_ref; do
+            [ -n "$image_ref" ] || continue
+            cleanup_old_images_for_ref "$image_ref"
+        done <<< "$images"
+
+        record_update_result "$stack_label" "$UPDATE_UPDATED" "Images updated and stack restarted."
+        printf '✔ %s\n' "$stack_label"
+        updated_count=$((updated_count + 1))
+    done
+
+    printf '\n'
+    print_update_summary
+    print_errors
+    return $((failed_count > 0 ? 1 : 0))
+}
+
+print_update_summary() {
+    local stack_width=5
+    local result_width=6
+    local detail_width=6
+    local idx
+    local result_label
+    local colored_result
+    local separator
+    local status
+    local updated_count=0
+    local unchanged_count=0
+    local failed_count=0
+
+    for idx in "${!UPDATE_STACKS[@]}"; do
+        [ ${#UPDATE_STACKS[$idx]} -gt "$stack_width" ] && stack_width=${#UPDATE_STACKS[$idx]}
+        case "${UPDATE_RESULTS[$idx]}" in
+            "$UPDATE_UPDATED") result_label="updated" ;;
+            "$UPDATE_UNCHANGED") result_label="unchanged" ;;
+            "$UPDATE_SKIPPED") result_label="skipped" ;;
+            *) result_label="failed" ;;
+        esac
+        [ ${#result_label} -gt "$result_width" ] && result_width=${#result_label}
+        [ ${#UPDATE_DETAILS[$idx]} -gt "$detail_width" ] && detail_width=${#UPDATE_DETAILS[$idx]}
+    done
+
+    separator="$(repeat_char '-' $((stack_width + result_width + detail_width + 10)))"
+    printf '%s\n' "$separator"
+    printf "| %-${stack_width}s | %-${result_width}s | %-${detail_width}s |\n" "STACK" "RESULT" "DETAIL"
+    printf '%s\n' "$separator"
+
+    for idx in "${!UPDATE_STACKS[@]}"; do
+        status="${UPDATE_RESULTS[$idx]}"
+        case "$status" in
+            "$UPDATE_UPDATED")
+                result_label="updated"
+                colored_result="${GREEN}${result_label}${NC}"
+                updated_count=$((updated_count + 1))
+                ;;
+            "$UPDATE_UNCHANGED"|"$UPDATE_SKIPPED")
+                result_label="${status#update_}"
+                [ "$status" = "$UPDATE_UNCHANGED" ] && result_label="unchanged"
+                [ "$status" = "$UPDATE_SKIPPED" ] && result_label="skipped"
+                colored_result="${YELLOW}${result_label}${NC}"
+                unchanged_count=$((unchanged_count + 1))
+                ;;
+            *)
+                result_label="failed"
+                colored_result="${RED}${result_label}${NC}"
+                failed_count=$((failed_count + 1))
+                ;;
+        esac
+        printf "| %-${stack_width}s | %b | %-${detail_width}s |\n" \
+            "${UPDATE_STACKS[$idx]}" \
+            "${colored_result}$(repeat_char ' ' $((result_width - ${#result_label} > 0 ? result_width - ${#result_label} : 0)))" \
+            "${UPDATE_DETAILS[$idx]}"
+    done
+    printf '%s\n' "$separator"
+    printf 'Updated: %d | Unchanged: %d | Failed: %d\n' "$updated_count" "$unchanged_count" "$failed_count"
+}
+
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --update)
+                MODE="update"
+                ;;
+            -i|--interactive)
+                INTERACTIVE=true
+                ;;
+            -h|--help)
+                print_help
+                exit 0
+                ;;
+            *)
+                printf '%bUnknown option:%b %s\n' "$RED" "$NC" "$1" >&2
+                print_help >&2
+                exit 1
+                ;;
+        esac
+        shift
+    done
+
+    if $INTERACTIVE && [ "$MODE" != "update" ]; then
+        printf '%bWarning:%b --interactive has effect only with --update\n' "$YELLOW" "$NC" >&2
+    fi
+}
+
+main() {
+    parse_args "$@"
+
+    if command_exists python3; then
+        HAS_PYTHON3=true
+    fi
+
+    scan_directory_recursive "$START_DIR"
+
+    case "$MODE" in
+        check) run_check_mode ;;
+        update) run_update_mode ;;
+    esac
+}
+
+main "$@"
