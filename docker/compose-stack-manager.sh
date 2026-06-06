@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: compose-stack-manager
-# PKG_VERSION: 1.0.4
+# PKG_VERSION: 1.0.5
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -11,7 +11,7 @@
 
 set -uo pipefail
 
-readonly VERSION="1.0.4"
+readonly VERSION="1.0.5"
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
 
@@ -568,6 +568,21 @@ cleanup_old_images_for_ref() {
     done <<< "$image_lines"
 }
 
+cleanup_dangling_images() {
+    local before_ids=()
+    local after_ids=()
+
+    mapfile -t before_ids < <(docker image ls --filter dangling=true --quiet --no-trunc 2>/dev/null | sort -u)
+    [ ${#before_ids[@]} -gt 0 ] || {
+        printf '0'
+        return 0
+    }
+
+    docker image prune --force >/dev/null 2>&1 || true
+    mapfile -t after_ids < <(docker image ls --filter dangling=true --quiet --no-trunc 2>/dev/null | sort -u)
+    printf '%d' "$((${#before_ids[@]} - ${#after_ids[@]}))"
+}
+
 restart_stack() {
     local stack_dir="$1"
     local output
@@ -599,6 +614,7 @@ run_update_mode() {
     local restart_output
     local images
     local image_ref
+    local dangling_removed=0
     local updated_count=0
     local unchanged_count=0
     local failed_count=0
@@ -672,8 +688,13 @@ run_update_mode() {
         updated_count=$((updated_count + 1))
     done
 
+    if [ "$updated_count" -gt 0 ]; then
+        dangling_removed="$(cleanup_dangling_images)"
+    fi
+
     printf '\n'
     print_update_summary
+    printf 'Dangling images removed: %d\n' "$dangling_removed"
     print_errors
     return $((failed_count > 0 ? 1 : 0))
 }
