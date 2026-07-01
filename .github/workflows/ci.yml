@@ -10,7 +10,7 @@ jobs:
     name: Bash syntax
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Validate bash syntax on all scripts
         run: |
@@ -23,7 +23,7 @@ jobs:
     name: ShellCheck (mapped scripts)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install ShellCheck
         run: sudo apt-get install -y shellcheck
@@ -48,7 +48,7 @@ jobs:
     name: PKG headers
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Validate mapped scripts and required PKG_* fields
         run: |
@@ -77,7 +77,7 @@ jobs:
     outputs:
       packages: ${{ steps.list.outputs.packages }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: list
         run: bash .github/scripts/discover-packages.sh
 
@@ -90,7 +90,7 @@ jobs:
       matrix:
         package: ${{ fromJson(needs.discover.outputs.packages) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install build prerequisites
         run: sudo apt-get install -y rsync dpkg-dev python3-yaml
@@ -114,7 +114,7 @@ jobs:
     name: Ollama tools backend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install dependencies
         run: sudo apt-get install -y curl jq
