@@ -1,3 +1,4 @@
+system/nvidia/nvidia-manager/*
 backup/manzolo-backup-home/*
 containers/compose-stack-manager/*
 system/cleaner/manzolo-cleaner/*
