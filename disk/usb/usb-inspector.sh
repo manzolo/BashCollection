@@ -34,7 +34,7 @@ export LC_ALL=C
 
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HTML_TEMPLATE_FILE="/tmp/usb-inspector-template.html"
+HTML_TEMPLATE_FILE=""  # set by create_html_template via mktemp
 HTML_OUTPUT_FILE="$SCRIPT_DIR/usb-inspector-report_$(date +%Y%m%d_%H%M%S).html"
 
 readonly SCRIPT_NAME=$(basename "$0")
@@ -263,22 +263,32 @@ test_performance() {
         *) echo "N/A|Unknown|0|N/A"; return ;;
     esac
     
+    # O_DIRECT is not reliable everywhere (uutils dd fails with EINVAL on some
+    # USB bridges): probe it once, otherwise fall back to buffered reads with a
+    # device cache flush. Speed is measured by timing the read ourselves, so no
+    # parsing of dd's implementation-specific output is needed.
+    local dd_flags="iflag=direct"
+    if ! dd if="$device" of=/dev/null bs=1M count=1 iflag=direct >/dev/null 2>&1; then
+        dd_flags=""
+    fi
+
+    local test_mb=16
+    [ "$theoretical_speed" -ge 400 ] && test_mb=64
+
     local total_speed=0
     local valid_tests=0
-    
+
     for i in {1..3}; do
-        local test_result=$(timeout 3s dd if="$device" of=/dev/null bs=1M count=5 iflag=direct 2>&1 | grep -oE '[0-9]+([.,][0-9]+)? [MG]B/s' | head -1)
-        
-        if [ ! -z "$test_result" ]; then
-            local actual_speed=$(echo "$test_result" | grep -oE '[0-9]+([.,][0-9]+)?' | sed 's/,/./')
-            local unit=$(echo "$test_result" | grep -oE '[MG]B/s')
-            
-            if [[ "$unit" == *"GB/s"* ]]; then
-                actual_speed=$(LC_NUMERIC=C echo "$actual_speed * 1024" | bc -l)
+        [ -z "$dd_flags" ] && blockdev --flushbufs "$device" 2>/dev/null
+        local start_ns=$(date +%s%N)
+        if timeout 10s dd if="$device" of=/dev/null bs=1M count=$test_mb $dd_flags >/dev/null 2>&1; then
+            local elapsed_ns=$(( $(date +%s%N) - start_ns ))
+            if [ "$elapsed_ns" -gt 0 ]; then
+                # MB/s (decimal) = bytes * 1000 / nanoseconds
+                local actual_speed=$(LC_NUMERIC=C echo "scale=1; $test_mb * 1048576 * 1000 / $elapsed_ns" | bc -l)
+                total_speed=$(LC_NUMERIC=C echo "$total_speed + $actual_speed" | bc -l)
+                ((valid_tests++))
             fi
-            
-            total_speed=$(LC_NUMERIC=C echo "$total_speed + $actual_speed" | bc -l)
-            ((valid_tests++))
         fi
     done
     
@@ -763,6 +773,7 @@ if [ $HTML_MODE -eq 1 ]; then
     # Read template
     if [ -f "$HTML_TEMPLATE_FILE" ]; then
         HTML_CONTENT=$(cat "$HTML_TEMPLATE_FILE")
+        rm -f "$HTML_TEMPLATE_FILE"
     else
         echo -e "${RED}❌ HTML template not found!${NC}"
         exit 1

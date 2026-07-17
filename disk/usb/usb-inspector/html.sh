@@ -39,9 +39,11 @@ generate_html_controller_list() {
 }
 
 create_html_template() {
-    rm -f $HTML_TEMPLATE_FILE
-    if [ ! -f "$HTML_TEMPLATE_FILE" ] && [ $HTML_MODE -eq 1 ]; then
-        cat > "$HTML_TEMPLATE_FILE" << 'EOF'
+    HTML_TEMPLATE_FILE=$(mktemp /tmp/usb-inspector-template.XXXXXX) || {
+        echo -e "${RED}❌ Cannot create HTML template file${NC}"
+        exit 1
+    }
+    cat > "$HTML_TEMPLATE_FILE" << 'EOF'
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -49,374 +51,338 @@ create_html_template() {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>USB Inspector Report - {{TIMESTAMP}}</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+        :root {
+            --bg: #141019;
+            --surface: #1c1524;
+            --surface-2: #171120;
+            --line: #372c44;
+            --line-soft: rgba(255,255,255,0.06);
+            --text: #e9e4f0;
+            --muted: #a294b3;
+            --cyan: #7cd6e8;
+            --green: #8fdca4;
+            --violet: #c9a6ff;
+            --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono",
+                    "Fira Code", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+            --sans: system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
         }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: var(--mono);
+            background:
+                radial-gradient(1100px 420px at 50% -10%, rgba(124,214,232,0.07), transparent 70%),
+                var(--bg);
             min-height: 100vh;
-            padding: 20px;
-            color: #333;
+            padding: 40px 20px 24px;
+            color: var(--text);
+            font-size: 14px;
+            line-height: 1.5;
         }
 
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-        }
+        .container { max-width: 1100px; margin: 0 auto; }
 
+        /* ── Nameplate ─────────────────────────────── */
         .header {
-            background: white;
-            border-radius: 20px;
-            padding: 30px;
-            margin-bottom: 30px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-            text-align: center;
-            position: relative;
+            background: linear-gradient(180deg, var(--surface), var(--surface-2));
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            margin-bottom: 28px;
             overflow: hidden;
         }
 
-        .header::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 5px;
-            background: linear-gradient(90deg, #667eea, #764ba2, #f093fb);
-            animation: gradient 3s ease infinite;
+        .plate-head {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px 24px;
+            align-items: baseline;
+            justify-content: space-between;
+            padding: 22px 26px 18px;
+            border-bottom: 1px solid var(--line);
         }
 
-        @keyframes gradient {
-            0%, 100% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
+        .eyebrow {
+            font-family: var(--sans);
+            font-size: 11px;
+            letter-spacing: 0.22em;
+            text-transform: uppercase;
+            color: var(--cyan);
+            margin-bottom: 6px;
         }
 
         h1 {
-            color: #667eea;
-            font-size: 2.5em;
-            margin-bottom: 10px;
-            font-weight: 700;
+            font-size: 26px;
+            font-weight: 600;
+            letter-spacing: 0.03em;
         }
 
         .subtitle {
-            color: #64748b;
-            font-size: 1.1em;
+            color: var(--muted);
+            font-size: 12.5px;
+            text-align: right;
         }
+        .subtitle span { display: block; }
 
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
+            grid-template-columns: repeat(4, 1fr);
         }
 
-        .stat-card {
-            background: white;
-            border-radius: 15px;
-            padding: 20px;
-            box-shadow: 0 10px 25px rgba(0,0,0,0.08);
-            transition: transform 0.3s, box-shadow 0.3s;
-        }
-
-        .stat-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 15px 35px rgba(0,0,0,0.15);
-        }
+        .stat-card { padding: 18px 26px; }
+        .stat-card + .stat-card { border-left: 1px solid var(--line); }
 
         .stat-number {
-            font-size: 2.5em;
-            font-weight: 700;
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            font-size: 26px;
+            font-weight: 600;
+            color: var(--text);
         }
 
         .stat-label {
-            color: #64748b;
-            font-size: 0.9em;
-            margin-top: 5px;
+            font-family: var(--sans);
+            color: var(--muted);
+            font-size: 10.5px;
+            margin-top: 4px;
             text-transform: uppercase;
-            letter-spacing: 1px;
+            letter-spacing: 0.14em;
         }
 
+        /* ── Sections ──────────────────────────────── */
         .section {
-            background: white;
-            border-radius: 20px;
-            padding: 30px;
-            margin-bottom: 30px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            background: var(--surface-2);
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            padding: 24px 26px;
+            margin-bottom: 24px;
+        }
+
+        .section-eyebrow {
+            font-family: var(--sans);
+            font-size: 10.5px;
+            letter-spacing: 0.22em;
+            text-transform: uppercase;
+            color: var(--muted);
         }
 
         .section-title {
-            font-size: 1.8em;
-            color: #334155;
-            margin-bottom: 20px;
-            padding-bottom: 10px;
-            border-bottom: 3px solid #e2e8f0;
-            display: flex;
-            align-items: center;
-            gap: 10px;
+            font-size: 18px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            margin: 4px 0 18px;
         }
 
-        .icon {
-            font-size: 1.2em;
-        }
+        /* ── Tables ────────────────────────────────── */
+        .table-scroll { overflow-x: auto; }
 
         table {
             width: 100%;
             border-collapse: collapse;
-            margin-top: 20px;
-        }
-
-        thead {
-            background: linear-gradient(135deg, #667eea, #764ba2);
-            color: white;
+            margin-top: 16px;
         }
 
         th {
-            padding: 15px;
+            font-family: var(--sans);
+            padding: 8px 12px;
             text-align: left;
             font-weight: 600;
-            letter-spacing: 0.5px;
+            font-size: 10.5px;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: var(--muted);
+            border-bottom: 1px solid var(--line);
+            white-space: nowrap;
         }
 
         td {
-            padding: 12px 15px;
-            border-bottom: 1px solid #e2e8f0;
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--line-soft);
+            font-size: 13px;
         }
 
-        tbody tr {
-            transition: background-color 0.3s;
-        }
+        tbody tr { transition: background-color 0.15s; }
+        tbody tr:hover { background-color: rgba(124,214,232,0.05); }
 
-        tbody tr:hover {
-            background-color: #f8fafc;
-        }
-
+        /* USB generation badges — color encodes the generation */
         .usb-version {
             display: inline-block;
-            padding: 4px 12px;
-            border-radius: 20px;
+            padding: 2px 9px;
+            border-radius: 999px;
+            font-size: 11px;
             font-weight: 600;
-            font-size: 0.85em;
+            letter-spacing: 0.02em;
+            color: var(--muted);
+            border: 1px solid rgba(162,148,179,0.35);
+            background: rgba(162,148,179,0.08);
+            white-space: nowrap;
         }
+        .usb-2-0            { color: #ecc94b; border-color: rgba(236,201,75,0.4);  background: rgba(236,201,75,0.08); }
+        .usb-3-0-3-1-gen1   { color: #6aa9ff; border-color: rgba(106,169,255,0.4); background: rgba(106,169,255,0.08); }
+        .usb-3-1-gen2       { color: #4ade80; border-color: rgba(74,222,128,0.4);  background: rgba(74,222,128,0.08); }
+        .usb-3-2-gen2x2     { color: #c084fc; border-color: rgba(192,132,252,0.4); background: rgba(192,132,252,0.08); }
+        .usb4               { color: #f472b6; border-color: rgba(244,114,182,0.4); background: rgba(244,114,182,0.08); }
 
-        .usb-1-0 { background: #e2e8f0; color: #475569; }
-        .usb-1-1 { background: #e2e8f0; color: #475569; }
-        .usb-2-0 { background: #fef3c7; color: #92400e; }
-        .usb-3-0-3-1-gen1 { background: #dbeafe; color: #1e40af; } /* Aggiorna questa riga */
-        .usb-3-1-gen2 { background: #d1fae5; color: #065f46; }
-        .usb-3-2 { background: #e9d5ff; color: #6b21a8; }
-        .usb-4 { background: #fce7f3; color: #9f1239; }
-
+        /* Performance */
         .performance-bar {
             width: 100%;
-            height: 24px;
-            background: #e2e8f0;
-            border-radius: 12px;
+            min-width: 120px;
+            height: 18px;
+            background: rgba(255,255,255,0.07);
+            border-radius: 4px;
             overflow: hidden;
-            position: relative;
         }
 
         .performance-fill {
             height: 100%;
-            border-radius: 12px;
             transition: width 1s ease;
             display: flex;
             align-items: center;
             justify-content: center;
-            color: white;
+            color: #fff;
             font-weight: 600;
-            font-size: 0.85em;
+            font-size: 11px;
         }
 
-        .excellent { background: linear-gradient(90deg, #10b981, #34d399); }
-        .good { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
-        .fair { background: linear-gradient(90deg, #ef4444, #f87171); }
-        .poor { background: linear-gradient(90deg, #991b1b, #dc2626); }
+        .excellent { background: #22c55e; }
+        .good      { background: #ca9a04; }
+        .fair      { background: #e4572e; }
+        .poor      { background: #b91c1c; }
 
-        .mount-point {
-            background: #f0f9ff;
-            color: #0369a1;
-            padding: 4px 8px;
-            border-radius: 6px;
-            font-family: monospace;
-            font-size: 0.9em;
+        /* Copyable chips */
+        .mount-point, .device-path, .vendor-product {
+            padding: 2px 7px;
+            border-radius: 4px;
+            font-size: 12px;
+            white-space: nowrap;
         }
-
-        .device-path {
-            background: #fdf4ff;
-            color: #a21caf;
-            padding: 4px 8px;
-            border-radius: 6px;
-            font-family: monospace;
-            font-size: 0.9em;
-        }
-
-        .vendor-product {
-            background: #f0fdf4;
-            color: #14532d;
-            padding: 4px 8px;
-            border-radius: 6px;
-            font-family: monospace;
-            font-size: 0.9em;
-        }
+        .mount-point    { background: rgba(124,214,232,0.10); color: var(--cyan); }
+        .device-path    { background: rgba(201,166,255,0.10); color: var(--violet); }
+        .vendor-product { background: rgba(143,220,164,0.10); color: var(--green); }
 
         .no-data {
             text-align: center;
             padding: 40px;
-            color: #94a3b8;
+            color: var(--muted);
             font-style: italic;
         }
 
-        .footer {
-            text-align: center;
-            color: white;
-            margin-top: 40px;
-            padding: 20px;
-            opacity: 0.9;
-        }
-
-        .search-box {
-            margin-bottom: 20px;
-            position: relative;
-        }
+        /* Search */
+        .search-box { margin-bottom: 4px; }
 
         .search-input {
             width: 100%;
-            padding: 12px 20px 12px 45px;
-            border: 2px solid #e2e8f0;
-            border-radius: 10px;
-            font-size: 1em;
-            transition: border-color 0.3s;
+            padding: 9px 12px;
+            background: var(--bg);
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            color: var(--text);
+            font-family: var(--mono);
+            font-size: 13px;
+            transition: border-color 0.15s;
         }
-
+        .search-input::placeholder { color: var(--muted); }
         .search-input:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-
-        .search-icon {
-            position: absolute;
-            left: 15px;
-            top: 50%;
-            transform: translateY(-50%);
-            color: #94a3b8;
+            outline: 2px solid rgba(124,214,232,0.45);
+            outline-offset: 1px;
+            border-color: var(--cyan);
         }
 
         .controller-card {
-            background: #fafafa;
-            border-left: 4px solid #667eea;
-            padding: 15px;
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-left: 3px solid var(--cyan);
+            padding: 12px 14px;
             margin-bottom: 10px;
-            border-radius: 8px;
-            font-family: monospace;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+
+        .footer {
+            font-family: var(--sans);
+            text-align: center;
+            color: var(--muted);
+            margin-top: 32px;
+            font-size: 12px;
+            letter-spacing: 0.04em;
         }
 
         @media (max-width: 768px) {
-            .stats-grid {
-                grid-template-columns: 1fr;
-            }
-            
-            h1 {
-                font-size: 1.8em;
-            }
-            
-            table {
-                font-size: 0.9em;
-            }
-            
-            th, td {
-                padding: 8px;
-            }
+            body { padding: 20px 12px; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .stat-card:nth-child(3) { border-left: none; }
+            .stat-card:nth-child(n+3) { border-top: 1px solid var(--line); }
+            .plate-head { flex-direction: column; }
+            .subtitle { text-align: left; }
+            th, td { padding: 8px; }
         }
 
-        .animated-bg {
-            position: fixed;
-            width: 100%;
-            height: 100%;
-            top: 0;
-            left: 0;
-            z-index: -1;
-            background: linear-gradient(270deg, #667eea, #764ba2, #f093fb);
-            background-size: 600% 600%;
-            animation: gradientShift 15s ease infinite;
-        }
-
-        @keyframes gradientShift {
-            0% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
-            100% { background-position: 0% 50%; }
+        @media (prefers-reduced-motion: reduce) {
+            * { transition: none !important; animation: none !important; }
         }
     </style>
 </head>
 <body>
-    <div class="animated-bg"></div>
     <div class="container">
         <div class="header">
-            <h1>🔍 USB Inspector Report</h1>
-            <div class="subtitle">Generated on {{TIMESTAMP}}</div>
-        </div>
-
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-number">{{STORAGE_COUNT}}</div>
-                <div class="stat-label">Storage Devices</div>
+            <div class="plate-head">
+                <div>
+                    <div class="eyebrow">Bus scan report</div>
+                    <h1>USB Inspector</h1>
+                </div>
+                <div class="subtitle">
+                    <span>{{TIMESTAMP}}</span>
+                    <span>v5.0.1</span>
+                </div>
             </div>
-            <div class="stat-card">
-                <div class="stat-number">{{ADAPTER_COUNT}}</div>
-                <div class="stat-label">Adapters & Devices</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number">{{TOTAL_CAPACITY}}</div>
-                <div class="stat-label">Total Capacity</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-number">{{CONTROLLER_COUNT}}</div>
-                <div class="stat-label">USB Controllers</div>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number">{{STORAGE_COUNT}}</div>
+                    <div class="stat-label">Storage Devices</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">{{ADAPTER_COUNT}}</div>
+                    <div class="stat-label">Adapters & Devices</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">{{TOTAL_CAPACITY}}</div>
+                    <div class="stat-label">Total Capacity</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">{{CONTROLLER_COUNT}}</div>
+                    <div class="stat-label">USB Controllers</div>
+                </div>
             </div>
         </div>
 
         <div class="section">
-            <h2 class="section-title">
-                <span class="icon">💾</span>
-                USB Storage Devices
-            </h2>
+            <div class="section-eyebrow">Block devices</div>
+            <h2 class="section-title">USB Storage</h2>
             <div class="search-box">
-                <span class="search-icon">🔍</span>
-                <input type="text" class="search-input" id="storageSearch" placeholder="Search storage devices...">
+                <input type="search" class="search-input" id="storageSearch" placeholder="Filter storage devices…">
             </div>
+            <div class="table-scroll">
             {{STORAGE_TABLE}}
-        </div>
-
-        <div class="section">
-            <h2 class="section-title">
-                <span class="icon">🔌</span>
-                USB Adapters & Other Devices
-            </h2>
-            <div class="search-box">
-                <span class="search-icon">🔍</span>
-                <input type="text" class="search-input" id="adapterSearch" placeholder="Search adapters and devices...">
             </div>
-            {{ADAPTER_TABLE}}
         </div>
 
         <div class="section">
-            <h2 class="section-title">
-                <span class="icon">🎛️</span>
-                System USB Controllers
-            </h2>
+            <div class="section-eyebrow">Bus devices</div>
+            <h2 class="section-title">USB Adapters &amp; Peripherals</h2>
+            <div class="search-box">
+                <input type="search" class="search-input" id="adapterSearch" placeholder="Filter adapters and devices…">
+            </div>
+            <div class="table-scroll">
+            {{ADAPTER_TABLE}}
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-eyebrow">Host</div>
+            <h2 class="section-title">System USB Controllers</h2>
             {{CONTROLLER_LIST}}
         </div>
 
         <div class="footer">
-            <p>USB Inspector v5.0 © 2025 | Performance data requires sudo privileges</p>
-            <p>Report generated in {{GENERATION_TIME}} seconds</p>
+            <p>Report generated in {{GENERATION_TIME}}s — performance data requires sudo</p>
         </div>
     </div>
 
@@ -425,12 +391,12 @@ create_html_template() {
         function setupSearch(inputId, tableId) {
             const input = document.getElementById(inputId);
             const table = document.querySelector(tableId);
-            
+
             if (input && table) {
-                input.addEventListener('keyup', function() {
+                input.addEventListener('input', function() {
                     const filter = this.value.toLowerCase();
                     const rows = table.querySelectorAll('tbody tr');
-                    
+
                     rows.forEach(row => {
                         const text = row.textContent.toLowerCase();
                         row.style.display = text.includes(filter) ? '' : 'none';
@@ -462,23 +428,21 @@ create_html_template() {
                 // Ottieni il path completo dall'attributo data-full-path
                 const fullPath = this.getAttribute('data-full-path');
                 const textToCopy = fullPath || this.textContent;
-                
+                const originalDisplay = this.innerHTML;
+
                 navigator.clipboard.writeText(textToCopy).then(() => {
-                    // Salva il contenuto originale visualizzato
-                    const originalDisplay = this.innerHTML;
                     // Mostra conferma di copia
                     this.innerHTML = '✓ Copied';
-                    this.style.color = '#10b981'; // Verde per conferma
-                    
+                    this.style.color = '#4ade80';
+
                     // Ripristina il contenuto originale dopo 1.5 secondi
                     setTimeout(() => {
                         this.innerHTML = originalDisplay;
-                        this.style.color = ''; // Ripristina colore originale
+                        this.style.color = '';
                     }, 1500);
                 }).catch(err => {
                     // Fallback se clipboard API non disponibile
                     console.error('Failed to copy:', err);
-                    // Prova metodo alternativo
                     const textArea = document.createElement('textarea');
                     textArea.value = textToCopy;
                     textArea.style.position = 'fixed';
@@ -488,13 +452,13 @@ create_html_template() {
                     try {
                         document.execCommand('copy');
                         this.innerHTML = '✓ Copied';
-                        this.style.color = '#10b981';
+                        this.style.color = '#4ade80';
                         setTimeout(() => {
                             this.innerHTML = originalDisplay;
                             this.style.color = '';
                         }, 1500);
-                    } catch (err) {
-                        console.error('Fallback copy failed:', err);
+                    } catch (err2) {
+                        console.error('Fallback copy failed:', err2);
                     }
                     document.body.removeChild(textArea);
                 });
@@ -519,6 +483,4 @@ create_html_template() {
 </body>
 </html>
 EOF
-        echo -e "${GREEN}✓ HTML template created at: $HTML_TEMPLATE_FILE${NC}"
-    fi
 }
