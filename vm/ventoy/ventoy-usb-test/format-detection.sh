@@ -291,7 +291,7 @@ show_image_details_dialog() {
     esac
     
     whiptail --title "Image Details" --scrolltext \
-        --msgbox "$dialog_content" 20 80
+        --msgbox "$dialog_content" 20 80 || true
 }
 
 # Enhanced validation for selected disk
@@ -316,14 +316,14 @@ validate_selected_disk() {
         if [[ "$mounted_critical" == true ]]; then
             whiptail --title "SAFETY WARNING" --msgbox \
                 "CRITICAL DEVICE DETECTED!\n\nThe device $disk_path contains mounted system filesystems.\n\nFor safety, its use is blocked.\n\nSelect an external USB device." \
-                15 70
+                15 70 || true
             DISK=""
             return 1
         fi
         
         whiptail --title "Selected Device" --msgbox \
             "Device: $disk_path\n\nInformation:\n$info\n\nSafety checks: OK" \
-            18 80
+            18 80 || true
         return 0
         
     elif [[ -f "$disk_path" ]]; then
@@ -338,7 +338,7 @@ validate_selected_disk() {
             "error")
                 whiptail --title "Image Error" --msgbox \
                     "The image file has errors:\n\n$suggestions\n\nProceeding may cause issues." \
-                    15 70
+                    15 70 || true
                 # Ask if user wants to continue anyway
                 if ! whiptail --title "Continue?" --yesno \
                     "Continue with potentially corrupted image?" 8 50; then
@@ -349,7 +349,7 @@ validate_selected_disk() {
             "warning")
                 whiptail --title "Image Warning" --msgbox \
                     "Image validation warning:\n\n$suggestions\n\nImage should work but may have minor issues." \
-                    15 70
+                    15 70 || true
                 ;;
         esac
         
@@ -357,7 +357,7 @@ validate_selected_disk() {
     else
         whiptail --title "Path Error" --msgbox \
             "The specified path does not exist or is not accessible:\n\n$disk_path" \
-            12 70
+            12 70 || true
         DISK=""
         return 1
     fi
@@ -422,7 +422,7 @@ browse_image_files() {
     else
         whiptail --title "File Not Found" --msgbox \
             "The selected file does not exist or is not readable:\n$selected_file" \
-            10 70
+            10 70 || true
         echo ""
         return 1
     fi

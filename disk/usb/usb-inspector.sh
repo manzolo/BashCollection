@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: usb-inspector
-# PKG_VERSION: 5.0.0
+# PKG_VERSION: 5.0.1
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -21,7 +21,7 @@
 #  - SMART data reading for storage devices
 # PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
-# USB Inspector v5.0
+# USB Inspector v5.0.1
 # Script to correctly identify USB disks and adapters with performance
 # Enhanced visual output with beautiful tables and colors
 # Now with HTML report generation capability
@@ -69,7 +69,7 @@ for arg in "$@"; do
             shift
             ;;
         --help|-h)
-            echo "USB Inspector v5.0"
+            echo "USB Inspector v5.0.1"
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
@@ -250,7 +250,7 @@ test_performance() {
     local usb_speed=$2
     
     if [ ! -b "$device" ] || [ "$EUID" -ne 0 ]; then
-        echo "N/A|${GRAY}Need sudo${NC}|0|N/A"
+        echo -e "N/A|${GRAY}Need sudo${NC}|0|N/A"
         return
     fi
     
@@ -260,7 +260,7 @@ test_performance() {
         "5000") theoretical_speed=400 ;;
         "10000") theoretical_speed=800 ;;
         "20000") theoretical_speed=1600 ;;
-        *) echo "Unknown|Unknown|0|N/A"; return ;;
+        *) echo "N/A|Unknown|0|N/A"; return ;;
     esac
     
     local total_speed=0
@@ -302,10 +302,10 @@ test_performance() {
                 rating="Poor"
             fi
         else
-            echo "Test Failed|Test Failed|0|Failed"
+            echo "N/A|Test Failed|0|Failed"
         fi
     else
-        echo "Cannot Test|Cannot Test|0|N/A"
+        echo "N/A|Cannot Test|0|N/A"
     fi
 }
 
@@ -386,7 +386,7 @@ START_TIME=$(date +%s)
 if [ $HTML_MODE -eq 0 ]; then
     clear
     echo ""
-    draw_header_box "USB INSPECTOR v5.0"
+    draw_header_box "USB INSPECTOR v5.0.1"
     echo ""
     
     if [ "$EUID" -ne 0 ]; then
@@ -402,11 +402,11 @@ if [ $HTML_MODE -eq 0 ]; then
     echo ""
     
     # Storage table header
-    printf "${BOLD}${WHITE}%-12s %-10s %-12s %-10s %-20s %-15s %-5s %s${NC}\n" \
+    printf "${BOLD}${WHITE}%-12s %-10s %-16s %-10s %-20s %-15s %-5s %s${NC}\n" \
         "DEVICE" "CAPACITY" "USB VERSION" "T. SPEED" "MODEL" "MOUNT POINT" "PERF" "PERFORMANCE"
-    
+
     printf "${DIM}%s %s %s %s %s %s %s %s${NC}\n" \
-        "────────────" "──────────" "────────────" "──────────" "────────────────────" "───────────────" "─────" "───────────────"
+        "────────────" "──────────" "────────────────" "──────────" "────────────────────" "───────────────" "─────" "───────────────"
 fi
 
 # Array to store USB storage info
@@ -472,7 +472,7 @@ for device in /dev/sd* /dev/nvme*n*; do
                     printf "                    \r"
                 fi
             else
-                performance="${GRAY}N/A${NC}|${GRAY}Need sudo${NC}|0|N/A"
+                performance=$(echo -e "N/A|${GRAY}Need sudo${NC}|0|N/A")
             fi
         else
             vendor_id="Unknown"
@@ -489,7 +489,7 @@ for device in /dev/sd* /dev/nvme*n*; do
         
         # Console output
         if [ $HTML_MODE -eq 0 ]; then
-            printf "${BOLD}${WHITE}%-12s ${LIGHT_GREEN}%-10s ${speed_color}%-12s ${LIGHT_MAGENTA}%-10s ${LIGHT_BLUE}%-20s ${LIGHT_CYAN}%-15s %-5s %-15s${NC}\n" \
+            printf "${BOLD}${WHITE}%-12s ${LIGHT_GREEN}%-10s ${speed_color}%-16s ${LIGHT_MAGENTA}%-10s ${LIGHT_BLUE}%-20s ${LIGHT_CYAN}%-15s %-5s %-15s${NC}\n" \
                 "$device" \
                 "$size" \
                 "$usb_version" \
@@ -545,11 +545,11 @@ if [ $HTML_MODE -eq 0 ]; then
     echo ""
     
     # Table header
-    printf "${BOLD}${WHITE}%-20s %-15s %-30s %-12s %-10s %-15s %s${NC}\n" \
+    printf "${BOLD}${WHITE}%-20s %-15s %-30s %-16s %-10s %-15s %s${NC}\n" \
         "TYPE" "VENDOR:PRODUCT" "MODEL" "USB VERSION" "T. SPEED" "DEVICE PATH" "ICON"
-    
+
     printf "${DIM}%s %s %s %s %s %s %s${NC}\n" \
-        "────────────────────" "───────────────" "──────────────────────────────" "────────────" "──────────" "───────────────" "─────"
+        "────────────────────" "───────────────" "──────────────────────────────" "────────────────" "──────────" "───────────────" "─────"
 fi
 
 # Track what we've already shown as storage
@@ -557,7 +557,7 @@ declare -A shown_devices
 ADAPTER_COUNT=0
 
 # Temporary file for adapter data (to avoid subshell issues)
-ADAPTER_TEMP_FILE="/tmp/usb_adapter_data_$.tmp"
+ADAPTER_TEMP_FILE="/tmp/usb_adapter_data_$$.tmp"
 > "$ADAPTER_TEMP_FILE"
 
 while IFS= read -r line; do
@@ -620,9 +620,9 @@ while IFS= read -r line; do
     if [ $HTML_MODE -eq 0 ]; then
         vendor_product="${vendor_id}:${product_id}"
         model_truncated="${description:0:30}"
-        usb_version_truncated="${usb_version:0:12}"
+        usb_version_truncated="${usb_version:0:16}"
         
-        printf "${WHITE}%-20s ${LIGHT_GREEN}%s%-*s${NC} ${LIGHT_BLUE}%-30s ${speed_color}%-12s ${LIGHT_MAGENTA}%-10s ${LIGHT_CYAN}%-15s ${YELLOW}%s${NC}\n" \
+        printf "${WHITE}%-20s ${LIGHT_GREEN}%s%-*s${NC} ${LIGHT_BLUE}%-30s ${speed_color}%-16s ${LIGHT_MAGENTA}%-10s ${LIGHT_CYAN}%-15s ${YELLOW}%s${NC}\n" \
             "$device_type" \
             "$vendor_product" \
             $((15 - ${#vendor_product})) "" \
@@ -665,7 +665,7 @@ fi
 
 # System USB Controllers
 CONTROLLER_COUNT=0
-CONTROLLER_TEMP_FILE="/tmp/usb_controller_data_$.tmp"
+CONTROLLER_TEMP_FILE="/tmp/usb_controller_data_$$.tmp"
 > "$CONTROLLER_TEMP_FILE"
 
 if [ $HTML_MODE -eq 0 ]; then
@@ -714,7 +714,8 @@ if [ $HTML_MODE -eq 0 ]; then
             echo -e "   ${GRAY}├─${NC} USB Version: ${LIGHT_CYAN}$usb_version${NC}"
             echo -e "   ${GRAY}├─${NC} Theoretical Speed: ${LIGHT_MAGENTA}$theoretical_speed${NC}"
             echo -e "   ${GRAY}├─${NC} Mount Point: ${YELLOW}$mount_point${NC}"
-            echo -e "   ${GRAY}└─${NC} Performance: ${performance}"
+            IFS='|' read -r perf_indicator perf_description perf_value perf_rating <<< "$performance"
+            echo -e "   ${GRAY}└─${NC} Performance: ${perf_description}"
             
             # Show partitions
             echo -e "   ${GRAY}└─${NC} Partitions:"

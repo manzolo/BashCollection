@@ -107,7 +107,7 @@ prepare_ovmf_interactive() {
     if ! install_ovmf_deps; then
         whiptail --title "Installation Canceled" --msgbox \
             "Dependencies were not installed. Unable to proceed." \
-            10 50
+            10 50 || true
         return
     fi
 
@@ -231,7 +231,7 @@ EOF
         else
             echo "100"; echo "# Compilation failed with errors"
         fi
-    } | whiptail --gauge "OVMF compilation in progress..." 10 70 0
+    } | whiptail --gauge "OVMF compilation in progress..." 10 70 0 || true
 
     # Analyze results
     local final_ovmf_file="/usr/share/OVMF/OVMF.fd"
@@ -241,12 +241,12 @@ EOF
         if (( file_size > 1000000 )); then
             whiptail --title "Compilation Completed" --msgbox \
                 "OVMF compiled and installed successfully!\n\nPath: $final_ovmf_file\nSize: $(du -h "$final_ovmf_file" | cut -f1)" \
-                10 60
+                10 60 || true
             DEFAULT_BIOS="$final_ovmf_file"
         else
             whiptail --title "Corrupted File" --msgbox \
                 "OVMF was created but appears corrupted.\nSize: $(du -h "$final_ovmf_file" 2>/dev/null | cut -f1 || echo "0")" \
-                10 50
+                10 50 || true
         fi
     else
         local error_summary=""
@@ -335,7 +335,7 @@ download_ovmf_prebuilt() {
         done
         wait "$install_pid" || true
         echo "100"; echo "# Download completed"
-    } | whiptail --gauge "Downloading OVMF..." 8 60 0
+    } | whiptail --gauge "Downloading OVMF..." 8 60 0 || true
 
     local found_path=""
     # Prefer a combined OVMF.fd (usable directly via -bios); fall back to split
@@ -358,12 +358,12 @@ download_ovmf_prebuilt() {
         DEFAULT_BIOS="$found_path"
         whiptail --title "OVMF Found" --msgbox \
             "OVMF is now available!\n\nPath: $found_path\nSize: $(du -h "$found_path" | cut -f1)" \
-            10 70
+            10 70 || true
     else
         if [[ -f "$progress_dir/result" ]] && [[ "$(cat "$progress_dir/result")" == "SUCCESS" ]]; then
             whiptail --title "OVMF Installed" --msgbox \
                 "Installation succeeded, but the OVMF file was not found in standard paths.\n\nTry searching manually in /usr/share/" \
-                12 70
+                12 70 || true
         else
             local error_msg="Installation failed."
             if [[ -f "$temp_log" ]]; then
@@ -371,7 +371,7 @@ download_ovmf_prebuilt() {
                 last_error=$(grep -v "^$" "$temp_log" | tail -1)
                 [[ -n "$last_error" ]] && error_msg="$error_msg\n\nLast error:\n${last_error:0:100}"
             fi
-            whiptail --title "Download Failed" --msgbox "$error_msg" 12 70
+            whiptail --title "Download Failed" --msgbox "$error_msg" 12 70 || true
         fi
     fi
 
@@ -427,7 +427,7 @@ install_ovmf_deps() {
                 ;;
         esac
         echo "100"; echo "Completed."
-    } | whiptail --gauge "Installing dependencies..." 8 70 0
+    } | whiptail --gauge "Installing dependencies..." 8 70 0 || true
 
     local still_missing=()
     command -v gcc  >/dev/null || still_missing+=("gcc")
@@ -437,11 +437,11 @@ install_ovmf_deps() {
 
     if [[ ${#still_missing[@]} -eq 0 ]]; then
         whiptail --title "Installation Successful" --msgbox \
-            "All dependencies have been successfully installed!" 8 50
+            "All dependencies have been successfully installed!" 8 50 || true
         return 0
     else
         whiptail --title "Installation Failed" --msgbox \
-            "Failed to install dependencies. Still missing:\n\n${still_missing[*]}" 10 70
+            "Failed to install dependencies. Still missing:\n\n${still_missing[*]}" 10 70 || true
         return 1
     fi
 }

@@ -28,7 +28,7 @@ check_dependencies() {
                 sudo apt install -y $pkgs_to_install >/dev/null 2>&1
                 
                 echo "100" ; echo "Completed."
-            } | whiptail --gauge "Installing dependencies..." 8 70 0
+            } | whiptail --gauge "Installing dependencies..." 8 70 0 || true
 
             # Re-check dependencies after installation
             local missing_after_install=()
@@ -39,11 +39,11 @@ check_dependencies() {
             
             if [[ ${#missing_after_install[@]} -eq 0 ]]; then
                 whiptail --title "Installation Successful" --msgbox \
-                    "All dependencies have been successfully installed!" 8 50
+                    "All dependencies have been successfully installed!" 8 50 || true
                 return 0
             else
                 whiptail --title "Installation Failed" --msgbox \
-                    "Failed to install dependencies. Still missing:\n\n${missing_after_install[*]}" 10 70
+                    "Failed to install dependencies. Still missing:\n\n${missing_after_install[*]}" 10 70 || true
                 return 1
             fi
         else
@@ -98,5 +98,5 @@ verify_all_dependencies() {
     fi
     
     whiptail --title "Dependency Verification" --scrolltext \
-        --msgbox "$deps_info" 20 70
+        --msgbox "$deps_info" 20 70 || true
 }

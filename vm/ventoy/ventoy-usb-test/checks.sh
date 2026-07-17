@@ -14,7 +14,7 @@ initial_checks() {
     # Welcome banner
     whiptail --title "Welcome" --msgbox \
         "$SCRIPT_NAME v$VERSION\n\nInteractive script for testing bootable USB/ISO media\nwith UEFI and BIOS Legacy support." \
-        12 60
+        12 60 || true
     
     # Load configuration if it exists
     load_config

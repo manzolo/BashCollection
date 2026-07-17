@@ -7,7 +7,7 @@ select_disk_menu() {
     if [[ ${#devices_array[@]} -eq 0 ]]; then
         whiptail --title "Error" --msgbox \
             "Unable to detect devices.\n\nUse manual selection options." \
-            10 60
+            10 60 || true
         devices_array=("BROWSE" "Browse image file..." "CUSTOM" "Custom path..." "" "No selection")
     fi
     
@@ -210,7 +210,7 @@ bios_menu() {
                 esac
                 whiptail --title "Automatic Detection" --msgbox \
                     "Detected partition table: $partition_table\nSelected mode: $BIOS_MODE" \
-                    10 50
+                    10 50 || true
             else
                 BIOS_MODE="uefi"  # Default
             fi
@@ -266,7 +266,7 @@ advanced_menu() {
             4)
                 whiptail --title "QEMU Monitor" --msgbox \
                     "The QEMU monitor will be available at:\n\ntelnet localhost 4444\n\nUseful commands:\n- info status\n- system_reset\n- quit" \
-                    12 50
+                    12 50 || true
                 ;;
             5) ovmf_management_menu ;;
             6|"") break ;;
@@ -319,14 +319,14 @@ config_management_menu() {
     case $choice in
         1) 
             save_config
-            whiptail --title "Saved" --msgbox "Configuration saved successfully!" 8 40
+            whiptail --title "Saved" --msgbox "Configuration saved successfully!" 8 40 || true
             ;;
         2)
             if [[ -f "$CONFIG_FILE" ]]; then
                 load_config
-                whiptail --title "Loaded" --msgbox "Configuration loaded successfully!" 8 40
+                whiptail --title "Loaded" --msgbox "Configuration loaded successfully!" 8 40 || true
             else
-                whiptail --title "Error" --msgbox "No saved configuration found." 8 40
+                whiptail --title "Error" --msgbox "No saved configuration found." 8 40 || true
             fi
             ;;
         3)
@@ -334,7 +334,7 @@ config_management_menu() {
                 "Reset to default values?\nThe current configuration will be lost." \
                 10 50; then
                 reset_to_defaults
-                whiptail --title "Reset" --msgbox "Configuration reset to defaults." 8 50
+                whiptail --title "Reset" --msgbox "Configuration reset to defaults." 8 50 || true
             fi
             ;;
     esac

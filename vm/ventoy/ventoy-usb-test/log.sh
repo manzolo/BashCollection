@@ -25,11 +25,11 @@ show_compilation_log() {
         
         local log_content=$(cat "$filtered_log")
         whiptail --title "OVMF Compilation Log" --scrolltext \
-            --msgbox "$log_content" 20 80
+            --msgbox "$log_content" 20 80 || true
             
         rm -f "$filtered_log"
     else
-        whiptail --title "Error" --msgbox "Log file not found or already deleted." 8 40
+        whiptail --title "Error" --msgbox "Log file not found or already deleted." 8 40 || true
     fi
 }
 
@@ -37,5 +37,5 @@ show_compilation_log() {
 show_system_logs() {
     whiptail --title "System Logs" --msgbox \
         "System log function not implemented.\n\nFor now, use: journalctl -f" \
-        10 50
+        10 50 || true
 }

@@ -13,7 +13,7 @@ detect_system() {
     
     whiptail --title "System Information" --msgbox \
         "Detected System:\n\n• CPU Cores: $sys_cores\n• RAM: ${sys_memory_gb}GB\n• KVM: $kvm_status\n\nRecommendations:\n• CPU Cores: max $sys_cores\n• RAM: max $(( sys_memory_gb * 1024 / 2 ))MB" \
-        15 50
+        15 50 || true
     
     # Adjust values if necessary
     if [[ $CORES -gt $sys_cores ]]; then
@@ -31,7 +31,7 @@ detect_usb_devices() {
     
     # Handle case where lsblk or jq fails or no devices are found
     if [[ -z "$all_disks_info" ]]; then
-        whiptail --title "Error" --msgbox "Unable to retrieve device list" 10 50
+        whiptail --title "Error" --msgbox "Unable to retrieve device list" 10 50 || true
         echo "BROWSE 'Browse image file (ISO/IMG)...'"
         echo "CUSTOM 'Custom path...'"
         return
@@ -65,7 +65,7 @@ detect_usb_devices() {
     # Handle case where no USB devices are detected
     if [[ ${#devices[@]} -eq 2 ]]; then  # Only BROWSE and CUSTOM
         whiptail --title "No USB Devices" --msgbox \
-            "No USB devices detected. You can select an image file." 10 50
+            "No USB devices detected. You can select an image file." 10 50 || true
     fi
     
     # Return array for whiptail
@@ -109,18 +109,18 @@ show_hardware_info() {
     info+="QEMU:\n  Version: $(qemu-system-x86_64 --version | head -1 || echo "N/A")"
     
     whiptail --title "Hardware Information" --scrolltext \
-        --msgbox "$info" 20 70
+        --msgbox "$info" 20 70 || true
 }
 
 # Disk speed test
 test_disk_speed() {
     if [[ -z "$DISK" ]]; then
-        whiptail --title "Error" --msgbox "Select a disk first!" 8 40
+        whiptail --title "Error" --msgbox "Select a disk first!" 8 40 || true
         return
     fi
     
     if [[ ! -b "$DISK" ]]; then
-        whiptail --title "Info" --msgbox "Disk speed test is only available for block devices." 10 50
+        whiptail --title "Info" --msgbox "Disk speed test is only available for block devices." 10 50 || true
         return
     fi
     
@@ -140,14 +140,14 @@ test_disk_speed() {
         echo "70"; echo "# Cache read test..."
         sudo hdparm -T "$DISK" >> "$temp_result" 2>&1 || echo "Cache test error" >> "$temp_result"
         echo "100"; echo "# Completed"
-    } | whiptail --gauge "Disk speed test in progress..." 8 50 0
+    } | whiptail --gauge "Disk speed test in progress..." 8 50 0 || true
     
     local result
     result=$(cat "$temp_result")
     rm -f "$temp_result"
     
     whiptail --title "Disk Speed Test Results" --scrolltext \
-        --msgbox "Device: $DISK\n\n$result" 15 70
+        --msgbox "Device: $DISK\n\n$result" 15 70 || true
 }
 
 # Simple CPU benchmark
@@ -155,7 +155,7 @@ benchmark_cpu() {
     if ! command -v bc >/dev/null; then
         whiptail --title "Error" --msgbox \
             "bc (calculator) is not installed.\nInstall with: sudo apt install bc" \
-            10 50
+            10 50 || true
         return
     fi
     
@@ -188,7 +188,7 @@ benchmark_cpu() {
         printf '%s' "$arith_time" > "$bench_dir/arith"
 
         echo "100"; echo "# Completed"
-    } | whiptail --gauge "Benchmark in progress..." 8 50 0
+    } | whiptail --gauge "Benchmark in progress..." 8 50 0 || true
 
     local pi_time arith_time result
     pi_time=$(cat "$bench_dir/pi" 2>/dev/null || echo "N/A")
@@ -203,5 +203,5 @@ benchmark_cpu() {
     result+="Note: Results are indicative for relative comparison"
 
     whiptail --title "Benchmark Results" --scrolltext \
-        --msgbox "$result" 15 60
+        --msgbox "$result" 15 60 || true
 }

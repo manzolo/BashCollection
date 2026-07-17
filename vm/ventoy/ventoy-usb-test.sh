@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: usb-boot-test
-# PKG_VERSION: 2.2.0
+# PKG_VERSION: 2.2.1
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -54,7 +54,7 @@ esac
 # they appear unused when this file is linted in isolation, so each
 # such var gets an explicit `disable=SC2034` annotation.
 readonly SCRIPT_NAME="USB Boot Tester"
-readonly VERSION="2.2.0"
+readonly VERSION="2.2.1"
 # shellcheck disable=SC2034
 readonly LOG_DIR="/tmp/ventoy_test_logs"
 # Writable per-run copy of OVMF_VARS for UEFI (split-firmware) boots.
@@ -144,7 +144,7 @@ main_menu() {
             "8" "🧪 DUAL TEST (UEFI+BIOS)" \
             "9" "❓ Help" \
             "0" "🚪 Exit" \
-            3>&1 1>&2 2>&3)
+            3>&1 1>&2 2>&3) || true
         
         case $choice in
             1) select_disk_menu ;;
@@ -155,7 +155,7 @@ main_menu() {
             6) config_management_menu ;;
             7) 
                 if [[ -z "$DISK" ]]; then
-                    whiptail --title "Error" --msgbox "Select a disk first!" 8 40
+                    whiptail --title "Error" --msgbox "Select a disk first!" 8 40 || true
                 else
                     confirm_and_run
                 fi
@@ -199,7 +199,7 @@ show_help() {
     help_text+="For support: Diagnostics → Verify dependencies"
     
     whiptail --title "User Guide" --scrolltext \
-        --msgbox "$help_text" 22 70
+        --msgbox "$help_text" 22 70 || true
 }
 
 # Main function

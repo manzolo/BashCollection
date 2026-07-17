@@ -1,7 +1,7 @@
 # Test both modes (UEFI and BIOS)
 test_both_modes() {
     if [[ -z "$DISK" ]]; then
-        whiptail --title "Error" --msgbox "Select a disk first!" 8 40
+        whiptail --title "Error" --msgbox "Select a disk first!" 8 40 || true
         return
     fi
     
@@ -16,11 +16,11 @@ test_both_modes() {
     if [[ ! -f "$DEFAULT_BIOS" ]]; then
         whiptail --title "OVMF Required" --msgbox \
             "OVMF is required for UEFI testing.\nSkipping UEFI test." \
-            8 50
+            8 50 || true
     else
         whiptail --title "UEFI Test" --msgbox \
             "Starting UEFI mode test...\nPress OK to continue." \
-            8 40
+            8 40 || true
         
         clear
         log_info "=== UEFI TEST STARTED ==="
@@ -36,7 +36,7 @@ test_both_modes() {
     BIOS_MODE="bios"
     whiptail --title "BIOS Test" --msgbox \
         "Starting BIOS Legacy mode test...\nPress OK to continue." \
-        8 40
+        8 40 || true
     
     clear
     log_info "=== BIOS LEGACY TEST STARTED ==="
@@ -73,5 +73,5 @@ test_kvm_functionality() {
         result+="Quick Test: $test_result"
     fi
     
-    whiptail --title "KVM Test" --msgbox "$result" 15 60
+    whiptail --title "KVM Test" --msgbox "$result" 15 60 || true
 }
