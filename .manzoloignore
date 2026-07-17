@@ -1,3 +1,4 @@
+system/ufw/mfirewall/*
 vm/chroot/manzolo-chroot/*
 vm/ventoy/ventoy-usb-test/*
 network/share-manager/share-manager/*
