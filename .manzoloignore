@@ -1,3 +1,4 @@
+system/system-tools/mprocmon/*
 system/ufw/mfirewall/*
 vm/chroot/manzolo-chroot/*
 vm/ventoy/ventoy-usb-test/*
