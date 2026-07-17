@@ -23,6 +23,79 @@ _ovmf_download_cleanup() {
     _OVMF_DOWNLOAD_LOG=""; _OVMF_DOWNLOAD_PROGRESS_DIR=""
 }
 
+# --- UEFI firmware resolution ---------------------------------------------
+# Distros ship OVMF in two layouts, and both must work:
+#   * Combined image (single OVMF.fd)           -> QEMU -bios
+#   * Split image (OVMF_CODE.fd + OVMF_VARS.fd) -> QEMU pflash, with a writable
+#     per-run copy of VARS so UEFI variables and boot entries can persist.
+# The old code always used `-bios`, which silently drops NVMe/boot-entry
+# persistence when pointed at a CODE-only image.
+
+# Find the OVMF_VARS template that matches a given OVMF_CODE file.
+_ovmf_find_vars_for_code() {
+    local code="$1"
+    local dir base cand c
+    dir="$(dirname "$code")"
+    base="$(basename "$code")"
+
+    # Derive the VARS name from the CODE name (OVMF_CODE_4M.fd -> OVMF_VARS_4M.fd).
+    # secboot/ms/snakeoil CODE variants pair with the plain VARS of the same size.
+    cand="${base/CODE/VARS}"
+    cand="${cand/.secboot/}"
+    cand="${cand/.ms/}"
+    cand="${cand/.snakeoil/}"
+    [[ -f "$dir/$cand" ]] && { echo "$dir/$cand"; return 0; }
+
+    for c in "$dir/OVMF_VARS_4M.fd" "$dir/OVMF_VARS.fd" \
+             /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/OVMF/OVMF_VARS.fd \
+             /usr/share/edk2/ovmf/OVMF_VARS.fd /usr/share/edk2-ovmf/x64/OVMF_VARS.fd; do
+        [[ -f "$c" ]] && { echo "$c"; return 0; }
+    done
+    return 1
+}
+
+# Emit QEMU firmware arguments (one token per line) for the current DEFAULT_BIOS.
+# As a side effect, creates the writable VARS copy when using split firmware.
+ovmf_firmware_qemu_args() {
+    local code="$DEFAULT_BIOS"
+
+    if [[ "$(basename "$code")" == *CODE* ]]; then
+        local vars_template
+        if vars_template="$(_ovmf_find_vars_for_code "$code")"; then
+            local vars_run="${OVMF_VARS_RUN:-/tmp/ovmf_vars_run.fd}"
+            mkdir -p "$(dirname "$vars_run")"
+            cp -f "$vars_template" "$vars_run"
+            printf '%s\n' \
+                "-drive" "if=pflash,format=raw,unit=0,readonly=on,file=$code" \
+                "-drive" "if=pflash,format=raw,unit=1,file=$vars_run"
+            return 0
+        fi
+    fi
+
+    # Combined firmware (or no matching VARS found): legacy -bios path.
+    printf '%s\n' "-bios" "$code"
+}
+
+# Pick a sensible default OVMF path when the configured one is absent. Prefers a
+# combined OVMF.fd (simplest), then split CODE images across common distros.
+ovmf_autodetect_default() {
+    [[ -f "$DEFAULT_BIOS" ]] && return 0
+    local candidates=(
+        /usr/share/OVMF/OVMF.fd
+        /usr/share/ovmf/OVMF.fd
+        /usr/share/qemu/OVMF.fd
+        /usr/share/OVMF/OVMF_CODE_4M.fd
+        /usr/share/OVMF/OVMF_CODE.fd
+        /usr/share/edk2/ovmf/OVMF_CODE.fd
+        /usr/share/edk2-ovmf/x64/OVMF_CODE.fd
+    )
+    local c
+    for c in "${candidates[@]}"; do
+        [[ -f "$c" ]] && { DEFAULT_BIOS="$c"; return 0; }
+    done
+    return 1
+}
+
 # Compile OVMF interactively
 prepare_ovmf_interactive() {
     if ! whiptail --title "OVMF Compilation" --yesno \
@@ -265,12 +338,15 @@ download_ovmf_prebuilt() {
     } | whiptail --gauge "Downloading OVMF..." 8 60 0
 
     local found_path=""
+    # Prefer a combined OVMF.fd (usable directly via -bios); fall back to split
+    # CODE images, which ovmf_firmware_qemu_args handles via pflash.
     local ovmf_paths=(
-        "/usr/share/OVMF/OVMF_CODE.fd"
+        "/usr/share/OVMF/OVMF.fd"
         "/usr/share/ovmf/OVMF.fd"
-        "/usr/share/edk2-ovmf/OVMF_CODE.fd"
-        "/usr/share/edk2/ovmf/OVMF_CODE.fd"
         "/usr/share/qemu/OVMF.fd"
+        "/usr/share/OVMF/OVMF_CODE_4M.fd"
+        "/usr/share/OVMF/OVMF_CODE.fd"
+        "/usr/share/edk2/ovmf/OVMF_CODE.fd"
         "/usr/share/edk2-ovmf/x64/OVMF_CODE.fd"
     )
 

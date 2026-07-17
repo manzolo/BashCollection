@@ -4,11 +4,13 @@
 check_dependencies() {
     local missing=()
     
+    # Runtime dependencies only. `git` is needed solely for the optional
+    # OVMF-from-source compilation and is checked there; `dialog` is unused
+    # (the whole TUI is whiptail), so neither is required to start.
     command -v qemu-system-x86_64 >/dev/null || missing+=("qemu-system-x86")
     command -v lsblk >/dev/null || missing+=("util-linux")
-    command -v git >/dev/null || missing+=("git")
+    command -v jq >/dev/null || missing+=("jq")
     command -v whiptail >/dev/null || missing+=("whiptail")
-    command -v dialog >/dev/null || missing+=("dialog")
     
     if [[ ${#missing[@]} -gt 0 ]]; then
         if whiptail --title "Missing Dependencies" --yesno \
@@ -32,9 +34,8 @@ check_dependencies() {
             local missing_after_install=()
             command -v qemu-system-x86_64 >/dev/null || missing_after_install+=("qemu-system-x86")
             command -v lsblk >/dev/null || missing_after_install+=("util-linux")
-            command -v git >/dev/null || missing_after_install+=("git")
+            command -v jq >/dev/null || missing_after_install+=("jq")
             command -v whiptail >/dev/null || missing_after_install+=("whiptail")
-            command -v dialog >/dev/null || missing_after_install+=("dialog")
             
             if [[ ${#missing_after_install[@]} -eq 0 ]]; then
                 whiptail --title "Installation Successful" --msgbox \
@@ -60,11 +61,12 @@ verify_all_dependencies() {
         "qemu-system-x86_64:QEMU x86_64"
         "whiptail:Dialog TUI"
         "lsblk:Block utilities"
-        "git:Version Control"
-        "make:Build tools"
+        "jq:JSON processor (USB detection)"
         "fdisk:Disk utilities"
         "free:Memory info"
         "lscpu:CPU info"
+        "git:Version Control (optional, OVMF compile)"
+        "make:Build tools (optional, OVMF compile)"
     )
     
     for dep in "${deps[@]}"; do

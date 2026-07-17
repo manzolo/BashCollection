@@ -14,7 +14,7 @@ select_disk_menu() {
     local selected
     selected=$(whiptail --title "Disk/Image Selection" \
         --menu "Select a USB device or image file to test:" \
-        22 90 14 "${devices_array[@]}" 3>&1 1>&2 2>&3)
+        22 90 14 "${devices_array[@]}" 3>&1 1>&2 2>&3) || true
     
     # Handle selection
     case "$selected" in
@@ -54,7 +54,7 @@ select_disk_menu() {
             local custom_path
             custom_path=$(whiptail --title "Custom Path" \
                 --inputbox "Enter the full path:" \
-                15 75 "$DISK" 3>&1 1>&2 2>&3)
+                15 75 "$DISK" 3>&1 1>&2 2>&3) || true
             
             if [[ -n "$custom_path" ]]; then
                 DISK="$custom_path"
@@ -122,7 +122,7 @@ system_config_menu() {
             "6" "Disk Format: $FORMAT" \
             "7" "USB Version: $USB_VERSION" \
             "8" "Back to main menu" \
-            3>&1 1>&2 2>&3)
+            3>&1 1>&2 2>&3) || true
         
         case $choice in
             1) 
@@ -235,7 +235,7 @@ advanced_menu() {
             "4" "QEMU Monitor: Always enabled" \
             "5" "OVMF Management" \
             "6" "Back to main menu" \
-            3>&1 1>&2 2>&3)
+            3>&1 1>&2 2>&3) || true
         
         case $choice in
             1)
@@ -291,7 +291,7 @@ ovmf_management_menu() {
         "2" "Download prebuilt OVMF" \
         "3" "Custom OVMF path" \
         "4" "Back" \
-        3>&1 1>&2 2>&3)
+        3>&1 1>&2 2>&3) || true
     
     case $choice in
         1) prepare_ovmf_interactive ;;
@@ -314,7 +314,7 @@ config_management_menu() {
         "2" "Load saved configuration" \
         "3" "Reset to default configuration" \
         "4" "Back" \
-        3>&1 1>&2 2>&3)
+        3>&1 1>&2 2>&3) || true
     
     case $choice in
         1) 
@@ -354,7 +354,7 @@ diagnostic_menu() {
             "5" "Disk Speed Test" \
             "6" "CPU Benchmark" \
             "7" "Back" \
-            3>&1 1>&2 2>&3)
+            3>&1 1>&2 2>&3) || true
         
         case $choice in
             1) show_hardware_info ;;

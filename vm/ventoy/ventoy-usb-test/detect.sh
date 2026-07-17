@@ -165,13 +165,18 @@ benchmark_cpu() {
         return
     fi
     
-    local result=""
-    
+    # The gauge pipeline runs in a subshell, so it cannot set variables in this
+    # function. Have it write the timings to temp files, then build the result
+    # here in the parent shell after the gauge completes.
+    local bench_dir
+    bench_dir=$(mktemp -d)
+
     {
         echo "20"; echo "# Calculating Pi..."
         local pi_time
-        pi_time=$(time (echo "scale=1000; 4*a(1)" | bc -l) 2>&1 | grep real | awk '{print $2}')
-        
+        pi_time=$( { time (echo "scale=1000; 4*a(1)" | bc -l >/dev/null); } 2>&1 | grep real | awk '{print $2}')
+        printf '%s' "$pi_time" > "$bench_dir/pi"
+
         echo "60"; echo "# Arithmetic test..."
         local arith_start arith_end arith_time
         arith_start=$(date +%s%N)
@@ -180,18 +185,23 @@ benchmark_cpu() {
         done
         arith_end=$(date +%s%N)
         arith_time=$(echo "scale=3; ($arith_end - $arith_start) / 1000000000" | bc)
-        
+        printf '%s' "$arith_time" > "$bench_dir/arith"
+
         echo "100"; echo "# Completed"
-        
-        result="CPU BENCHMARK\n\n"
-        result+="CPU: $(nproc) cores\n"
-        result+="Model: $(lscpu | grep "Model name" | cut -d: -f2 | xargs)\n\n"
-        result+="Pi calculation (1000 decimals): ${pi_time}\n"
-        result+="Arithmetic test (100k ops): ${arith_time}s\n\n"
-        result+="Note: Results are indicative for relative comparison"
-        
     } | whiptail --gauge "Benchmark in progress..." 8 50 0
-    
+
+    local pi_time arith_time result
+    pi_time=$(cat "$bench_dir/pi" 2>/dev/null || echo "N/A")
+    arith_time=$(cat "$bench_dir/arith" 2>/dev/null || echo "N/A")
+    rm -rf "$bench_dir"
+
+    result="CPU BENCHMARK\n\n"
+    result+="CPU: $(nproc) cores\n"
+    result+="Model: $(lscpu | grep "Model name" | cut -d: -f2 | xargs)\n\n"
+    result+="Pi calculation (1000 decimals): ${pi_time}\n"
+    result+="Arithmetic test (100k ops): ${arith_time}s\n\n"
+    result+="Note: Results are indicative for relative comparison"
+
     whiptail --title "Benchmark Results" --scrolltext \
         --msgbox "$result" 15 60
 }

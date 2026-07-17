@@ -393,13 +393,11 @@ browse_image_files() {
             fi
         done < <(find "$current_dir" -maxdepth 1 -type f \( -iname "*.iso" -o -iname "*.img" -o -iname "*.qcow2" -o -iname "*.vdi" -o -iname "*.vmdk" -o -iname "*.vtoy" -o -iname "*.vhd" -o -iname "*.raw" \) -print 2>/dev/null | sort)
         
-        # Use whiptail instead of dialog
-        selected_file=$(whiptail --title "Browse Image Files ($current_dir)" \
+        # Capture selection; a non-zero exit means the user cancelled (ESC/Cancel).
+        # Use `if !` so `set -e` doesn't abort the whole program on cancel.
+        if ! selected_file=$(whiptail --title "Browse Image Files ($current_dir)" \
             --menu "Select a file or navigate to a folder:" \
-            25 90 15 "${items[@]}" 3>&1 1>&2 2>&3)
-        
-        # Check exit code
-        if [ $? -ne 0 ]; then
+            25 90 15 "${items[@]}" 3>&1 1>&2 2>&3); then
             echo ""
             return 1
         fi

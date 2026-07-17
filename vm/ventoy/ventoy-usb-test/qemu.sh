@@ -2,7 +2,7 @@
 build_qemu_command() {
     local qemu_cmd=(
         qemu-system-x86_64
-        -name "Ventoy Boot Test"
+        -name "USB Boot Test"
         -m "$MEMORY"
         -smp cores="$CORES",threads="$THREADS",sockets="$SOCKETS"
         -machine "$MACHINE_TYPE"
@@ -15,8 +15,9 @@ build_qemu_command() {
         "3.0") qemu_cmd+=(-device qemu-xhci,id=xhci -device usb-storage,bus=xhci.0,drive=usb-drive) ;;
     esac
     
-    # USB drive
-    qemu_cmd+=(-drive file="$DISK",format="$FORMAT",cache=none,if=none,id=usb-drive)
+    # USB drive. cache=writeback avoids the O_DIRECT requirement of cache=none,
+    # which fails on some filesystems/image files; fine for a throwaway test VM.
+    qemu_cmd+=(-drive file="$DISK",format="$FORMAT",cache=writeback,if=none,id=usb-drive)
     
     # KVM if available
     if [[ -c /dev/kvm && -r /dev/kvm ]]; then
@@ -25,9 +26,12 @@ build_qemu_command() {
         qemu_cmd+=(-cpu qemu64)
     fi
     
-    # BIOS/UEFI
+    # BIOS/UEFI. UEFI firmware handling (combined -bios vs split pflash with a
+    # writable VARS copy) is resolved by ovmf_firmware_qemu_args in omvf.sh.
     if [[ "$BIOS_MODE" == "uefi" ]]; then
-        qemu_cmd+=(-bios "$DEFAULT_BIOS")
+        local _fw_args=()
+        readarray -t _fw_args < <(ovmf_firmware_qemu_args)
+        qemu_cmd+=("${_fw_args[@]}")
     fi
     
     # Video
@@ -63,7 +67,7 @@ confirm_and_run() {
     local qemu_cmd_string="${qemu_cmd_array[*]}"
     
     # Show configuration summary
-    local summary="VENTOY BOOT TEST CONFIGURATION\n\n"
+    local summary="USB BOOT TEST CONFIGURATION\n\n"
     summary+="• Disk: $DISK\n"
     summary+="• Mode: $BIOS_MODE\n"
     summary+="• RAM: ${MEMORY}MB\n"
@@ -89,7 +93,7 @@ confirm_and_run() {
         10 50; then
         
         clear
-        log_info "=== VENTOY BOOT TEST STARTED ==="
+        log_info "=== USB BOOT TEST STARTED ==="
         log_info "Monitor: telnet localhost 4444"
         prepare_system_for_qemu "$DISK" "$MEMORY"
         log_info "Full QEMU command:\n$qemu_cmd_string"

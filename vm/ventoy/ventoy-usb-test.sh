@@ -1,10 +1,10 @@
 #!/bin/bash
 # PKG_NAME: usb-boot-test
-# PKG_VERSION: 2.1.6
+# PKG_VERSION: 2.2.0
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
-# PKG_DEPENDS: bash (>= 4.0), qemu-system-x86, whiptail
+# PKG_DEPENDS: bash (>= 4.0), qemu-system-x86, whiptail, jq
 # PKG_RECOMMENDS: ovmf
 # PKG_PROVIDES: ventoy-usb-test
 # PKG_REPLACES: ventoy-usb-test
@@ -54,9 +54,12 @@ esac
 # they appear unused when this file is linted in isolation, so each
 # such var gets an explicit `disable=SC2034` annotation.
 readonly SCRIPT_NAME="USB Boot Tester"
-readonly VERSION="2.1.6"
+readonly VERSION="2.2.0"
 # shellcheck disable=SC2034
 readonly LOG_DIR="/tmp/ventoy_test_logs"
+# Writable per-run copy of OVMF_VARS for UEFI (split-firmware) boots.
+# shellcheck disable=SC2034  # consumed by ovmf_firmware_qemu_args in omvf.sh
+readonly OVMF_VARS_RUN="/tmp/ventoy_test_logs/OVMF_VARS_current.fd"
 # shellcheck disable=SC2034
 readonly CONFIG_FILE="$HOME/.ventoy_test_config"
 # Determine the directory where the script is located (resolving symlinks)
@@ -162,6 +165,7 @@ main_menu() {
             0|"")
                 clear
                 revoke_x11_for_root
+                rm -f "$OVMF_VARS_RUN"
                 log_info "Thank you for using $SCRIPT_NAME!"
                 exit 0
                 ;;
