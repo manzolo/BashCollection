@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: mprocmon
-# PKG_VERSION: 2.0.2
+# PKG_VERSION: 2.0.3
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -34,7 +34,7 @@ set -euo pipefail  # Exit on error, undefined vars, pipe failures
 # Global configuration
 SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_NAME
-readonly SCRIPT_VERSION="2.0"
+readonly SCRIPT_VERSION="2.0.3"
 readonly LOG_DIR="/tmp/${SCRIPT_NAME%.*}_logs"
 LOG_FILE="${LOG_DIR}/monitor_$(date +%Y%m%d_%H%M%S).log"
 readonly LOG_FILE
@@ -98,7 +98,7 @@ handle_error() {
     print_color "$RED" "ERROR: $error_message"
     log_message "ERROR" "$error_message"
     
-    whiptail --title "Error" --msgbox "$error_message" 10 60
+    whiptail --title "Error" --msgbox "$error_message" 10 60 || true
     exit "$exit_code"
 }
 
@@ -205,7 +205,7 @@ show_ports_lsof() {
                 ;;
             4)
                 local port
-                port=$(whiptail --inputbox "Enter port number (1-65535):" 10 50 3>&1 1>&2 2>&3)
+                port=$(whiptail --inputbox "Enter port number (1-65535):" 10 50 3>&1 1>&2 2>&3) || true
                 if validate_port "$port"; then
                     print_color "$YELLOW" "Analyzing port $port..."
                     echo "Processes using port $port:"
@@ -219,7 +219,7 @@ show_ports_lsof() {
                 ;;
             5)
                 local process_name
-                process_name=$(whiptail --inputbox "Enter process name:" 10 50 3>&1 1>&2 2>&3)
+                process_name=$(whiptail --inputbox "Enter process name:" 10 50 3>&1 1>&2 2>&3) || true
                 if [[ -n "$process_name" ]]; then
                     print_color "$YELLOW" "Finding ports used by: $process_name"
                     local pids
@@ -324,7 +324,7 @@ show_ports_ss() {
                 ;;
             5)
                 local port
-                port=$(whiptail --inputbox "Enter port number or service name:" 10 50 3>&1 1>&2 2>&3)
+                port=$(whiptail --inputbox "Enter port number or service name:" 10 50 3>&1 1>&2 2>&3) || true
                 if [[ -n "$port" ]]; then
                     print_color "$YELLOW" "Analyzing port/service: $port"
                     ss -tulpn | grep -i -- "$port" 2>/dev/null || echo "No connections found for: $port"
@@ -349,7 +349,7 @@ show_ports_ss() {
 # Enhanced process analysis
 analyze_process() {
     local pid
-    pid=$(whiptail --inputbox "Enter PID:" 10 40 3>&1 1>&2 2>&3)
+    pid=$(whiptail --inputbox "Enter PID:" 10 40 3>&1 1>&2 2>&3) || true
     
     if ! validate_pid "$pid"; then
         whiptail --msgbox "Invalid PID format: $pid" 8 40
@@ -410,7 +410,7 @@ analyze_process() {
 # Enhanced file lock checker
 check_file_locks() {
     local file_path
-    file_path=$(whiptail --inputbox "Enter file path:" 10 60 3>&1 1>&2 2>&3)
+    file_path=$(whiptail --inputbox "Enter file path:" 10 60 3>&1 1>&2 2>&3) || true
 
     if [[ -z "$file_path" ]]; then
         whiptail --msgbox "No file path provided" 8 40
@@ -506,7 +506,7 @@ check_file_locks() {
 # Enhanced process file search
 search_files_by_process() {
     local process_input
-    process_input=$(whiptail --inputbox "Enter process name or PID:" 10 50 3>&1 1>&2 2>&3)
+    process_input=$(whiptail --inputbox "Enter process name or PID:" 10 50 3>&1 1>&2 2>&3) || true
 
     if [[ -z "$process_input" ]]; then
         whiptail --msgbox "No process identifier provided" 8 40
@@ -697,7 +697,7 @@ show_system_overview() {
 # Show help information
 show_help() {
     whiptail --title "Manzolo Network & File Monitor - Help" --msgbox \
-"Network and File Monitor v$SCRIPT_VERSION
+"Network and File Monitor v$SCRIPT_VERSION || true
 
 FEATURES:
 • Advanced port scanning with lsof and ss

@@ -51,10 +51,11 @@ interactive_mode() {
               --defaultno --yesno "Do you need to run graphical applications (X11/Wayland) inside the chroot?\n\nThis will setup display variables and authentication files." 10 60; then
         ENABLE_GUI_SUPPORT=true
         local chroot_user
-        chroot_user=$(dialog --title "Chroot User" \
+        # `if var=$(...)` form: a plain assignment would abort under set -e
+        # when the dialog is cancelled, and the old `$?` check never ran.
+        if chroot_user=$(dialog --title "Chroot User" \
                             --inputbox "Enter the user to run GUI apps as in chroot (default: root):" \
-                            10 50 "$ORIGINAL_USER" 3>&1 1>&2 2>&3)
-        if [[ $? -eq 0 ]]; then
+                            10 50 "$ORIGINAL_USER" 3>&1 1>&2 2>&3); then
             if [[ -n "$chroot_user" ]]; then
                 CHROOT_USER="$chroot_user"
             else

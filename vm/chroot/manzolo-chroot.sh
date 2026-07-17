@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: manzolo-chroot
-# PKG_VERSION: 3.0.2
+# PKG_VERSION: 3.0.3
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
