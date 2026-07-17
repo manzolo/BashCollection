@@ -20,9 +20,6 @@ mcleaner:
 mbackup:
   cmd: ["--help"]
 
-mtest:
-  cmd: ["--help"]
-
 usb-boot-test:
   cmd: ["--help"]
 

@@ -28,7 +28,7 @@ The installer uses two configuration files in the repository root:
 - **.manzoloignore**: Excludes scripts from installation (similar to .gitignore syntax)
 - **.manzolomap**: Maps script filenames to custom command names using `path#name` format
 
-Example mapping: `chroot/manzolo-chroot.sh#mchroot` creates both `mchroot` and `manzolo-chroot` commands.
+Example mapping: `vm/chroot/manzolo-chroot.sh#mchroot` creates both `mchroot` and `manzolo-chroot` commands.
 
 ### Other Management Commands
 
@@ -52,7 +52,7 @@ sudo ./menage_scripts.sh update
 **Heads-up on `publish`**: its lookup includes a substring fallback
 (`*$name*`), so any directory whose path contains the package name can be
 matched accidentally (e.g. `tests/dmarc-report/test.sh` would shadow
-`utils/email/dmarc-report.sh`). When adding directories that mirror a
+`dev-tools/email/dmarc-report.sh`). When adding directories that mirror a
 package name, list them in `.manzoloignore`.
 
 ## Code Architecture
@@ -62,51 +62,53 @@ package name, list them in `.manzoloignore`.
 Most major scripts follow a modular architecture where the main script sources helper modules from a subdirectory:
 
 ```bash
-# Main script: vm/vm_disk_manager.sh
-# Helper modules: vm/vm_disk_manager/*.sh
+# Main script: vm/vm-disk-manager.sh
+# Helper modules: vm/vm-disk-manager/*.sh
 
-for script in "$SCRIPT_DIR/vm_disk_manager/"**/*.sh; do
+for script in "$SCRIPT_DIR/vm-disk-manager/"**/*.sh; do
     source "$script"
 done
 ```
 
 This pattern is used by:
-- `chroot/manzolo-chroot.sh` → sources from `chroot/manzolo-chroot/`
-- `disk-cloner/manzolo-disk-clone.sh` → sources from `disk-cloner/manzolo-disk-clone/`
-- `vm/vm_disk_manager.sh` → sources from `vm/vm_disk_manager/`
-- `utils/ventoy/ventoy-usb-test.sh` → sources from `utils/ventoy/ventoy-usb-test/`
+- `vm/chroot/manzolo-chroot.sh` → sources from `vm/chroot/manzolo-chroot/`
+- `disk/disk-cloner/manzolo-disk-clone.sh` → sources from `disk/disk-cloner/manzolo-disk-clone/`
+- `vm/vm-disk-manager.sh` → sources from `vm/vm-disk-manager/`
+- `vm/ventoy/ventoy-usb-test.sh` → sources from `vm/ventoy/ventoy-usb-test/`
 
 When modifying these scripts, always check the subdirectory for the actual implementation logic.
 
-### Main Script Categories
+### Top-Level Domain Categories
 
-**VM Management** (`vm/`):
-- `vm_disk_manager.sh`: Interactive VM disk operations (resize, partition, NBD-based mounting, QEMU testing)
-- `vm_create_disk.sh`: Create new VM disk images with partitions and filesystems
-- `vm_clone.sh`: Clone VM images
+Scripts are grouped by problem domain. There is no catch-all `utils/` bucket —
+every tool lives under one of these seven domains:
 
-**Chroot Tools** (`chroot/`):
-- `manzolo-chroot.sh`: Advanced chroot into physical/virtual disks with NBD, LUKS, and LVM support
-- Supports both block devices and virtual disk images
+**`vm/`** — Virtual machines, emulation, and disk-image/chroot tooling:
+- `vm-disk-manager.sh`: Interactive VM disk operations (resize, partition, NBD mounting, QEMU testing)
+- `vm-create-disk.sh`, `vm-clone.sh`, `vm-iso-manager.sh`, `compress-qemu-hd.sh`
+- `chroot/manzolo-chroot.sh`: Advanced chroot into physical/virtual disks (NBD, LUKS, LVM)
+- `ventoy/ventoy-usb-test.sh`: Test Ventoy USB in QEMU (UEFI/BIOS)
 
-**Disk Operations** (`disk-cloner/`):
-- `manzolo-disk-clone.sh`: Clone between physical/virtual disks with UUID preservation, LUKS support, and dry-run mode
-- Uses `partclone` for smart cloning (only used space)
+**`disk/`** — Physical/virtual disk and storage operations:
+- `disk-cloner/manzolo-disk-clone.sh`: Clone disks with UUID preservation, LUKS, dry-run (uses `partclone`)
+- `disk-usage/`, `check-disk/`, `crypt/` (LUKS), `usb/`, `ubuntu-usb-installer/`
 
-**Docker Management** (`docker/`):
-- `docker-manager.sh`: TUI for container/image/volume/network management
-- `update-docker-compose.sh`: Update and restart Docker Compose projects
+**`system/`** — Host/OS administration:
+- `cleaner/manzolo-cleaner.sh`, `systemd/systemd-manager.sh`, `server-monitor/`, `system-tools/mprocmon.sh`
+- `ufw/mfirewall.sh`, `nvidia/nvidia-manager.sh`, `gnome/`, `manzolo-app/` (script catalog TUI)
 
-**Backup** (`backup/`):
-- `backup-qemu-vms.sh`: Backup QEMU VMs (shutdown, copy, MD5 verification)
-- `manzolo-backup-home.sh`: Incremental rsync-based backups with exclusions
+**`network/`** — Networking and network services:
+- `network-viewer.sh`, `dns/`, `ssh-manager/`, `share-manager/` (Samba), `wordpress/`
 
-**Utilities** (`utils/`):
-- `systemd/systemd-manager.sh`: Manage systemd services via TUI
-- `server-monitor/server-monitor.sh`: System dashboard with Docker stats
-- `ventoy/ventoy-usb-test.sh`: Test Ventoy USB in QEMU (UEFI/BIOS modes)
-- `firefox/firefox-session-recover.sh`: Restore Firefox sessions from sessionstore-backups (Snap/APT/Flatpak)
-- `code2one/`: Merge/extract files to/from single files
+**`containers/`** — Docker / Compose:
+- `docker-manager.sh`, `compose-stack-manager.sh`, `update-docker-compose.sh`
+
+**`backup/`** — Backups:
+- `backup-qemu-vms.sh` (QEMU VMs), `manzolo-backup-home.sh` (incremental rsync)
+
+**`dev-tools/`** — Developer/user tooling not tied to system administration:
+- `email/` (dmarc-report, email-domain-check), `firefox/firefox-session-recover.sh`
+- `ollama-tools/`, `git-info/`, `code2one/` (merge/extract files), `raspbian/pi-emulate.sh`
 
 ### Common Patterns
 
@@ -130,10 +132,10 @@ qemu-nbd --disconnect /dev/nbd0
 
 ### Adding a New Script
 
-1. Create the script in the appropriate category directory (e.g., `utils/mynewscript/mynewscript.sh`)
+1. Create the script under the matching domain directory — `vm/`, `disk/`, `system/`, `network/`, `containers/`, `backup/`, or `dev-tools/` (e.g., `system/mynewscript/mynewscript.sh`). There is no `utils/` bucket; pick the domain the tool belongs to.
 2. Add the standard `PKG_NAME` / `PKG_VERSION` / `PKG_DESCRIPTION` / `PKG_DEPENDS` header (required — CI's `pkg-headers` job rejects mapped scripts without them)
-3. Make it executable: `chmod +x utils/mynewscript/mynewscript.sh`
-4. If it has helper modules, create a subdirectory: `utils/mynewscript/mynewscript/`
+3. Make it executable: `chmod +x system/mynewscript/mynewscript.sh`
+4. If it has helper modules, create a subdirectory: `system/mynewscript/mynewscript/`
 5. Ensure the script supports `-h` / `--help` and exits 0 (CI smoke matrix invokes `--help` on every installed wrapper — see "Continuous Integration" below)
 6. Optionally add to `.manzoloignore` to exclude or `.manzolomap` to rename
 7. Add the package entry to `.github/smoke-tests.yaml` (default `cmd: ["--help"]` is fine for most scripts; use `skip: "<reason>"` only for things that genuinely can't be smoke-tested)

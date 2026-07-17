@@ -48,7 +48,7 @@ export OLLAMA_SERVER_URL="http://127.0.0.1:11434"
 export MODEL="tinyllama:latest"
 
 echo "::group::ollama-claude --list"
-claude_list_output="$(bash "$REPO_ROOT/utils/ollama-tools/ollama-claude.sh" --list 2>&1)"
+claude_list_output="$(bash "$REPO_ROOT/dev-tools/ollama-tools/ollama-claude.sh" --list 2>&1)"
 printf '%s\n' "$claude_list_output"
 grep -F "Available models on http://127.0.0.1:11434:" <<<"$claude_list_output"
 grep -F "tinyllama:latest" <<<"$claude_list_output"
@@ -56,7 +56,7 @@ grep -F "qwen2.5-coder:1.5b" <<<"$claude_list_output"
 echo "::endgroup::"
 
 echo "::group::ollama-codex --list"
-codex_list_output="$(bash "$REPO_ROOT/utils/ollama-tools/ollama-codex.sh" --list 2>&1)"
+codex_list_output="$(bash "$REPO_ROOT/dev-tools/ollama-tools/ollama-codex.sh" --list 2>&1)"
 printf '%s\n' "$codex_list_output"
 grep -F "Available models on http://127.0.0.1:11434:" <<<"$codex_list_output"
 grep -F "tinyllama:latest" <<<"$codex_list_output"
@@ -64,14 +64,14 @@ grep -F "qwen2.5-coder:1.5b" <<<"$codex_list_output"
 echo "::endgroup::"
 
 echo "::group::ollama-claude execution path"
-bash "$REPO_ROOT/utils/ollama-tools/ollama-claude.sh" -- --print
+bash "$REPO_ROOT/dev-tools/ollama-tools/ollama-claude.sh" -- --print
 grep -Fx -- "--model" "$HOME/claude_invocation.txt"
 grep -Fx -- "tinyllama:latest" "$HOME/claude_invocation.txt"
 grep -Fx -- "--print" "$HOME/claude_invocation.txt"
 echo "::endgroup::"
 
 echo "::group::ollama-codex execution path"
-bash "$REPO_ROOT/utils/ollama-tools/ollama-codex.sh" -- --help
+bash "$REPO_ROOT/dev-tools/ollama-tools/ollama-codex.sh" -- --help
 grep -Fx -- "--profile" "$HOME/codex_invocation.txt"
 grep -Fx -- "ollama-remote" "$HOME/codex_invocation.txt"
 grep -Fx -- "--help" "$HOME/codex_invocation.txt"

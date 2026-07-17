@@ -587,6 +587,6 @@ nvidia-smi      # Shows compatible CUDA version
 
 ## See Also
 
-- [Docker Manager](../docker/README.md) - For Docker container management
+- [Docker Manager](../../containers/README.md) - For Docker container management
 - [Server Monitor](../utils/README.md#server-monitor) - For GPU monitoring in dashboard
 - Standard Linux commands: `nvidia-smi(1)`, `modprobe(8)`, `lspci(8)`

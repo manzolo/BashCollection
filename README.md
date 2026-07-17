@@ -6,20 +6,19 @@ A curated collection of Bash scripts for system administration, backups, cleanin
 
 - [Installation](#installation)
 - [Script Categories](#script-categories)
-  - [Backup Scripts](backup/) - VM and system backups
-  - [VM Management](vm/) - Virtual machine operations
-  - [Chroot Tools](chroot/) - Advanced chroot utilities
-  - [Disk Operations](disk-cloner/) - Disk cloning tools
-  - [Docker Management](docker/) - Docker and Compose tools
-  - [System Cleaner](cleaner/) - System maintenance
-  - [QEMU Utilities](qemu/) - QEMU image tools
-  - [Utilities](utils/) - Various admin tools
+  - [vm/](vm/) - Virtual machines, emulation, chroot, Ventoy
+  - [disk/](disk/) - Disk cloning, LUKS, USB, disk usage
+  - [system/](system/) - Host administration (cleaner, systemd, firewall, NVIDIA, monitoring)
+  - [network/](network/) - Networking, SSH, shares, DNS
+  - [containers/](containers/) - Docker and Compose tools
+  - [backup/](backup/) - VM and system backups
+  - [dev-tools/](dev-tools/) - Developer/user tooling (email, Firefox, git, ollama)
 - [Requirements](#requirements)
 - [Contributing](#contributing)
 - [License](#license)
 
 ## Features
-- **Modular Structure**: Scripts organized into directories like `backup/`, `cleaner/`, `docker/`, `utils/`.
+- **Modular Structure**: Scripts organized by problem domain — `vm/`, `disk/`, `system/`, `network/`, `containers/`, `backup/`, `dev-tools/` (no catch-all `utils/` bucket).
 - **Easy Installation**: Symlinks make scripts executable as global commands (without `.sh` extension).
 - **Dependencies**: Most scripts require common tools like `bash`, `whiptail` (for TUI), `docker` (for Docker-related scripts), and `sudo`. Install missing deps via `apt` (e.g., `sudo apt install whiptail`).
 - **Logging and Safety**: Many scripts include logging, confirmations, and safety checks.
@@ -73,82 +72,45 @@ After installation, run scripts directly from the terminal (e.g., `docker-manage
 
 ## Script Categories
 
-All scripts are organized into categories. Click on the 📖 links below to see detailed documentation for each category.
+Scripts are grouped by problem domain. There is no catch-all `utils/` bucket —
+each tool lives under one of seven domain directories.
 
-### Backup Scripts
-Tools for backing up QEMU VMs and system directories.
-- **backup-qemu-vms**: Backup QEMU/KVM virtual machines
-- **manzolo-backup-home (mbackup)**: Professional rsync-based backup solution
-
-**📖 [Full Documentation](backup/README.md)**
-
-### VM Management
-Virtual machine disk operations and management.
+### [vm/](vm/) — Virtual machines & emulation
 - **vm-disk-manager**: Interactive VM disk operations (resize, partition, NBD mounting, QEMU testing)
-- **vm-create-disk**: Create new VM disk images
-- **vm-clone**: Clone VM images
-- **vm-iso-manager**: ISO management for VMs
-- **vm-helper**: VM utility functions
+- **vm-create-disk**, **vm-clone**, **vm-iso-manager**, **compress-qemu-hd**
+- **manzolo-chroot (mchroot)** [`vm/chroot/`]: Chroot into physical/virtual disks with NBD, LUKS, LVM
+- **usb-boot-test (ventoy-usb-test)** [`vm/ventoy/`]: Test bootable USB/disks in QEMU (UEFI/BIOS)
 
-**📖 [Full Documentation](vm/README.md)**
-
-### Chroot Tools
-Advanced chroot utilities for physical and virtual disks.
-- **manzolo-chroot (mchroot)**: Chroot into disks with NBD, LUKS, and LVM support
-
-**📖 [Full Documentation](chroot/README.md)**
-
-### Disk Operations
-Advanced disk cloning between physical and virtual formats.
-- **manzolo-disk-clone**: Clone disks with UUID preservation, LUKS support, and multiple format options
-
-**📖 [Full Documentation](disk-cloner/README.md)**
-
-### Docker Management
-Docker container and compose management tools.
-- **docker-manager**: TUI for container/image/volume/network management
-- **update-docker-compose**: Update and restart Docker Compose projects
-
-**📖 [Full Documentation](docker/README.md)**
-
-### System Cleaner
-System cleaning and maintenance utilities.
-- **manzolo-cleaner (mcleaner)**: Advanced system cleaning tool with TUI
-
-**📖 [Full Documentation](cleaner/README.md)**
-
-### QEMU Utilities
-QEMU disk image utilities.
-- **compress-qemu-hd-folder**: Batch compress QEMU disk images
-
-**📖 [Full Documentation](qemu/README.md)**
-
-### Utilities
-Various system administration and specialized tools.
-- **code2one/one2code**: Merge and extract code files
-- **luks-manager**: LUKS encryption management
+### [disk/](disk/) — Disk & storage operations
+- **manzolo-disk-clone** [`disk/disk-cloner/`]: Clone disks with UUID preservation, LUKS, dry-run
 - **disk-usage**: Disk usage analysis
-- **dns-info**: DNS information tool
-- **gnome-backup**: GNOME settings backup
-- **pi-boot/pi-emulate**: Raspberry Pi tools
-- **server-monitor**: System monitoring dashboard
-- **ssh-manager**: SSH connection manager
-- **systemd-manager**: Systemd service management TUI
-- **mprocmon**: Process monitoring
-- **ubuntu-usb-installer**: Create Ubuntu USB drives
-- **mfirewall**: UFW firewall management
-- **usb-inspector**: USB device inspection
-- **usb-boot-test**: Test bootable USB/disks in QEMU (formerly ventoy-usb-test)
-- **firefox-session-recover**: Restore Firefox sessions from sessionstore-backups
+- **luks-manager** [`disk/crypt/`]: LUKS encryption management
+- **check-disks**, **usb-inspector**, **ubuntu-usb-installer**
+
+### [system/](system/) — Host administration
+- **manzolo-cleaner (mcleaner)**: System cleaning tool with TUI
+- **systemd-manager**, **server-monitor**, **mprocmon** (process monitoring)
+- **mfirewall** (UFW), **nvidia-manager**, **gnome-backup**
+- **manzolo-app**: Interactive catalog/launcher for all scripts
+
+### [network/](network/) — Networking & services
+- **network-viewer**, **dns-info**, **ssh-manager**
+- **share-manager**: CIFS/NFS/SSHFS share management (dialog TUI, per-share descriptions)
 - **wp-management**: WordPress management
-- **share-manager**: CIFS/NFS/SSHFS share management with interactive dialog TUI (supports per-share descriptions)
 
-**📖 [Full Documentation](utils/README.md)**
+### [containers/](containers/) — Docker & Compose
+- **docker-manager**: TUI for container/image/volume/network management
+- **compose-stack-manager**, **update-docker-compose**
 
-### NVIDIA Tools
-- **nvidia-manager**: NVIDIA GPU and driver management
+### [backup/](backup/) — Backups
+- **backup-qemu-vms**: Backup QEMU/KVM virtual machines
+- **manzolo-backup-home (mbackup)**: rsync-based incremental backup solution
 
-**📖 [Full Documentation](nvidia/README.md)**
+### [dev-tools/](dev-tools/) — Developer/user tooling
+- **dmarc-report**, **email-domain-check** [`dev-tools/email/`]
+- **firefox-session-recover**: Restore Firefox sessions from sessionstore-backups
+- **ollama-claude / ollama-codex / openrouter-claude** [`dev-tools/ollama-tools/`]
+- **git-info**, **code2one/one2code** (merge/extract files), **pi-emulate** (Raspberry Pi)
 
 ## Requirements
 - Bash 4+
