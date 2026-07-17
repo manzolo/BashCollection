@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: usb-boot-test
-# PKG_VERSION: 2.2.1
+# PKG_VERSION: 2.2.2
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -54,7 +54,7 @@ esac
 # they appear unused when this file is linted in isolation, so each
 # such var gets an explicit `disable=SC2034` annotation.
 readonly SCRIPT_NAME="USB Boot Tester"
-readonly VERSION="2.2.1"
+readonly VERSION="2.2.2"
 # shellcheck disable=SC2034
 readonly LOG_DIR="/tmp/ventoy_test_logs"
 # Writable per-run copy of OVMF_VARS for UEFI (split-firmware) boots.
@@ -162,15 +162,25 @@ main_menu() {
                 ;;
             8) test_both_modes ;;
             9) show_help ;;
-            0|"")
-                clear
-                revoke_x11_for_root
-                rm -f "$OVMF_VARS_RUN"
-                log_info "Thank you for using $SCRIPT_NAME!"
-                exit 0
+            0) clean_exit ;;
+            "")
+                # ESC/Cancel on the main menu: confirm instead of quitting
+                # outright (ESC on the confirm dialog counts as "No").
+                if whiptail --title "Exit" --yesno "Exit $SCRIPT_NAME?" 8 40; then
+                    clean_exit
+                fi
                 ;;
         esac
     done
+}
+
+# Clean shutdown: revoke the X11 root grant and drop the per-run OVMF VARS copy
+clean_exit() {
+    clear
+    revoke_x11_for_root
+    rm -f "$OVMF_VARS_RUN"
+    log_info "Thank you for using $SCRIPT_NAME!"
+    exit 0
 }
 
 # Help system
