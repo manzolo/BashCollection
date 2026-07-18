@@ -43,7 +43,20 @@ run_command_in_terminal() {
     local calculate_space="${4:-false}"  # New: Option to calculate space freed
     
     log_message "INFO" "Executing command: $command"
-    
+
+    # Cache sudo credentials on a clean screen BEFORE drawing any dialog:
+    # otherwise the password prompt appears over the half-drawn TUI.
+    if [[ $command == *sudo* ]] && ! sudo -n true 2>/dev/null; then
+        clear
+        echo "── $title ──"
+        echo "This operation requires administrator privileges."
+        echo
+        if ! sudo -v; then
+            dialog --title "$title" --msgbox "Authentication failed or cancelled.\nOperation aborted." 7 50
+            return 1
+        fi
+    fi
+
     # Clear the temporary file before writing
     : > "$TEMP_OUTPUT"
     
@@ -57,8 +70,10 @@ run_command_in_terminal() {
         actual_cmd="$command"
     fi
     
-    # Show a waiting message
-    dialog --title "$title" --infobox "Executing...\n$command" 6 60
+    # Show a waiting message. Never print the raw command here: multi-line
+    # pipelines overflow the box and read as garbage — the full command is
+    # already recorded in $LOG_FILE.
+    dialog --title "$title" --infobox "Executing: $title\n\nPlease wait — this may take a while..." 7 60
     
     # Execute the command and save the output
     local before_space=0
