@@ -37,29 +37,37 @@ ubuntu_menu() {
                 if [ $? -eq 0 ]; then
                     run_command_in_terminal "Clear Old Kernels" "
                     {
-                        echo 'Installed Kernels:'
-                        dpkg --list | grep '^ii' | grep linux-image | awk '{print \$2}' | sort -V
+                        # Only numbered kernel images: meta-packages such as
+                        # linux-image-generic(-hwe) must never be candidates —
+                        # they sort after numbered kernels in sort -V, so the
+                        # old 'grep linux-image' filter kept the metas and
+                        # purged the real fallback kernels instead.
+                        echo 'Installed kernel images:'
+                        dpkg --list | awk '/^ii[[:space:]]+linux-image-[0-9]/{print \$2}' | sort -V
                         echo ''
-                        echo 'Current Kernel: $(uname -r)'
+                        echo 'Current kernel: $(uname -r)'
                         echo ''
-                        # List kernels to remove (all except current and the 2 most recent)
-                        kernels_to_remove=\$(dpkg --list | grep '^ii' | grep linux-image | awk '{print \$2}' | grep -v \"\$(uname -r)\" | sort -V | head -n -2)
+                        kernels_to_remove=\$(dpkg --list | awk '/^ii[[:space:]]+linux-image-[0-9]/{print \$2}' | grep -v -F \"\$(uname -r)\" | sort -V | head -n -2)
                         if [ -z \"\$kernels_to_remove\" ]; then
-                            echo 'No old kernels to remove (keeping at least 2).'
+                            echo 'No old kernels to remove (keeping current + 2 most recent).'
                         else
                             echo 'Kernels to remove:'
                             echo \"\$kernels_to_remove\"
                             echo ''
                             echo 'Removing old kernels...'
-                            sudo apt-get purge -y \$kernels_to_remove 2>/dev/null || true
-                            sudo apt-get autoremove -y
-                            echo 'Old kernels removed successfully.'
+                            if sudo apt-get purge -y \$kernels_to_remove; then
+                                sudo apt-get autoremove -y
+                                echo 'Old kernels removed successfully.'
+                            else
+                                echo 'ERROR: kernel removal failed. Nothing else was touched.'
+                                false
+                            fi
                         fi
                     }" "true" "true"
                 fi
                 ;;
             5)
-                dialog --title "Confirmation" --yesno "Clean system logs?\nOnly the last 7 days will be kept." 10 50
+                dialog --title "Confirmation" --yesno "Clean system logs?\n\n- systemd journal: keep last 7 days\n- /var/log/*.log not touched in 30+ days: deleted" 11 60
                 if [ $? -eq 0 ]; then
                     run_command_in_terminal "Clean Logs" "sudo journalctl --vacuum-time=7d && sudo find /var/log -name '*.log' -type f -mtime +30 -delete || true" "true" "true"
                 fi
@@ -67,7 +75,7 @@ ubuntu_menu() {
             6)
                 dialog --title "Confirmation" --yesno "Empty the trash bin?" 8 50
                 if [ $? -eq 0 ]; then
-                    run_command_in_terminal "Empty Trash Bin" "rm -rf ~/.local/share/Trash/* || true" "true" "true"
+                    run_command_in_terminal "Empty Trash Bin" "rm -rf ~/.local/share/Trash/files ~/.local/share/Trash/info || true" "true" "true"
                 fi
                 ;;
             7)
@@ -77,7 +85,7 @@ ubuntu_menu() {
                 fi
                 ;;
             8)
-                dialog --defaultno --title "Confirmation" --yesno "Perform full Ubuntu cleanup?\nThis will include all cleanup options." 10 60
+                dialog --defaultno --title "Confirmation" --yesno "Perform full Ubuntu cleanup?\n\nIncludes: apt update/autoremove/clean, journal vacuum (7d),\ntrash bin, thumbnail cache.\nOld kernels are NOT removed (use the dedicated entry)." 12 65
                 if [ $? -eq 0 ]; then
                     run_command_in_terminal "Full Ubuntu Cleanup" "
                     {
@@ -87,15 +95,14 @@ ubuntu_menu() {
                         sudo apt clean
                         sudo apt autoclean
                         sudo journalctl --vacuum-time=7d
-                        rm -rf ~/.local/share/Trash/* || true
+                        rm -rf ~/.local/share/Trash/files ~/.local/share/Trash/info || true
                         rm -rf ~/.cache/thumbnails/* || true
-                        rm -rf ~/.cache/* 2>/dev/null || true
                         echo 'Cleanup completed!'
                     }" "true" "true"
                 fi
                 ;;
             9)
-                run_command_in_terminal "Disk Space" "df -h | awk 'NR==1 || /^\/dev\//' && du -sh ~/.* 2>/dev/null | sort -hr | head -10" "true" "false"
+                run_command_in_terminal "Disk Space" "df -h | awk 'NR==1 || /^\/dev\//' && du -sh ~/.[!.]* 2>/dev/null | sort -hr | head -10" "true" "false"
                 ;;
             10|*)
                 break

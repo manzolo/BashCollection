@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: manzolo-cleaner
-# PKG_VERSION: 2.6.1
+# PKG_VERSION: 2.6.2
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
