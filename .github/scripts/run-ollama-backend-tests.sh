@@ -17,6 +17,7 @@ trap cleanup EXIT
 cat > "$TMP_BIN/claude" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$@" > "$HOME/claude_invocation.txt"
+printf '%s\n' "${CLAUDE_CODE_MAX_CONTEXT_TOKENS:-unset}" > "$HOME/claude_context.txt"
 EOF
 
 cat > "$TMP_BIN/codex" <<'EOF'
@@ -68,6 +69,10 @@ bash "$REPO_ROOT/dev-tools/ollama-tools/ollama-claude.sh" -- --print
 grep -Fx -- "--model" "$HOME/claude_invocation.txt"
 grep -Fx -- "tinyllama:latest" "$HOME/claude_invocation.txt"
 grep -Fx -- "--print" "$HOME/claude_invocation.txt"
+# /api/ps reports tinyllama running with an 8192 window; Ollama keeps half of
+# it for the reply, so Claude Code must be told 4096 - otherwise it assumes
+# 200k, overflows the server prompt budget and gets truncated silently.
+grep -Fx -- "4096" "$HOME/claude_context.txt"
 echo "::endgroup::"
 
 echo "::group::ollama-codex execution path"
@@ -77,4 +82,17 @@ grep -Fx -- "ollama-remote" "$HOME/codex_invocation.txt"
 grep -Fx -- "--help" "$HOME/codex_invocation.txt"
 grep -F 'base_url = "http://127.0.0.1:11434/v1"' "$HOME/.codex/config.toml"
 grep -F 'model = "tinyllama:latest"' "$HOME/.codex/config.toml"
+echo "::endgroup::"
+
+echo "::group::ollama-claude context window fallback"
+# qwen2.5-coder:1.5b is not running, so the window comes from the config file
+# (32768) capped by what /api/show says the model can hold (4096); half of that
+# is the prompt budget.
+MODEL="qwen2.5-coder:1.5b" bash "$REPO_ROOT/dev-tools/ollama-tools/ollama-claude.sh" -- --print
+grep -Fx -- "2048" "$HOME/claude_context.txt"
+echo "::endgroup::"
+
+echo "::group::ollama-claude context window override"
+CLAUDE_CODE_MAX_CONTEXT_TOKENS=1234 bash "$REPO_ROOT/dev-tools/ollama-tools/ollama-claude.sh" -- --print
+grep -Fx -- "1234" "$HOME/claude_context.txt"
 echo "::endgroup::"

@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: ollama-claude
-# PKG_VERSION: 1.1.0
+# PKG_VERSION: 1.2.0
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -17,6 +17,8 @@
 #  - JSON config file with server URL, default model, and timeout
 #  - Priority: CLI arg > env var > config file > bootstrap default
 #  - Validates the chosen model against the live Ollama catalogue
+#  - Sizes Claude Code to the prompt budget the server really serves
+#    (Ollama reserves half of the loaded window for the reply)
 #  - Auto-installs the Claude CLI if not present
 # PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 set -euo pipefail
@@ -25,7 +27,7 @@ set -euo pipefail
 # ollama-claude — wrapper for Claude CLI that uses an Ollama server backend
 # ---------------------------------------------------------------------------
 
-readonly VERSION="1.1.0"
+readonly VERSION="1.2.0"
 
 # --- Config file -----------------------------------------------------------
 CONFIG_DIR="$HOME/.config/manzolo/ollama-claude"
@@ -35,6 +37,7 @@ CONFIG_FILE="$CONFIG_DIR/config.json"
 readonly _BS_SERVER_URL="http://localhost:11434"
 readonly _BS_DEFAULT_MODEL=""
 readonly _BS_TIMEOUT=10
+readonly _BS_CONTEXT_LENGTH=32768
 
 # Working variables (resolved after load_config; env var takes precedence)
 OLLAMA_SERVER_URL="${OLLAMA_SERVER_URL:-}"
@@ -88,7 +91,8 @@ setup_first_run() {
         --arg url "$OLLAMA_SERVER_URL" \
         --arg model "$DEFAULT_MODEL" \
         --argjson timeout "$_BS_TIMEOUT" \
-        '{server_url: $url, default_model: $model, curl_timeout: $timeout}' \
+        --argjson ctx "$_BS_CONTEXT_LENGTH" \
+        '{server_url: $url, default_model: $model, curl_timeout: $timeout, context_length: $ctx}' \
         > "$CONFIG_FILE"
     success "Config saved: ${CONFIG_FILE}"
     info "  Edit this file to change settings."
@@ -104,7 +108,8 @@ init_config() {
             --arg url "$_BS_SERVER_URL" \
             --arg model "$_BS_DEFAULT_MODEL" \
             --argjson timeout "$_BS_TIMEOUT" \
-            '{server_url: $url, default_model: $model, curl_timeout: $timeout}' \
+            --argjson ctx "$_BS_CONTEXT_LENGTH" \
+            '{server_url: $url, default_model: $model, curl_timeout: $timeout, context_length: $ctx}' \
             > "$CONFIG_FILE"
         warn "Config created with generic defaults: ${CONFIG_FILE}"
         info "  Edit this file with the actual server URL and model."
@@ -146,6 +151,37 @@ fetch_models() {
         fi
     fi
     echo "$_CACHED_MODELS"
+}
+
+# --- Context window --------------------------------------------------------
+# Reports the window the model is (or would be) loaded with. Claude Code
+# otherwise assumes 200k tokens for every model name it does not recognise, and
+# keeps sending prompts the server silently truncates.
+#
+# Order: running instance (authoritative) > config file > bootstrap default,
+# never above what the model itself can hold.
+resolve_context_length() {
+    local model="$1" ctx="" maxctx=""
+
+    ctx=$(curl -s --max-time "$CURL_TIMEOUT" "${OLLAMA_SERVER_URL}/api/ps" 2>/dev/null \
+        | jq -r --arg m "$model" '.models[]? | select(.name == $m) | .context_length // empty' 2>/dev/null \
+        | head -1) || true
+
+    if [[ -z "$ctx" ]]; then
+        if [[ -f "$CONFIG_FILE" ]]; then
+            ctx=$(jq -r '.context_length // empty' "$CONFIG_FILE" 2>/dev/null) || true
+        fi
+        ctx="${ctx:-$_BS_CONTEXT_LENGTH}"
+        maxctx=$(curl -s --max-time "$CURL_TIMEOUT" "${OLLAMA_SERVER_URL}/api/show" \
+            -d "$(jq -n --arg m "$model" '{model: $m}')" 2>/dev/null \
+            | jq -r '[.model_info // {} | to_entries[] | select(.key | endswith(".context_length")) | .value] | first // empty' 2>/dev/null) || true
+        if [[ "$maxctx" =~ ^[0-9]+$ ]] && (( maxctx < ctx )); then
+            ctx="$maxctx"
+        fi
+    fi
+
+    [[ "$ctx" =~ ^[0-9]+$ ]] && (( ctx > 0 )) || return 1
+    echo "$ctx"
 }
 
 # --- Display models --------------------------------------------------------
@@ -276,12 +312,17 @@ ${BOLD}ARGUMENTS${RESET}
     CLAUDE_ARGS      Extra arguments passed through to claude (after --)
 
 ${BOLD}ENVIRONMENT VARIABLES${RESET}
-    MODEL                Override the default model
-    OLLAMA_SERVER_URL    Override the server URL
+    MODEL                            Override the default model
+    OLLAMA_SERVER_URL                Override the server URL
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS   Override the detected prompt budget
+                                     (also skips the two caps below)
+    CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS
+                                     Cap on what one file read injects
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS    Cap on the reply length
 
 ${BOLD}CONFIG FILE${RESET}
     ${CONFIG_FILE}
-    Fields: server_url, default_model, curl_timeout
+    Fields: server_url, default_model, curl_timeout, context_length
 
 ${BOLD}EXAMPLES${RESET}
     $(basename "$0")                          # interactive selection
@@ -368,6 +409,36 @@ main() {
     export ANTHROPIC_AUTH_TOKEN=ollama
     export ANTHROPIC_API_KEY=ollama
     export ANTHROPIC_BASE_URL="${OLLAMA_SERVER_URL}"
+
+    # Size Claude Code to the prompt budget the server actually serves
+    if [[ -z "${CLAUDE_CODE_MAX_CONTEXT_TOKENS:-}" ]]; then
+        local ctx budget out
+        if ctx=$(resolve_context_length "$MODEL"); then
+            # Ollama keeps half of the loaded window for the reply, so a prompt
+            # never gets more than n_ctx/2 (measured on 0.32.14: a 96k-token
+            # prompt comes back as usage.input_tokens=16386 on a 32768 window,
+            # and 8195 on a 16384 one). What exceeds the budget is dropped from
+            # the oldest messages, and when the user query is what falls off the
+            # front the qwen3.5-family renderers answer HTTP 500
+            # "no user query found in messages" - which Claude Code, unable to
+            # count tokens (Ollama has no /v1/messages/count_tokens), then
+            # retries for minutes.
+            budget=$(( ctx / 2 ))
+            out=$(( budget / 4 ))
+            (( out > 8192 )) && out=8192
+            export CLAUDE_CODE_MAX_CONTEXT_TOKENS="$budget"
+            : "${CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS:=$(( budget / 4 ))}"
+            : "${CLAUDE_CODE_MAX_OUTPUT_TOKENS:=$out}"
+            export CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS CLAUDE_CODE_MAX_OUTPUT_TOKENS
+            info "Context: ${ctx} tokens loaded, ${budget} usable for the prompt (Ollama reserves half for the reply)"
+            if (( budget < 32768 )); then
+                warn "Tight budget: whole-file reads and long sessions will hit 'Prompt is too long'."
+                warn "  Keep the working set narrow, or raise OLLAMA_CONTEXT_LENGTH on the server."
+            fi
+        else
+            warn "Context window unknown: Claude Code will assume 200k tokens and may overflow the server."
+        fi
+    fi
 
     success "Using model: ${BOLD}${MODEL}${RESET}"
 
