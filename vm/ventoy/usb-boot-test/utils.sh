@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Test both modes (UEFI and BIOS) back to back. The configured BIOS_MODE is
 # restored afterwards so the dual test does not silently change the profile.
 test_both_modes() {
@@ -11,6 +12,8 @@ test_both_modes() {
         11 60; then
         return
     fi
+
+    ensure_target_unmounted_tui "$DISK" || return 0
 
     local saved_mode="$BIOS_MODE"
 

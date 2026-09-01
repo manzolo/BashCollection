@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Device, boot-mode and hardware detection.
 
 # Detect removable / USB block devices and emit a whiptail menu item list

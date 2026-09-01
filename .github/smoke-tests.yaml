@@ -22,6 +22,7 @@ mbackup:
 
 usb-boot-test:
   cmd: ["--help"]
+  script: tests/usb-boot-test/test.sh
 
 manzolo-firewall:
   cmd: ["--help"]

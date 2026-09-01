@@ -6,7 +6,7 @@ system/cleaner/manzolo-cleaner/*
 system/system-tools/mprocmon/*
 system/ufw/mfirewall/*
 vm/chroot/manzolo-chroot/*
-vm/ventoy/ventoy-usb-test/*
+vm/ventoy/usb-boot-test/*
 network/share-manager/share-manager/*
 # CI functional-test fixtures (consumed by .github/scripts/smoke-test-pkg.sh,
 # not standalone packages)

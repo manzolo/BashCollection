@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Enhanced image format detection and management for VHD/VPC and other virtual disk formats
 
 # Advanced format detection using file signatures and qemu-img
@@ -358,6 +359,7 @@ validate_selected_disk() {
         whiptail --title "Path Error" --msgbox \
             "The specified path does not exist or is not accessible:\n\n$disk_path" \
             12 70 || true
+        # shellcheck disable=SC2034  # global consumed by the menus
         DISK=""
         return 1
     fi
@@ -381,8 +383,7 @@ browse_image_files() {
         # Find directories
         while IFS= read -r dir; do
             if [[ -n "$dir" ]]; then
-                local dir_name="$(basename "$dir")"
-                items+=("$dir_name" "📁 Directory")
+                items+=("$(basename "$dir")" "📁 Directory")
             fi
         done < <(find "$current_dir" -maxdepth 1 -type d ! -path "$current_dir" -print 2>/dev/null | sort)
         

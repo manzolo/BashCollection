@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Logging helpers
 log_info() { echo -e "${GREEN}[INFO]${NC} $*"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }

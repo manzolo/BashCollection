@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Interactive whiptail menus.
 
 # --- Input helpers ---------------------------------------------------------
@@ -176,20 +177,22 @@ bios_menu() {
 # --- Advanced options ------------------------------------------------------
 advanced_menu() {
     while true; do
-        local network_status sound_status
+        local network_status sound_status snapshot_status
         [[ "$NETWORK" == true ]] && network_status="Enabled ✓" || network_status="Disabled ✗"
         [[ "$SOUND" == true ]] && sound_status="Enabled ✓" || sound_status="Disabled ✗"
+        [[ "$SNAPSHOT" == true ]] && snapshot_status="ON (target never modified)" || snapshot_status="OFF (guest may write to target)"
 
         local choice
         choice=$(whiptail --title "Advanced Options" \
             --menu "Additional configurations:" \
-            16 60 6 \
+            17 70 7 \
             "1" "VGA: $VGA_MODE" \
             "2" "Network: $network_status" \
             "3" "Audio: $sound_status" \
-            "4" "QEMU Monitor: Always enabled" \
-            "5" "OVMF Management" \
-            "6" "Back to main menu" \
+            "4" "Snapshot: $snapshot_status" \
+            "5" "QEMU Monitor info" \
+            "6" "OVMF Management" \
+            "7" "Back to main menu" \
             3>&1 1>&2 2>&3) || true
 
         case $choice in
@@ -204,12 +207,23 @@ advanced_menu() {
             2) [[ "$NETWORK" == true ]] && NETWORK=false || NETWORK=true ;;
             3) [[ "$SOUND" == true ]] && SOUND=false || SOUND=true ;;
             4)
-                whiptail --title "QEMU Monitor" --msgbox \
-                    "The QEMU monitor will be available at:\n\ntelnet localhost 4444\n\nUseful commands:\n- info status\n- system_reset\n- quit" \
-                    12 50 || true
+                if [[ "$SNAPSHOT" == true ]]; then
+                    if whiptail --title "Disable snapshot?" --yesno \
+                        "With snapshot OFF the guest can write to the real device/image\n(installers, Ventoy persistence, saved settings...).\n\nDisable snapshot mode?" \
+                        11 64; then
+                        SNAPSHOT=false
+                    fi
+                else
+                    SNAPSHOT=true
+                fi
                 ;;
-            5) ovmf_management_menu ;;
-            6|"") break ;;
+            5)
+                whiptail --title "QEMU Monitor" --msgbox \
+                    "While a test runs, the QEMU monitor listens on:\n\n$MONITOR_SOCK\n\nConnect with:\n  socat - UNIX-CONNECT:$MONITOR_SOCK\n\nUseful commands: info status, system_reset, quit" \
+                    14 72 || true
+                ;;
+            6) ovmf_management_menu ;;
+            7|"") break ;;
         esac
     done
 }

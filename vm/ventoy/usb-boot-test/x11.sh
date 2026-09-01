@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # X11 forwarding helpers — when the script is invoked via sudo, root has no
 # DISPLAY/XAUTHORITY of its own, so QEMU's GTK backend fails with
 # "Authorization required, but no authorization protocol specified".

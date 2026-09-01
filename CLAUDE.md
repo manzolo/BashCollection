@@ -74,7 +74,7 @@ This pattern is used by:
 - `vm/chroot/manzolo-chroot.sh` → sources from `vm/chroot/manzolo-chroot/`
 - `disk/disk-cloner/manzolo-disk-clone.sh` → sources from `disk/disk-cloner/manzolo-disk-clone/`
 - `vm/vm-disk-manager.sh` → sources from `vm/vm-disk-manager/`
-- `vm/ventoy/ventoy-usb-test.sh` → sources from `vm/ventoy/ventoy-usb-test/`
+- `vm/ventoy/ventoy-usb-test.sh` → sources from `vm/ventoy/usb-boot-test/`
 
 When modifying these scripts, always check the subdirectory for the actual implementation logic.
 
@@ -87,7 +87,7 @@ every tool lives under one of these seven domains:
 - `vm-disk-manager.sh`: Interactive VM disk operations (resize, partition, NBD mounting, QEMU testing)
 - `vm-create-disk.sh`, `vm-clone.sh`, `vm-iso-manager.sh`, `compress-qemu-hd.sh`
 - `chroot/manzolo-chroot.sh`: Advanced chroot into physical/virtual disks (NBD, LUKS, LVM)
-- `ventoy/ventoy-usb-test.sh`: Test Ventoy USB in QEMU (UEFI/BIOS)
+- `ventoy/ventoy-usb-test.sh` (installed as `usb-boot-test`): Test bootable USB/ISO in QEMU (UEFI/BIOS), TUI or CLI
 
 **`disk/`** — Physical/virtual disk and storage operations:
 - `disk-cloner/manzolo-disk-clone.sh`: Clone disks with UUID preservation, LUKS, dry-run (uses `partclone`)

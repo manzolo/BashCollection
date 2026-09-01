@@ -1,3 +1,5 @@
+# shellcheck shell=bash
+# shellcheck disable=SC2024  # we already run as root; the redirects are ours
 # Module-level globals for cleanup traps.
 # Must be global (not local) because trap functions run after the calling function returns.
 _OVMF_COMPILE_SCRIPT=""
