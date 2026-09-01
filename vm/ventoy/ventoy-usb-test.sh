@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: usb-boot-test
-# PKG_VERSION: 2.2.2
+# PKG_VERSION: 2.3.0
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -54,7 +54,7 @@ esac
 # they appear unused when this file is linted in isolation, so each
 # such var gets an explicit `disable=SC2034` annotation.
 readonly SCRIPT_NAME="USB Boot Tester"
-readonly VERSION="2.2.2"
+readonly VERSION="2.3.0"
 # shellcheck disable=SC2034
 readonly LOG_DIR="/tmp/ventoy_test_logs"
 # Writable per-run copy of OVMF_VARS for UEFI (split-firmware) boots.
@@ -112,8 +112,6 @@ for script in "$SCRIPT_DIR/ventoy-usb-test/"*.sh; do
     fi
 done
 
-shopt -u globstar
-
 # Main menu with Unicode icons
 main_menu() {
     while true; do
@@ -130,12 +128,18 @@ main_menu() {
             disk_info="Not selected"
         fi
         
+        # UEFI needs firmware on disk; BIOS is always ready.
+        local boot_icon="✅"
+        if [[ "$BIOS_MODE" == "uefi" && ! -f "$DEFAULT_BIOS" ]]; then
+            boot_icon="⚠️ (OVMF missing)"
+        fi
+
         local choice
         choice=$(whiptail --title "$SCRIPT_NAME v$VERSION" \
             --menu "Main Menu:" \
             20 75 10 \
             "1" "💾 Disk/USB: $disk_info" \
-            "2" "⚙️  Boot: $BIOS_MODE $([[ $BIOS_MODE == "uefi" && -f "$DEFAULT_BIOS" ]] && echo "✅" || [[ $BIOS_MODE == "bios" ]] && echo "✅" || echo "⚠️")" \
+            "2" "⚙️  Boot: $BIOS_MODE $boot_icon" \
             "3" "💻 System: ${MEMORY}MB RAM, ${CORES}c CPU" \
             "4" "🔧 Advanced: VGA=$VGA_MODE, USB=$USB_VERSION" \
             "5" "🔍 Diagnostics & System Info" \

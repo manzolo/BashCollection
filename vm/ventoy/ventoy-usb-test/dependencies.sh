@@ -90,11 +90,12 @@ verify_all_dependencies() {
         deps_info+="⚠ OVMF missing (required for UEFI)\n"
     fi
     
-    # KVM Group
-    if groups | grep -q kvm; then
-        deps_info+="✓ User in KVM group\n"
+    # KVM Group (check the invoking user, not root, when run via sudo)
+    local real_user="${SUDO_USER:-$USER}"
+    if id -nG "$real_user" 2>/dev/null | grep -qw kvm; then
+        deps_info+="✓ $real_user in KVM group\n"
     else
-        deps_info+="⚠ User not in KVM group\n"
+        deps_info+="⚠ $real_user not in KVM group\n"
     fi
     
     whiptail --title "Dependency Verification" --scrolltext \

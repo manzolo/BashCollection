@@ -1,18 +1,20 @@
-# Test both modes (UEFI and BIOS)
+# Test both modes (UEFI and BIOS) back to back. The configured BIOS_MODE is
+# restored afterwards so the dual test does not silently change the profile.
 test_both_modes() {
     if [[ -z "$DISK" ]]; then
         whiptail --title "Error" --msgbox "Select a disk first!" 8 40 || true
         return
     fi
-    
+
     if ! whiptail --title "Dual Test" --yesno \
-        "Test both UEFI and BIOS modes?\n\nTwo consecutive tests will be run." \
-        10 50; then
+        "Test both UEFI and BIOS modes?\n\nTwo consecutive tests will be run on:\n$DISK" \
+        11 60; then
         return
     fi
-    
+
+    local saved_mode="$BIOS_MODE"
+
     # Test UEFI
-    BIOS_MODE="uefi"
     if [[ ! -f "$DEFAULT_BIOS" ]]; then
         whiptail --title "OVMF Required" --msgbox \
             "OVMF is required for UEFI testing.\nSkipping UEFI test." \
@@ -21,30 +23,19 @@ test_both_modes() {
         whiptail --title "UEFI Test" --msgbox \
             "Starting UEFI mode test...\nPress OK to continue." \
             8 40 || true
-        
-        clear
-        log_info "=== UEFI TEST STARTED ==="
-        local qemu_cmd_array=()
-        readarray -t qemu_cmd_array < <(build_qemu_command)
-        "${qemu_cmd_array[@]}" || log_error "UEFI test failed"
-        
-        echo
+        BIOS_MODE="uefi"
+        run_qemu_test "UEFI TEST" || true
         read -p "UEFI test completed. Press Enter for BIOS test..." -r
     fi
-    
+
     # Test BIOS
-    BIOS_MODE="bios"
     whiptail --title "BIOS Test" --msgbox \
         "Starting BIOS Legacy mode test...\nPress OK to continue." \
         8 40 || true
-    
-    clear
-    log_info "=== BIOS LEGACY TEST STARTED ==="
-    local qemu_cmd_array=()
-    readarray -t qemu_cmd_array < <(build_qemu_command)
-    "${qemu_cmd_array[@]}" || log_error "BIOS test failed"
-    
-    echo
+    BIOS_MODE="bios"
+    run_qemu_test "BIOS LEGACY TEST" || true
+
+    BIOS_MODE="$saved_mode"
     log_info "Dual test completed!"
     read -p "Press Enter to return to the menu..." -r
 }
@@ -52,11 +43,12 @@ test_both_modes() {
 # Test KVM functionality
 test_kvm_functionality() {
     local result=""
-    
+    local real_user="${SUDO_USER:-$USER}"
+
     if [[ ! -c /dev/kvm ]]; then
         result="KVM is not available\n\nThe KVM module is not loaded."
     elif [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
-        result="KVM present but not accessible\n\nSolution:\nsudo usermod -a -G kvm $USER\n\nThen restart your session."
+        result="KVM present but not accessible\n\nSolution:\nsudo usermod -a -G kvm $real_user\n\nThen restart your session."
     else
         # Quick KVM test
         local test_result
@@ -66,12 +58,12 @@ test_kvm_functionality() {
         else
             test_result="Issues detected"
         fi
-        
+
         result="KVM fully functional\n\n"
-        result+="KVM Group: $(groups | grep -o kvm || echo "Not in group")\n"
+        result+="KVM Group ($real_user): $(id -nG "$real_user" 2>/dev/null | grep -o kvm || echo "Not in group")\n"
         result+="Permissions: $(ls -l /dev/kvm)\n"
         result+="Quick Test: $test_result"
     fi
-    
+
     whiptail --title "KVM Test" --msgbox "$result" 15 60 || true
 }
