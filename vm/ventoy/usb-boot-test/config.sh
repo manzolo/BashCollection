@@ -18,6 +18,7 @@ NETWORK:bool
 SOUND:bool
 USB_VERSION:word
 SNAPSHOT:bool
+MEDIA_MODE:word
 EOF
 }
 
@@ -88,6 +89,8 @@ load_config() {
         log_warn "Saved disk $DISK is not present, clearing selection"
         DISK=""
     fi
+    case "$MEDIA_MODE" in auto|disk|cdrom) ;; *) MEDIA_MODE="auto" ;; esac
+    refresh_media_type
 }
 
 # shellcheck disable=SC2034  # globals consumed by the menus and build_qemu_command
@@ -105,4 +108,6 @@ reset_to_defaults() {
     SOUND=false
     USB_VERSION="3.0"
     SNAPSHOT=true
+    MEDIA_MODE="auto"
+    MEDIA="disk"
 }

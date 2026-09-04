@@ -38,9 +38,15 @@ build_qemu_command() {
     # USB drive. cache=writeback avoids the O_DIRECT requirement of cache=none,
     # which fails on some filesystems/image files; fine for a throwaway test VM.
     # snapshot=on sends guest writes to a temporary overlay so the real
-    # device/image is never modified.
+    # device/image is never modified. A plain ISO 9660 image is presented as a
+    # USB CD-ROM (read-only by nature, so snapshot does not apply): attached
+    # as a disk it has no partition table and nothing would boot.
     local drive="file=$DISK,format=$FORMAT,cache=writeback,if=none,id=usb-drive"
-    [[ "$SNAPSHOT" == true ]] && drive+=",snapshot=on"
+    if [[ "$MEDIA" == "cdrom" ]]; then
+        drive+=",media=cdrom,readonly=on"
+    elif [[ "$SNAPSHOT" == true ]]; then
+        drive+=",snapshot=on"
+    fi
     qemu_cmd+=(-drive "$drive")
 
     # KVM if available
@@ -86,6 +92,25 @@ build_qemu_command() {
     qemu_cmd+=(-monitor "unix:$MONITOR_SOCK,server,nowait" -serial stdio)
 
     printf '%s\n' "${qemu_cmd[@]}"
+}
+
+# Human-readable media / snapshot descriptions shared by the TUI and the logs.
+media_label() {
+    if [[ "$MEDIA" == "cdrom" ]]; then
+        echo "USB CD-ROM (ISO 9660, El Torito)"
+    else
+        echo "USB disk"
+    fi
+}
+
+snapshot_label() {
+    if [[ "$MEDIA" == "cdrom" ]]; then
+        echo "n/a (CD-ROM is read-only)"
+    elif [[ "$SNAPSHOT" == true ]]; then
+        echo "on (target not modified)"
+    else
+        echo "OFF (guest may write to target)"
+    fi
 }
 
 # --- Target safety ---------------------------------------------------------
@@ -169,7 +194,7 @@ run_qemu_test() {
 
     clear
     log_info "=== $label STARTED ==="
-    log_info "Disk: $DISK ($FORMAT) — Mode: $BIOS_MODE — Snapshot: $SNAPSHOT"
+    log_info "Disk: $DISK ($FORMAT, $(media_label)) — Mode: $BIOS_MODE — Snapshot: $(snapshot_label)"
     log_info "Monitor: socat - UNIX-CONNECT:$MONITOR_SOCK"
     log_info "Log: $RUN_LOG"
     prepare_system_for_qemu "$DISK"
@@ -179,7 +204,7 @@ run_qemu_test() {
 
     {
         echo "# $SCRIPT_NAME v$VERSION — $label — $(date -Is)"
-        echo "# target=$DISK format=$FORMAT mode=$BIOS_MODE snapshot=$SNAPSHOT"
+        echo "# target=$DISK format=$FORMAT media=$MEDIA mode=$BIOS_MODE snapshot=$SNAPSHOT"
         echo "# cmd: $(shell_join "${qemu_cmd_array[@]}")"
         echo
     } > "$RUN_LOG"
@@ -205,8 +230,9 @@ confirm_and_run() {
     local summary="USB BOOT TEST CONFIGURATION\n\n"
     summary+="• Disk: $DISK\n"
     summary+="• Format: $FORMAT\n"
+    summary+="• Media: $(media_label)\n"
     summary+="• Mode: $BIOS_MODE\n"
-    summary+="• Snapshot: $([[ $SNAPSHOT == true ]] && echo "on (target not modified)" || echo "OFF (guest may write to target)")\n"
+    summary+="• Snapshot: $(snapshot_label)\n"
     summary+="• RAM: ${MEMORY}MB\n"
     summary+="• CPU: ${CORES}c/${THREADS}t/${SOCKETS}s\n"
     summary+="• USB: $USB_VERSION\n"

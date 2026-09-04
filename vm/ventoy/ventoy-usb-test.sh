@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: usb-boot-test
-# PKG_VERSION: 2.4.0
+# PKG_VERSION: 2.5.0
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -18,7 +18,9 @@
 #  .
 #  Features:
 #  - Interactive whiptail TUI or fully scriptable CLI (usb-boot-test /dev/sdX)
-#  - UEFI and BIOS/Legacy boot, dual test (UEFI then BIOS), auto-detect from ESP
+#  - UEFI and BIOS/Legacy boot, dual test (UEFI then BIOS), auto-detect from
+#    the EFI System Partition or the El Torito boot catalog
+#  - Plain ISO 9660 images boot as a USB CD-ROM, hybrid ISOs as a USB disk
 #  - Snapshot mode (default): the guest never writes to the USB/image
 #  - --dry-run prints the exact QEMU command line without running it
 #  - Per-run log file, QEMU monitor on a per-run unix socket
@@ -31,6 +33,11 @@
 # PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 #
 # Changelog:
+#   2.5.0 - Plain (non-hybrid) ISO 9660 images are attached as a USB CD-ROM
+#           instead of a disk, so they actually boot; boot mode auto-detection
+#           reads the El Torito catalog; --media auto|disk|cdrom; per-user
+#           run dir (unprivileged CLI failed to log after a sudo TUI run);
+#           README rewritten for the 2.x CLI
 #   2.4.0 - Non-interactive CLI with --dry-run; snapshot mode; unmount check for
 #           auto-mounted partitions; per-run log file; monitor on unix socket
 #           (no fixed port 4444); XDG config parsed as key=value (no source);
@@ -42,7 +49,7 @@
 set -euo pipefail
 
 readonly SCRIPT_NAME="USB Boot Tester"
-readonly VERSION="2.4.0"
+readonly VERSION="2.5.0"
 
 # Determine the directory where the script is located (resolving symlinks)
 SCRIPT_PATH="$(readlink -f "$0")"
@@ -54,7 +61,11 @@ readonly SCRIPT_DIR
 # Several of the variables below are consumed only by the modules under
 # usb-boot-test/*.sh that we source dynamically; they appear unused when this
 # file is linted in isolation, hence the SC2034 annotations.
-readonly RUN_DIR="/tmp/usb-boot-test"
+# The directory is per user: the TUI runs as root (sudo) while the CLI can run
+# unprivileged on image files, and a shared root-owned /tmp/usb-boot-test made
+# the unprivileged run fail to write its log.
+RUN_DIR="${TMPDIR:-/tmp}/usb-boot-test-$(id -un)"
+readonly RUN_DIR
 # shellcheck disable=SC2034
 readonly LOG_DIR="$RUN_DIR/logs"
 # shellcheck disable=SC2034  # consumed by ovmf_firmware_qemu_args in ovmf.sh
@@ -101,6 +112,11 @@ USB_VERSION="3.0"
 # Snapshot mode: guest writes go to a throwaway overlay, the USB/image is never
 # modified. Disable to test persistence features (Ventoy plugins, installers).
 SNAPSHOT=true
+# How the target is presented to the guest. MEDIA_MODE is the user's choice
+# (auto|disk|cdrom), MEDIA the effective value (disk|cdrom) computed by
+# refresh_media_type: plain ISO 9660 images become a USB CD-ROM.
+MEDIA_MODE="auto"
+MEDIA="disk"
 
 # CLI-only state
 CLI_MODE=false
@@ -222,6 +238,7 @@ show_help() {
     help_text+="Works with: Ventoy, Ubuntu ISOs, Windows, rescue disks, etc.\n\n"
     help_text+="USAGE:\n"
     help_text+="1. Select a USB device or image file (ISO, IMG, qcow2, VHD...)\n"
+    help_text+="   Plain ISOs boot as a USB CD-ROM, everything else as a USB disk\n"
     help_text+="2. Configure boot mode (UEFI/BIOS/Auto)\n"
     help_text+="3. Adjust system parameters if needed (RAM, CPU, VGA)\n"
     help_text+="4. Start the test (single mode or dual UEFI+BIOS)\n\n"
@@ -231,7 +248,7 @@ show_help() {
     help_text+="BOOT MODES:\n"
     help_text+="• UEFI: Modern, requires OVMF\n"
     help_text+="• BIOS: Legacy, for older systems\n"
-    help_text+="• Auto: Looks for an EFI System Partition on the disk\n\n"
+    help_text+="• Auto: EFI System Partition on disks, El Torito catalog on ISOs\n\n"
     help_text+="QEMU CONTROLS:\n"
     help_text+="• Ctrl+Alt+G: Release mouse\n"
     help_text+="• Ctrl+Alt+F: Fullscreen\n"
@@ -264,7 +281,8 @@ TARGET is a block device (/dev/sdX, requires root) or an image file
 Boot mode:
   --uefi                UEFI boot with OVMF
   --bios                BIOS / legacy boot
-  --auto                detect: UEFI if an EFI System Partition exists (default)
+  --auto                detect (default): UEFI if an EFI System Partition
+                        exists; for plain ISOs, from the El Torito catalog
 
 Virtual hardware:
   --ram MB              memory in MB                     (default: $MEMORY)
@@ -273,6 +291,10 @@ Virtual hardware:
   --usb 1.1|2.0|3.0     USB controller for the drive     (default: $USB_VERSION)
   --vga MODE            virtio | std | cirrus | qxl | none (default: $VGA_MODE)
   --format FMT          force disk format (raw, qcow2, vpc, vdi, vmdk)
+  --media auto|disk|cdrom
+                        present TARGET as a USB disk or a USB CD-ROM
+                        (default: auto — plain ISO 9660 images without a
+                        partition table become a CD-ROM, the rest a disk)
   --net                 enable user-mode network (e1000)
   --sound               enable Intel HDA audio
   --ovmf PATH           OVMF firmware file (OVMF.fd or OVMF_CODE*.fd)
@@ -292,6 +314,7 @@ Files:
   config   $CONFIG_FILE
   logs     $LOG_DIR/run-<timestamp>.log
   monitor  socat - UNIX-CONNECT:$RUN_DIR/monitor_<pid>.sock
+  (paths are per user: the TUI under sudo uses .../usb-boot-test-root)
 
 Examples:
   sudo $(basename "$0") /dev/sdb
@@ -318,6 +341,7 @@ parse_args() {
             --usb) USB_VERSION="${2:-}"; shift ;;
             --vga) VGA_MODE="${2:-}"; shift ;;
             --format) FORMAT="${2:-}"; CLI_FORMAT_SET=true; shift ;;
+            --media) MEDIA_MODE="${2:-}"; shift ;;
             --ovmf) DEFAULT_BIOS="${2:-}"; shift ;;
             --net) NETWORK=true ;;
             --sound) SOUND=true ;;
@@ -351,6 +375,7 @@ parse_args() {
     case "$VGA_MODE" in virtio|std|cirrus|qxl|none) ;; *) die "--vga must be virtio, std, cirrus, qxl or none" ;; esac
     case "$MACHINE_TYPE" in q35|pc|microvm) ;; *) die "--machine must be q35, pc or microvm" ;; esac
     case "$BIOS_MODE" in uefi|bios|auto) ;; *) die "boot mode must be uefi, bios or auto" ;; esac
+    case "$MEDIA_MODE" in auto|disk|cdrom) ;; *) die "--media must be auto, disk or cdrom" ;; esac
 }
 
 run_cli() {
@@ -364,21 +389,21 @@ run_cli() {
         die "qemu-system-x86_64 not found. Install qemu-system-x86."
     fi
 
-    # Disk format
+    # Disk format and media type (USB disk vs. USB CD-ROM for plain ISOs)
     if [[ "$CLI_FORMAT_SET" != true ]]; then
         FORMAT=$(detect_image_format "$DISK")
         [[ "$FORMAT" == "unknown" ]] && FORMAT="raw"
     fi
+    refresh_media_type
 
     # Boot mode: the CLI defaults to auto-detection (the TUI default is uefi).
     [[ "$CLI_BOOT_SET" == true ]] || BIOS_MODE="auto"
     local mode_note=""
     if [[ "$BIOS_MODE" == "auto" ]]; then
-        if BIOS_MODE=$(detect_boot_mode "$DISK"); then
-            mode_note="(auto: $([[ $BIOS_MODE == uefi ]] && echo "EFI System Partition found" || echo "MBR, no EFI partition"))"
-        else
-            mode_note="(auto: no partition table, defaulting to uefi)"
-        fi
+        local detected reason
+        detected=$(detect_boot_mode "$DISK") || true
+        read -r BIOS_MODE reason <<< "$detected"
+        mode_note="(auto: $reason)"
     fi
     if [[ "$BIOS_MODE" == "uefi" ]]; then
         ovmf_autodetect_default || true
@@ -414,8 +439,9 @@ run_cli() {
         readarray -t qemu_cmd_array < <(build_qemu_command)
         echo "# target:    $DISK"
         echo "# format:    $FORMAT"
+        echo "# media:     $MEDIA$([[ $MEDIA_MODE == auto ]] && echo " (auto)")"
         echo "# boot-mode: $BIOS_MODE $mode_note"
-        echo "# snapshot:  $SNAPSHOT"
+        echo "# snapshot:  $([[ $MEDIA == cdrom ]] && echo "n/a (cdrom is read-only)" || echo "$SNAPSHOT")"
         [[ "$BIOS_MODE" == "uefi" ]] && echo "# firmware:  $DEFAULT_BIOS"
         echo "# monitor:   socat - UNIX-CONNECT:$MONITOR_SOCK"
         shell_join "${qemu_cmd_array[@]}"

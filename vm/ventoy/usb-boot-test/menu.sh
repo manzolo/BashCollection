@@ -72,6 +72,7 @@ select_disk_menu() {
     DISK="$new_disk"
     FORMAT=$(detect_image_format "$DISK")
     [[ "$FORMAT" == "unknown" ]] && FORMAT="raw"
+    refresh_media_type
 
     if [[ -f "$DISK" ]]; then
         show_image_details_dialog "$DISK"
@@ -158,17 +159,17 @@ bios_menu() {
                     "Select a disk first, then run detection again." 8 55 || true
                 return 0
             fi
-            local detected
+            local detected reason
             if detected=$(detect_boot_mode "$DISK"); then
-                BIOS_MODE="$detected"
+                read -r BIOS_MODE reason <<< "$detected"
                 whiptail --title "Automatic Detection" --msgbox \
-                    "$(basename "$DISK"): $( [[ $detected == uefi ]] && echo "EFI System Partition found" || echo "MBR table, no EFI partition" )\n\nSelected mode: $BIOS_MODE" \
-                    10 55 || true
+                    "$(basename "$DISK"): $reason\n\nSelected mode: $BIOS_MODE" \
+                    10 60 || true
             else
-                BIOS_MODE="$detected"
+                read -r BIOS_MODE reason <<< "$detected"
                 whiptail --title "Automatic Detection" --msgbox \
-                    "No partition table found on $(basename "$DISK").\n\nDefaulting to: $BIOS_MODE" \
-                    10 55 || true
+                    "$(basename "$DISK"): $reason.\n\nDefaulting to: $BIOS_MODE" \
+                    10 60 || true
             fi
             ;;
     esac
@@ -177,22 +178,25 @@ bios_menu() {
 # --- Advanced options ------------------------------------------------------
 advanced_menu() {
     while true; do
-        local network_status sound_status snapshot_status
+        local network_status sound_status snapshot_status media_status
         [[ "$NETWORK" == true ]] && network_status="Enabled ✓" || network_status="Disabled ✗"
         [[ "$SOUND" == true ]] && sound_status="Enabled ✓" || sound_status="Disabled ✗"
         [[ "$SNAPSHOT" == true ]] && snapshot_status="ON (target never modified)" || snapshot_status="OFF (guest may write to target)"
+        media_status="$MEDIA"
+        [[ "$MEDIA_MODE" == "auto" ]] && media_status="$MEDIA (auto)"
 
         local choice
         choice=$(whiptail --title "Advanced Options" \
             --menu "Additional configurations:" \
-            17 70 7 \
+            18 70 8 \
             "1" "VGA: $VGA_MODE" \
             "2" "Network: $network_status" \
             "3" "Audio: $sound_status" \
             "4" "Snapshot: $snapshot_status" \
-            "5" "QEMU Monitor info" \
-            "6" "OVMF Management" \
-            "7" "Back to main menu" \
+            "5" "Media: $media_status" \
+            "6" "QEMU Monitor info" \
+            "7" "OVMF Management" \
+            "8" "Back to main menu" \
             3>&1 1>&2 2>&3) || true
 
         case $choice in
@@ -218,12 +222,20 @@ advanced_menu() {
                 fi
                 ;;
             5)
+                prompt_choice MEDIA_MODE "Media Type" \
+                    "How the target is presented to the guest:\n\nauto: plain ISO 9660 images (no partition table) become a\nUSB CD-ROM, everything else a USB disk." 16 70 3 \
+                    "auto"  "Detect from the image (recommended)" \
+                    "disk"  "USB disk (partitioned media, hybrid ISOs)" \
+                    "cdrom" "USB CD-ROM (El Torito boot, read-only)"
+                refresh_media_type
+                ;;
+            6)
                 whiptail --title "QEMU Monitor" --msgbox \
                     "While a test runs, the QEMU monitor listens on:\n\n$MONITOR_SOCK\n\nConnect with:\n  socat - UNIX-CONNECT:$MONITOR_SOCK\n\nUseful commands: info status, system_reset, quit" \
                     14 72 || true
                 ;;
-            6) ovmf_management_menu ;;
-            7|"") break ;;
+            7) ovmf_management_menu ;;
+            8|"") break ;;
         esac
     done
 }

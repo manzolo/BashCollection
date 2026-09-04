@@ -1,601 +1,297 @@
-# USB Boot Tester (usb-boot-test)
+# USB Boot Tester (`usb-boot-test`)
 
-Interactive QEMU-based tool for testing bootable USB drives and disk images without rebooting your system.
-
-## Overview
-
-**usb-boot-test** (formerly `ventoy-usb-test`) is a comprehensive TUI tool for testing bootable USB devices and disk images in a QEMU virtual machine. While originally designed for Ventoy USB drives, it works with **any bootable media** including Ubuntu ISOs, Windows installers, rescue disks, and more.
-
-## Why Use This Tool?
-
-Testing bootable USB drives typically requires:
-- Rebooting your computer
-- Changing BIOS settings
-- Risk of data loss if wrong device selected
-- Time-consuming process
-
-**This tool eliminates all those issues** by:
-- Testing in a safe QEMU virtual machine
-- No reboot required
-- Quick configuration changes
-- Support for both UEFI and BIOS modes
-- Saves your time and system state
-
-## Features
-
-### Boot Mode Testing
-- **UEFI Boot**: Modern UEFI boot with OVMF firmware
-- **BIOS/Legacy Boot**: Traditional MBR/BIOS boot
-- **Dual Mode Test**: Test both UEFI and BIOS in sequence
-- **Auto-Detection**: Automatically detects boot mode from disk partitions
-
-### Media Support
-- **Physical USB Devices**: Test /dev/sdb, /dev/sdc, etc.
-- **Disk Images**: Support for qcow2, raw, img, iso formats
-- **Ventoy USB**: Optimized for Ventoy multi-boot USB drives
-- **Any Bootable Media**: Ubuntu, Windows, rescue disks, etc.
-
-### System Configuration
-- **RAM Allocation**: Configure memory (512MB to 8GB+)
-- **CPU Settings**: Cores, threads, sockets configuration
-- **VGA Modes**: virtio, std, qxl, vmware, cirrus
-- **USB Version**: USB 2.0, 3.0 support
-- **Network Emulation**: Optional network device
-- **Sound Emulation**: Optional audio device
-
-### Advanced Features
-- **Format Detection**: Automatic detection of disk format
-- **OVMF Management**: Automatic OVMF firmware detection and installation
-- **Configuration Profiles**: Save and load test configurations
-- **Diagnostic Tools**: System verification and troubleshooting
-- **KVM Acceleration**: Hardware acceleration when available
-- **QEMU Monitor**: Telnet access on port 4444
-- **Detailed Logging**: Logs saved to /tmp/ventoy_test_logs
-
-### User Experience
-- **Interactive TUI**: Beautiful whiptail-based interface with emojis
-- **File Browser**: Easy disk/image selection
-- **Real-time Validation**: Immediate feedback on configurations
-- **Help System**: Built-in guide and documentation
-- **Safe Defaults**: Sensible default values
-
-## Usage
-
-### Basic Usage
+Boot a USB stick or a disk image in a QEMU virtual machine, in UEFI or BIOS
+mode, without rebooting the host. Interactive whiptail TUI or fully
+scriptable CLI. Formerly `ventoy-usb-test`; the old name still works.
 
 ```bash
-# Interactive mode (recommended)
-sudo usb-boot-test
-
-# Legacy command (still works)
-sudo ventoy-usb-test
+sudo usb-boot-test /dev/sdb                  # boot the stick, auto-detect UEFI/BIOS
+usb-boot-test ~/Downloads/ubuntu-24.04.iso   # boot an ISO, no root needed
+usb-boot-test --dry-run --bios ventoy.img    # just print the QEMU command line
+sudo usb-boot-test                           # interactive TUI
 ```
 
-### Quick Start Guide
+## What it does
 
-1. **Launch the tool**
-   ```bash
-   sudo usb-boot-test
-   ```
+- **Any bootable media**: physical USB devices, and image files in raw/IMG,
+  ISO, qcow2, VHD/`.vtoy`, vdi and vmdk format (format auto-detected with
+  `qemu-img`).
+- **UEFI and BIOS**: UEFI through OVMF (combined `OVMF.fd` or split
+  `OVMF_CODE`/`OVMF_VARS` layouts, with a private per-run VARS copy), legacy
+  BIOS through SeaBIOS, or both back to back (dual test).
+- **Boot-mode auto-detection**: partitioned media are UEFI if they carry an
+  EFI System Partition (GPT *or* MBR, so Ventoy sticks are detected
+  correctly); plain ISO images are classified from their El Torito boot
+  catalog (BIOS-only, UEFI-only or both).
+- **ISO images boot as a USB CD-ROM**: a plain ISO 9660 image has no
+  partition table, so attached as a USB *disk* nothing would boot. It is
+  presented as a USB CD-ROM instead. Hybrid ISOs (isohybrid, most Linux
+  installers) keep being tested as a disk, which is what you get after
+  `dd`-ing them onto a stick.
+- **The target is never modified**: snapshot mode is on by default, so the
+  guest writes to a throwaway overlay. Turn it off only to test persistence
+  (installers, Ventoy plugins). CD-ROMs are read-only by nature.
+- **Refuses to hurt the host**: a device that carries mounted system
+  filesystems is rejected; auto-mounted partitions of the target must be
+  unmounted first (the TUI offers to, the CLI needs `--unmount`).
+- **Reproducible**: `--dry-run` prints the exact QEMU command line, every run
+  writes a log, the QEMU monitor listens on a per-run unix socket so several
+  instances can coexist.
 
-2. **Select your media**
-   - Choose option 1: "Disk/USB"
-   - Select either:
-     - Physical USB device (/dev/sdb, etc.)
-     - Disk image file (.iso, .img, .qcow2, etc.)
+## Installation
 
-3. **Configure boot mode**
-   - Choose option 2: "Boot"
-   - Select UEFI or BIOS
-   - Or use "Auto" for automatic detection
-
-4. **Start the test**
-   - Choose option 7: "START SINGLE TEST!"
-   - Or option 8: "DUAL TEST (UEFI+BIOS)" to test both modes
-
-5. **Use the booted system**
-   - Test your bootable media
-   - Ctrl+Alt+G to release mouse
-   - Ctrl+C to exit when done
-
-### Menu Options
-
-#### 1. Disk/USB Selection
-- Browse for USB devices
-- Select disk image files
-- Shows device size and information
-- Validates selected media
-
-#### 2. Boot Mode Configuration
-- **UEFI**: Modern UEFI boot (requires OVMF)
-- **BIOS**: Legacy BIOS/MBR boot
-- **Auto**: Detect from partition table
-- Firmware validation and status
-
-#### 3. System Configuration
-- **Memory**: 512MB to 8GB+ RAM
-- **CPU Cores**: 1-16 cores
-- **CPU Threads**: 1-2 per core
-- **CPU Sockets**: 1-4 sockets
-
-#### 4. Advanced Settings
-- **VGA Mode**: Graphics adapter type
-  - virtio (recommended for Linux)
-  - std (standard VGA)
-  - qxl (for SPICE)
-  - vmware (VMware compatibility)
-  - cirrus (legacy)
-- **USB Version**: 2.0 or 3.0
-- **Network**: Enable/disable network adapter
-- **Sound**: Enable/disable audio device
-- **Machine Type**: pc or q35
-
-#### 5. Diagnostics & System Info
-- Verify QEMU installation
-- Check OVMF firmware
-- Test KVM acceleration
-- View system information
-- Disk format detection
-
-#### 6. Configuration Management
-- Save current configuration
-- Load saved configurations
-- Export/import settings
-- Reset to defaults
-
-#### 7. START SINGLE TEST
-- Launches QEMU with current settings
-- Tests in selected boot mode
-- Shows QEMU command used
-
-#### 8. DUAL TEST (UEFI+BIOS)
-- Tests UEFI mode first
-- Then tests BIOS mode
-- Useful for multi-mode media validation
-
-#### 9. Help
-- User guide
-- QEMU controls
-- Troubleshooting tips
-- Keyboard shortcuts
-
-## Common Use Cases
-
-### 1. Test Ventoy USB Drive
-
-**Scenario**: Created a Ventoy USB with multiple ISOs, want to verify it boots.
+From this repository:
 
 ```bash
-sudo usb-boot-test
-
-# In menu:
-# 1. Select Disk/USB → Choose /dev/sdb (your Ventoy USB)
-# 2. Select Boot → Choose "UEFI" or "Auto"
-# 3. START SINGLE TEST
-# 4. Verify Ventoy menu appears and ISOs are listed
+sudo ./menage_scripts.sh install      # installs usb-boot-test and ventoy-usb-test
 ```
 
-### 2. Test Ubuntu ISO Before Burning to USB
-
-**Scenario**: Downloaded Ubuntu ISO, want to test before creating bootable USB.
-
-```bash
-sudo usb-boot-test
-
-# In menu:
-# 1. Select Disk/USB → Browse to ubuntu-22.04.iso
-# 2. Boot mode will auto-detect
-# 3. START SINGLE TEST
-# 4. Test Ubuntu live environment
-```
-
-### 3. Verify UEFI and BIOS Compatibility
-
-**Scenario**: Created bootable media that should work on both old and new computers.
+Dependencies: `qemu-system-x86`, `whiptail`, `jq`, `util-linux`. Recommended:
+`ovmf` (UEFI), `qemu-utils` (format detection), `socat` (monitor access).
 
 ```bash
-sudo usb-boot-test
-
-# In menu:
-# 1. Select your USB device or ISO
-# 2. Choose DUAL TEST (UEFI+BIOS)
-# 3. First UEFI window opens → test it
-# 4. Close it → BIOS window opens → test it
-# 5. Verify both modes work correctly
-```
-
-### 4. Test Windows Installer USB
-
-**Scenario**: Created Windows 10/11 bootable USB, need to verify.
-
-```bash
-sudo usb-boot-test
-
-# In menu:
-# 1. Select Disk/USB → Your Windows USB
-# 2. Select Boot → UEFI (Windows 10/11 prefers UEFI)
-# 3. System → Increase RAM to 4096MB
-# 4. START SINGLE TEST
-# 5. Verify Windows installer starts
-```
-
-### 5. Test with Different Hardware Configurations
-
-**Scenario**: Need to test how USB boots with different RAM/CPU settings.
-
-```bash
-sudo usb-boot-test
-
-# Test 1: Low-end system
-# System → RAM: 1024MB, CPU: 1 core
-# START SINGLE TEST
-
-# Test 2: High-end system
-# System → RAM: 8192MB, CPU: 4 cores
-# START SINGLE TEST
-```
-
-### 6. Debug Boot Problems
-
-**Scenario**: USB won't boot on some computers, need to troubleshoot.
-
-```bash
-sudo usb-boot-test
-
-# In menu:
-# 1. Diagnostics → Run all checks
-# 2. Check disk format detection
-# 3. Try different boot modes
-# 4. Try different VGA modes
-# 5. Check logs in /tmp/ventoy_test_logs
-```
-
-## Requirements
-
-### Required
-- bash >= 4.0
-- qemu-system-x86 (QEMU virtualization)
-- Root/sudo privileges
-
-### Recommended
-- ovmf (UEFI firmware for QEMU)
-- whiptail (TUI interface)
-- KVM kernel module (hardware acceleration)
-
-### Optional
-- telnet (QEMU monitor access)
-
-### Installation of Dependencies
-
-```bash
-# Ubuntu/Debian
-sudo apt install qemu-system-x86 ovmf whiptail
-
-# Fedora/RHEL
-sudo dnf install qemu-system-x86 edk2-ovmf newt
-
-# Arch Linux
-sudo pacman -S qemu ovmf newt
-```
-
-### Enable KVM (for acceleration)
-
-```bash
-# Check if KVM is available
-lsmod | grep kvm
-
-# If not loaded, load the module
-sudo modprobe kvm
-sudo modprobe kvm_intel  # For Intel CPUs
-# OR
-sudo modprobe kvm_amd    # For AMD CPUs
-
-# Add user to kvm group (optional)
-sudo usermod -aG kvm $USER
-```
-
-## OVMF Firmware
-
-UEFI boot requires OVMF firmware. The script will:
-1. Auto-detect OVMF in common locations
-2. Offer to install if not found
-3. Provide manual installation instructions
-
-**Common OVMF locations**:
-- `/usr/share/OVMF/OVMF.fd`
-- `/usr/share/ovmf/OVMF.fd`
-- `/usr/share/edk2-ovmf/x64/OVMF.fd`
-- `/usr/share/qemu/OVMF.fd`
-
-**Manual installation**:
-```bash
-# Ubuntu/Debian
-sudo apt install ovmf
-
-# Fedora/RHEL
-sudo dnf install edk2-ovmf
-
+# Debian / Ubuntu
+sudo apt install qemu-system-x86 ovmf whiptail jq qemu-utils socat
+# Fedora
+sudo dnf install qemu-system-x86 edk2-ovmf newt jq qemu-img socat
 # Arch
-sudo pacman -S edk2-ovmf
+sudo pacman -S qemu-full edk2-ovmf libnewt jq socat
 ```
 
-## Configuration Files
+KVM acceleration is used automatically when `/dev/kvm` is accessible
+(`sudo usermod -aG kvm $USER`, then log in again).
 
-### Save Configuration
+## CLI mode
 
-Configurations are saved to `~/.ventoy_test_config` with:
-- Last used disk/USB
-- Boot mode preference
-- RAM and CPU settings
-- VGA and USB settings
-- Network and sound preferences
+Passing a target (or `--dry-run`) selects the non-interactive mode. Root is
+required only for block devices.
 
-### Manual Configuration
+```
+usb-boot-test [OPTIONS] TARGET
+usb-boot-test --dry-run [OPTIONS] TARGET
+```
 
-You can edit `~/.ventoy_test_config` directly:
+| Option | Meaning | Default |
+|--------|---------|---------|
+| `--uefi` / `--bios` / `--auto` | boot mode | `auto` |
+| `--media auto\|disk\|cdrom` | present TARGET as a USB disk or a USB CD-ROM | `auto` |
+| `--ram MB` | guest memory | 2048 |
+| `--cores N` | guest CPU cores | 4 |
+| `--machine q35\|pc\|microvm` | QEMU machine type | `q35` |
+| `--usb 1.1\|2.0\|3.0` | USB controller the drive hangs off | `3.0` |
+| `--vga virtio\|std\|cirrus\|qxl\|none` | video; `none` is headless with the guest serial console on the terminal | `virtio` |
+| `--format FMT` | force the disk format (raw, qcow2, vpc, vdi, vmdk) | detected |
+| `--net` / `--sound` | user-mode e1000 network / Intel HDA audio | off |
+| `--ovmf PATH` | OVMF firmware (`OVMF.fd` or `OVMF_CODE*.fd`) | auto-detected |
+| `--no-snapshot` | let the guest write to TARGET | snapshot on |
+| `--unmount` | unmount auto-mounted partitions of TARGET before booting | refuse |
+| `-n`, `--dry-run` | print the QEMU command line and exit | |
+| `-V`, `--version` / `-h`, `--help` | | |
+
+Exit status: QEMU's when a VM was run, `2` for usage or precondition errors
+(target missing, OVMF missing, mounted partitions, ...).
+
+### Examples
 
 ```bash
-DISK="/dev/sdb"
-BIOS_MODE="uefi"
+# Ventoy stick, UEFI then BIOS, with network
+sudo usb-boot-test --uefi --net /dev/sdb
+sudo usb-boot-test --bios --net /dev/sdb
+
+# Windows installer USB: more RAM, unmount whatever the desktop auto-mounted
+sudo usb-boot-test --uefi --ram 4096 --unmount /dev/sdc
+
+# Rescue ISO, headless, guest serial console on the terminal (Ctrl+C quits)
+usb-boot-test --vga none ~/iso/systemrescue.iso
+
+# Test persistence: the guest really writes to the image
+usb-boot-test --no-snapshot ~/vm/ventoy-test.img
+
+# See what would run, e.g. to copy the command into a script
+usb-boot-test --dry-run --bios --ram 1024 --usb 2.0 ~/images/freedos.img
+```
+
+`--dry-run` output looks like:
+
+```
+# target:    /home/me/iso/systemrescue.iso
+# format:    raw
+# media:     cdrom (auto)
+# boot-mode: uefi (auto: ISO 9660, El Torito UEFI+BIOS boot entries)
+# snapshot:  n/a (cdrom is read-only)
+# firmware:  /usr/share/OVMF/OVMF.fd
+# monitor:   socat - UNIX-CONNECT:/tmp/usb-boot-test-me/monitor_12345.sock
+qemu-system-x86_64 -name USB\ Boot\ Test -m 2048 -smp cores=4,threads=1,sockets=1 -machine q35 ...
+```
+
+## Interactive TUI
+
+```bash
+sudo usb-boot-test
+```
+
+Root is needed for raw device access; X11 credentials of the invoking user
+are inherited so the QEMU window opens on your desktop (the grant is revoked
+on exit).
+
+| Menu | What you set |
+|------|--------------|
+| **Disk/USB** | pick a removable device from the detected list, browse for an image file, or type a path. Format and media type are detected on selection. |
+| **Boot** | `uefi`, `bios`, or `auto` (runs detection on the selected target and tells you why it chose what it chose). |
+| **System** | RAM, cores, threads, sockets, machine type. |
+| **Advanced** | VGA, network, audio, snapshot on/off, media type (auto/disk/cdrom), USB controller version, QEMU monitor info, OVMF management. |
+| **Diagnostics** | hardware info, KVM test, dependency check. |
+| **Configuration** | save / load / reset. Saved automatically before each run. |
+| **START SINGLE TEST** | summary, confirmation, unmount check, run. |
+| **DUAL TEST** | UEFI run, then BIOS run, on the same target. |
+
+ESC on the main menu asks before quitting; ESC in a sub-dialog just goes back
+without changing anything.
+
+### Inside the VM
+
+| Keys | Action |
+|------|--------|
+| Ctrl+Alt+G | release the mouse |
+| Ctrl+Alt+F | toggle fullscreen |
+| Ctrl+C in the terminal | terminate QEMU |
+
+## Files
+
+| What | Where |
+|------|-------|
+| configuration | `~/.config/usb-boot-test/config` (of the invoking user, also under sudo) |
+| run logs | `/tmp/usb-boot-test-<user>/logs/run-<timestamp>.log` |
+| QEMU monitor | `/tmp/usb-boot-test-<user>/monitor_<pid>.sock` |
+| OVMF VARS copy | `/tmp/usb-boot-test-<user>/OVMF_VARS_<pid>.fd` (deleted on exit) |
+
+`<user>` is the user QEMU runs as: your name for unprivileged CLI runs,
+`root` for the TUI and for block devices. The paths for the current run are
+printed at start-up and in `--help`.
+
+The configuration file is plain `KEY="value"` lines and is parsed, not
+sourced. Unknown keys and invalid values are ignored with a warning. A
+`~/.ventoy_test_config` from 1.x/2.2 is migrated automatically.
+
+```
 MEMORY="2048"
 CORES="4"
+THREADS="1"
+SOCKETS="1"
+MACHINE_TYPE="q35"
+DISK="/dev/sdb"
+FORMAT="raw"
+BIOS_MODE="uefi"
 VGA_MODE="virtio"
-USB_VERSION="3.0"
-NETWORK=true
+NETWORK=false
 SOUND=false
+USB_VERSION="3.0"
+SNAPSHOT=true
+MEDIA_MODE="auto"
 ```
 
-## QEMU Controls
-
-When the virtual machine is running:
-
-| Key Combination | Action |
-|----------------|--------|
-| Ctrl+Alt+G | Release mouse from VM window |
-| Ctrl+Alt+F | Toggle fullscreen |
-| Ctrl+C | Terminate emulation |
-| Ctrl+Alt+1 | Switch to VGA display |
-| Ctrl+Alt+2 | Switch to QEMU monitor |
-
-### QEMU Monitor
-
-Access the QEMU monitor via telnet:
+### QEMU monitor
 
 ```bash
-telnet localhost 4444
+socat - UNIX-CONNECT:/tmp/usb-boot-test-root/monitor_<pid>.sock
 ```
 
-**Useful commands**:
-- `info status` - VM status
-- `info registers` - CPU registers
-- `info block` - Block devices
-- `savevm snapshot1` - Save snapshot
-- `loadvm snapshot1` - Load snapshot
-- `quit` - Exit QEMU
+Useful commands: `info status`, `info block`, `info usb`, `system_reset`,
+`quit`.
 
-## Format Detection
+## How detection works
 
-The tool automatically detects:
-- **Disk Format**: raw, qcow2, vdi, vmdk, vhdx
-- **Partition Table**: GPT, MBR, hybrid
-- **Boot Partitions**: EFI System Partition, BIOS boot
-- **File Systems**: FAT32, NTFS, ext4, etc.
+**Format** — `qemu-img info`, with VHD/`.vtoy` files probed as `vpc` first
+(their footer is easy to misdetect); extension as a last resort; block
+devices are always `raw`.
 
-## Modular Architecture
+**Media** (`--media auto`) — a regular file with an ISO 9660 primary volume
+descriptor and *no* MBR boot signature (`0x55AA` at offset 510) is a CD-ROM.
+Everything else is a disk. Only raw images can be ISOs; qcow2 & co. are
+always disks.
 
-The script uses a modular design:
+**Boot mode** (`--auto`) —
 
-```
-utils/ventoy/
-├── ventoy-usb-test.sh          # Main script
-└── ventoy-usb-test/            # Helper modules
-    ├── cache.sh                # Configuration caching
-    ├── checks.sh               # System checks
-    ├── config.sh               # Configuration management
-    ├── dependencies.sh         # Dependency verification
-    ├── detect.sh               # Device/format detection
-    ├── format-detection.sh     # Advanced format detection
-    ├── log.sh                  # Logging functions
-    ├── menu.sh                 # TUI menus
-    ├── omvf.sh                 # OVMF management
-    ├── qemu.sh                 # QEMU command building
-    └── utils.sh                # Utility functions
-```
+| Target | Result |
+|--------|--------|
+| partition table with an EFI System Partition (GPT or MBR) | `uefi` |
+| GPT without ESP | `uefi` |
+| MBR without ESP | `bios` |
+| plain ISO with El Torito UEFI entry (with or without a BIOS one) | `uefi` |
+| plain ISO with El Torito BIOS entry only | `bios` |
+| plain ISO without boot catalog, unpartitioned image | `uefi` (nothing better known) |
+
+The TUI's *Boot → auto* and the CLI's dry-run header both print the reason.
 
 ## Troubleshooting
 
-### OVMF firmware not found
+**"OVMF firmware not found"** — `sudo apt install ovmf` (or `edk2-ovmf`), or
+pass `--ovmf /path/to/OVMF_CODE.fd`. The TUI can install it from
+*Advanced → OVMF Management*.
 
-**Problem**: UEFI mode fails with "OVMF not found".
+**"Partitions of /dev/sdX are mounted"** — the desktop auto-mounted the
+stick. Pass `--unmount`, or let the TUI unmount it, or `udisksctl unmount -b
+/dev/sdX1`.
 
-**Solution**:
-```bash
-# Install OVMF
-sudo apt install ovmf
+**"carries mounted system filesystems ... Refusing"** — you picked the disk
+the host runs from. There is no override on purpose.
 
-# Or specify custom path in Diagnostics menu
+**No bootable device / "Boot failed"** — try the other boot mode; a stick
+made for UEFI-only will not boot in BIOS mode and vice versa. Run
+`--dry-run` to see what detection concluded. If an ISO was written with a
+hybrid MBR but the hybrid part is broken, `--media cdrom` boots it through
+El Torito instead.
+
+**Black window** — give it 30 s; try `--vga std`; check the run log for
+QEMU warnings. With `--vga none` the guest's serial console is on your
+terminal, which is the fastest way to see kernel output.
+
+**GTK "Authorization required" under sudo** — the tool grants root access to
+your X server with `xhost`; make sure `xhost` (package `x11-xserver-utils`)
+is installed and you run from a terminal inside the graphical session.
+
+**Slow** — check `Diagnostics → KVM Test`; without `/dev/kvm` access QEMU
+falls back to TCG emulation.
+
+**`--machine microvm`** has no PCI bus, so the USB controller cannot be
+attached; use `q35` or `pc` for USB boot tests.
+
+## Layout
+
+```
+vm/ventoy/
+├── ventoy-usb-test.sh           # entry point: globals, CLI parsing, main menu
+└── usb-boot-test/
+    ├── checks.sh                # TUI start-up checks
+    ├── config.sh                # KEY="value" config load/save/migrate
+    ├── dependencies.sh          # runtime dependency check + install offer
+    ├── detect.sh                # USB device list, media type, El Torito, boot mode
+    ├── format-detection.sh      # disk image format detection, file browser
+    ├── log.sh                   # coloured log helpers
+    ├── menu.sh                  # whiptail menus
+    ├── ovmf.sh                  # OVMF discovery, pflash/-bios args, install/compile
+    ├── qemu.sh                  # QEMU command line, target safety, run
+    ├── utils.sh                 # dual test, KVM test
+    └── x11.sh                   # X11 access for root under sudo
 ```
 
-### KVM not available
-
-**Problem**: Warning about KVM acceleration.
-
-**Solution**:
-```bash
-# Check virtualization support
-egrep -c '(vmx|svm)' /proc/cpuinfo
-# Should be > 0
-
-# Load KVM module
-sudo modprobe kvm_intel  # or kvm_amd
-
-# Check if loaded
-lsmod | grep kvm
-```
-
-### Permission denied on /dev/kvm
-
-**Problem**: Cannot access KVM device.
-
-**Solution**:
-```bash
-# Fix permissions
-sudo chmod 666 /dev/kvm
-
-# Or add user to kvm group
-sudo usermod -aG kvm $USER
-# Log out and back in
-```
-
-### USB device busy
-
-**Problem**: Selected USB is in use.
-
-**Solution**:
-```bash
-# Unmount all partitions
-sudo umount /dev/sdb*
-
-# Or select a different device
-```
-
-### Disk image not bootable
-
-**Problem**: QEMU shows "No bootable device".
-
-**Solution**:
-1. Check if ISO/image is actually bootable
-2. Try different boot mode (UEFI vs BIOS)
-3. Run Diagnostics → Disk format detection
-4. Verify partition table with: `sudo fdisk -l /path/to/image`
-
-### Black screen on boot
-
-**Problem**: QEMU window is black.
-
-**Solution**:
-1. Wait 30 seconds (may be loading)
-2. Try different VGA mode (Advanced → VGA Mode)
-3. Check QEMU monitor (telnet localhost 4444)
-4. Increase RAM if low
-
-### Very slow performance
-
-**Problem**: VM is extremely slow.
-
-**Solution**:
-1. Enable KVM acceleration (see above)
-2. Increase CPU cores
-3. Increase RAM
-4. Use virtio VGA mode
-5. Close other applications
-
-## Advanced Usage
-
-### Custom QEMU Parameters
-
-The tool builds QEMU commands that look like:
+The functional test in `tests/usb-boot-test/test.sh` exercises the CLI in
+`--dry-run` mode against synthetic GPT/MBR/hybrid images and ISO 9660 files
+(with and without El Torito catalogs); it needs neither root nor QEMU.
 
 ```bash
-qemu-system-x86_64 \
-    -enable-kvm \
-    -m 2048 \
-    -smp cores=4,threads=1,sockets=1 \
-    -machine q35 \
-    -bios /usr/share/OVMF/OVMF.fd \
-    -drive file=/dev/sdb,format=raw,if=none,id=usb1 \
-    -device usb-storage,drive=usb1 \
-    -vga virtio \
-    -monitor telnet:localhost:4444,server,nowait
+PKG_BIN=./vm/ventoy/ventoy-usb-test.sh tests/usb-boot-test/test.sh
 ```
 
-### Testing Multiple USB Devices
+## Changelog
 
-```bash
-# Test each USB drive sequentially
-for usb in /dev/sdb /dev/sdc /dev/sdd; do
-    echo "Testing $usb..."
-    # Select device in menu and test
-done
-```
-
-### Automated Testing (Advanced)
-
-For scripting, you can configure then run:
-
-```bash
-# Set up config file
-cat > ~/.ventoy_test_config << EOF
-DISK="/dev/sdb"
-BIOS_MODE="uefi"
-MEMORY="2048"
-CORES="2"
-EOF
-
-# Run with saved config
-sudo usb-boot-test
-```
-
-## Safety Features
-
-- **Read-Only Access**: USB devices are opened read-only by default
-- **No Write Risk**: Testing doesn't modify your bootable media
-- **Isolated Environment**: Runs in safe QEMU VM
-- **Validation**: Checks device/file existence before starting
-- **Error Handling**: Comprehensive error checking
-- **Logging**: Detailed logs for troubleshooting
-
-## Best Practices
-
-1. **Always use latest QEMU** for best compatibility
-2. **Install OVMF** for UEFI testing
-3. **Enable KVM** for better performance
-4. **Test both modes** (UEFI and BIOS) for maximum compatibility
-5. **Save configurations** for frequently tested media
-6. **Check diagnostics** before reporting issues
-7. **Increase RAM** for Windows and resource-heavy ISOs
-8. **Use virtio VGA** for best Linux performance
-
-## Comparison with Real Hardware Testing
-
-| Aspect | Real Hardware | usb-boot-test |
-|--------|--------------|---------------|
-| Reboot required | ✅ Yes | ❌ No |
-| BIOS changes | ✅ Yes | ❌ No |
-| Time per test | 5-10 minutes | 30 seconds |
-| Risk of data loss | ⚠️ Medium | ✅ None |
-| Both UEFI/BIOS | Sequential reboots | ✅ Quick switch |
-| Hardware acceleration | ✅ Full | ✅ KVM |
-| Config changes | Slow (reboot) | ✅ Instant |
-| Multi-device testing | Very slow | ✅ Fast |
-
-## Logs
-
-Logs are saved to `/tmp/ventoy_test_logs/`:
-
-```bash
-# View latest log
-ls -lt /tmp/ventoy_test_logs/ | head
-
-# Check for errors
-grep -i error /tmp/ventoy_test_logs/*.log
-
-# Monitor in real-time
-tail -f /tmp/ventoy_test_logs/ventoy_test_*.log
-```
-
-## Name Change Notice
-
-This tool was previously called `ventoy-usb-test`. It has been renamed to `usb-boot-test` to better reflect its generic bootable media testing capabilities.
-
-**Both commands work**:
-- `usb-boot-test` (new, recommended)
-- `ventoy-usb-test` (legacy, still supported)
-
-## See Also
-
-- [VM Management Tools](../../vm/README.md) - For VM disk operations
-- [VM Clone](../../vm/README.md#vm-clone) - For VM cloning with QEMU
-- QEMU Documentation: https://www.qemu.org/docs/master/
-- OVMF Project: https://github.com/tianocore/tianocore.github.io/wiki/OVMF
-- Ventoy: https://www.ventoy.net/
+- **2.5.0** — plain ISO 9660 images boot as a USB CD-ROM (they never booted
+  as a disk); boot-mode auto-detection reads the El Torito catalog;
+  `--media auto|disk|cdrom`; per-user run directory so unprivileged CLI runs
+  can log after a sudo TUI run; README rewritten.
+- **2.4.0** — non-interactive CLI with `--dry-run`; snapshot mode; unmount
+  guard; per-run logs; monitor on a unix socket; XDG config parsed as
+  key=value.
+- **2.3.0** — headless mode, ESC handling, dual-test state and ESP-based boot
+  detection fixes.
+- **2.2.x** — modular rewrite, OVMF management, format detection.
