@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: ssh-manager
-# PKG_VERSION: 2.7.7
+# PKG_VERSION: 2.8.0
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -24,7 +24,7 @@
 # PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
 # Enhanced SSH Manager
-# Version: 2.6.2 - Replace pause_for_enter with pause_for_key (any key to continue)
+# Version: 2.8.0 - Add "sshfs CONNECTION-NAME" command (SSHFS + Midnight Commander from CLI)
 
 # Get script directory for module loading
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -36,7 +36,7 @@ export CONFIG_FILE="$CONFIG_DIR/config.json"
 # shellcheck disable=SC2034
 export LOG_FILE="$CONFIG_DIR/ssh-manager.log"
 # shellcheck disable=SC2034
-export VERSION="2.7.7"
+export VERSION="2.8.0"
 
 # Source all modules
 for module in "$SCRIPT_DIR/ssh-manager/"*.sh; do
@@ -91,7 +91,20 @@ main() {
 
 # Run if script is called directly
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    case "${1:-}" in
+    _direct_action="ssh"
+    if [[ "${1:-}" == "sshfs" ]]; then
+        if [[ $# -ne 2 || -z "${2:-}" ]]; then
+            echo "Usage: $(basename "$0") sshfs CONNECTION-NAME" >&2
+            exit 1
+        fi
+        _direct_action="sshfs-mc"
+        shift
+    fi
+
+    # Treat the SSHFS argument as a profile name, even for names like 'list'.
+    _command="${1:-}"
+    [[ "$_direct_action" == "sshfs-mc" ]] && _command="__direct_connection__"
+    case "$_command" in
         -h|--help)
             echo "Usage: $(basename "$0") [OPTIONS] [CONNECTION-NAME]"
             echo ""
@@ -102,6 +115,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
             echo ""
             echo "Commands:"
             echo "  list               List all saved connections"
+            echo "  sshfs CONNECTION-NAME  Mount via SSHFS and open Midnight Commander; unmount on exit"
             echo "  CONNECTION-NAME    Connect directly (partial match; fzf picker if ambiguous)"
             echo ""
             echo "Run without arguments to launch the interactive menu."
@@ -134,7 +148,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
             _fuzzy_status=$?
             case $_fuzzy_status in
                 0)
-                    execute_ssh_action "ssh" "$_fuzzy_matches"
+                    execute_ssh_action "$_direct_action" "$_fuzzy_matches"
                     exit $?
                     ;;
                 1|2)
@@ -152,7 +166,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
                             --no-multi)
                         [[ -z "$_selected" ]] && exit 1
                         _sel_idx=$(echo "$_selected" | cut -f1)
-                        execute_ssh_action "ssh" "$_sel_idx"
+                        execute_ssh_action "$_direct_action" "$_sel_idx"
                         exit $?
                     elif [[ $_fuzzy_status -eq 1 ]]; then
                         echo "Connection '$1' not found. Use 'ssh-manager list' to see available connections." >&2

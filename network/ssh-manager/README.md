@@ -33,6 +33,22 @@ sudo ./utils/ssh-manager/ssh-manager.sh
 3. Press `1` to connect via SSH
 4. Press `A` for profile health, import/export and favorites
 
+### Direct connections
+
+```bash
+ssh-manager "Production Server"        # Open SSH
+ssh-manager sshfs "Production Server"  # Open SSHFS + Midnight Commander
+ssh-manager sshfs prod                 # Partial names are supported too
+ssh-manager list                       # List saved connections
+```
+
+The `sshfs` command uses the saved profile, including SSH aliases, ports,
+jump hosts and SSH options. It mounts the remote root directory in a temporary
+directory, opens Midnight Commander and unmounts when you exit MC. It requires
+`sshfs` and `mc`, just like menu option `4`. If the name is ambiguous or not found,
+`fzf` offers a picker when installed; otherwise the command reports an error.
+Quote connection names containing spaces.
+
 ## Configuration
 
 Configuration is stored in `~/.config/manzolo-ssh-manager/config.yaml`

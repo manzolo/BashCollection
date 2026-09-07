@@ -70,6 +70,7 @@ nvidia-manager:
 
 ssh-manager:
   cmd: ["--help"]
+  script: tests/ssh-manager/test.sh
 
 compose-stack-manager:
   cmd: ["--help"]

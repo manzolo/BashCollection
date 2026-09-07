@@ -152,6 +152,7 @@ execute_ssh_action() {
     if [[ "$action" != "sshfs-mc" ]]; then
         pause_for_key
     fi
+    return "$status"
 }
 
 # Execute SSHFS + MC
