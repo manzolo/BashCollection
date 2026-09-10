@@ -331,6 +331,9 @@ bash tests/usb-boot-test/ui-test.sh
 
 ## Changelog
 
+- **2.6.1** — softer TUI palette: light grey text on blue with grey
+  highlights, no red selection bar or bright cyan borders.
+
 - **2.6.0** — desktop controls (USB tablet, fit/native scaling, fullscreen);
   Windows/Generic profiles; muted blue/grey dashboard with emoji navigation, protection
   status, command preview and session log viewer; saved display preferences;

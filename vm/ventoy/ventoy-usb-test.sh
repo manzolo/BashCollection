@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: usb-boot-test
-# PKG_VERSION: 2.6.0
+# PKG_VERSION: 2.6.1
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -35,6 +35,8 @@
 # PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 #
 # Changelog:
+#   2.6.1 - Softer TUI palette: light grey on blue with grey highlights, no
+#           red selection bar or bright cyan borders
 #   2.6.0 - Integrated USB tablet, fit-to-window/fullscreen controls,
 #           Windows/Generic presets, muted emoji dashboard, command preview
 #           and session log viewer; explicit UHCI for USB 1.1 tests
@@ -54,7 +56,7 @@
 set -euo pipefail
 
 readonly SCRIPT_NAME="USB Boot Tester"
-readonly VERSION="2.6.0"
+readonly VERSION="2.6.1"
 
 # Determine the directory where the script is located (resolving symlinks)
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
