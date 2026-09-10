@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: usb-boot-test
-# PKG_VERSION: 2.5.0
+# PKG_VERSION: 2.6.0
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -25,6 +25,8 @@
 #  - --dry-run prints the exact QEMU command line without running it
 #  - Per-run log file, QEMU monitor on a per-run unix socket
 #  - Refuses system disks; detects and offers to unmount auto-mounted partitions
+#  - Windows/Generic profiles, integrated mouse, scaling and fullscreen
+#  - Emoji dashboard with command preview and session log viewer
 #  - Configurable RAM, CPU, VGA, USB controller, network, sound
 #  - OVMF firmware auto-detection (combined and split CODE/VARS layouts)
 #  - Configuration saved under ~/.config/usb-boot-test/
@@ -33,6 +35,9 @@
 # PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 #
 # Changelog:
+#   2.6.0 - Integrated USB tablet, fit-to-window/fullscreen controls,
+#           Windows/Generic presets, muted emoji dashboard, command preview
+#           and session log viewer; explicit UHCI for USB 1.1 tests
 #   2.5.0 - Plain (non-hybrid) ISO 9660 images are attached as a USB CD-ROM
 #           instead of a disk, so they actually boot; boot mode auto-detection
 #           reads the El Torito catalog; --media auto|disk|cdrom; per-user
@@ -49,10 +54,10 @@
 set -euo pipefail
 
 readonly SCRIPT_NAME="USB Boot Tester"
-readonly VERSION="2.5.0"
+readonly VERSION="2.6.0"
 
 # Determine the directory where the script is located (resolving symlinks)
-SCRIPT_PATH="$(readlink -f "$0")"
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 readonly SCRIPT_PATH
 SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 readonly SCRIPT_DIR
@@ -104,6 +109,12 @@ DISK=""
 FORMAT="raw"
 BIOS_MODE="uefi"
 VGA_MODE="virtio"
+# shellcheck disable=SC2034  # consumed by config, menus and QEMU builder
+MOUSE_MODE="tablet"
+# shellcheck disable=SC2034
+DISPLAY_SCALE="fit"
+# shellcheck disable=SC2034
+FULLSCREEN=false
 # shellcheck disable=SC2034
 NETWORK=false
 # shellcheck disable=SC2034
@@ -153,64 +164,63 @@ done
 # ---------------------------------------------------------------------------
 
 main_menu() {
+    local selected="1"
     while true; do
-        local disk_info=""
+        ui_dimensions
+        local disk_info="Choose a USB device or image to get started"
         if [[ -n "$DISK" ]]; then
+            disk_info="$(basename "$DISK")"
             if [[ -b "$DISK" ]]; then
                 local size
                 size=$(lsblk -d -n -o SIZE "$DISK" 2>/dev/null | xargs || echo "?")
-                disk_info="$(basename "$DISK") (${size})"
-            else
-                disk_info="$(basename "$DISK")"
+                disk_info+=" ($size)"
             fi
-        else
-            disk_info="Not selected"
         fi
-
-        # UEFI needs firmware on disk; BIOS is always ready.
-        local boot_icon="✅"
-        if [[ "$BIOS_MODE" == "uefi" && ! -f "$DEFAULT_BIOS" ]]; then
-            boot_icon="⚠️ (OVMF missing)"
-        fi
-        local snap_label="off"
-        [[ "$SNAPSHOT" == true ]] && snap_label="on"
-
+        # Bound long filenames so they cannot push actions out of the dialog.
+        disk_info="${disk_info:0:$((UI_WIDTH - 12))}"
+        local acceleration="TCG" protection="🔒 Snapshot ON · target protected"
+        [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] && acceleration="KVM"
+        [[ "$SNAPSHOT" == false ]] && protection="⚠ Snapshot OFF · guest writes to target"
+        [[ "$MEDIA" == cdrom ]] && protection="🔒 Read-only USB CD-ROM"
+        local boot_status="$BIOS_MODE"
+        [[ "$BIOS_MODE" == uefi && ! -f "$DEFAULT_BIOS" ]] && boot_status="uefi (OVMF missing)"
+        local dashboard="💾 $disk_info\n$protection\n$boot_status · ${MEMORY} MB · ${CORES}c/${THREADS}t/${SOCKETS}s · $acceleration"
         local choice
-        choice=$(whiptail --title "$SCRIPT_NAME v$VERSION" \
-            --menu "Main Menu:" \
-            20 75 10 \
-            "1" "💾 Disk/USB: $disk_info" \
-            "2" "⚙️  Boot: $BIOS_MODE $boot_icon" \
-            "3" "💻 System: ${MEMORY}MB RAM, ${CORES}c CPU" \
-            "4" "🔧 Advanced: VGA=$VGA_MODE, USB=$USB_VERSION, snapshot=$snap_label" \
-            "5" "🔍 Diagnostics & System Info" \
-            "6" "📝 Configuration" \
-            "7" "🚀 START SINGLE TEST!" \
-            "8" "🧪 DUAL TEST (UEFI+BIOS)" \
-            "9" "❓ Help" \
+        choice=$(whiptail --title "🚀 $SCRIPT_NAME · v$VERSION" \
+            --backtitle "USB Boot Tester  |  Arrows: navigate · Enter: select · Esc: back" \
+            --ok-button "Select" --cancel-button "Exit" --default-item "$selected" \
+            --menu "$dashboard" "$UI_HEIGHT" "$UI_WIDTH" "$UI_LIST_HEIGHT" \
+            "1" "🚀 Start boot test" \
+            "2" "💾 Select USB / image" \
+            "3" "✨ Quick profiles · Windows / Generic" \
+            "4" "💻 Hardware · RAM, CPU, USB" \
+            "5" "🖥  Display & mouse · $DISPLAY_SCALE / $MOUSE_MODE" \
+            "6" "⚙️  Boot mode · $BIOS_MODE" \
+            "7" "🔧 Advanced · video, network, audio, snapshot" \
+            "8" "🧪 Dual test · UEFI + BIOS" \
+            "9" "🔍 Tools · command preview, logs, diagnostics, help" \
+            "c" "📝 Configuration · save / load / reset" \
             "0" "🚪 Exit" \
             3>&1 1>&2 2>&3) || true
-
-        case $choice in
-            1) select_disk_menu ;;
-            2) bios_menu ;;
-            3) system_config_menu ;;
-            4) advanced_menu ;;
-            5) diagnostic_menu ;;
-            6) config_management_menu ;;
-            7)
+        [[ -n "$choice" ]] && selected="$choice"
+        case "$choice" in
+            1)
                 if [[ -z "$DISK" ]]; then
-                    whiptail --title "Error" --msgbox "Select a disk first!" 8 40 || true
-                else
-                    confirm_and_run
+                    select_disk_menu || continue
                 fi
+                [[ -n "$DISK" ]] && confirm_and_run
                 ;;
+            2) select_disk_menu || true ;;
+            3) profile_menu ;;
+            4) system_config_menu ;;
+            5) display_menu ;;
+            6) bios_menu ;;
+            7) advanced_menu ;;
             8) test_both_modes ;;
-            9) show_help ;;
+            9) tools_menu ;;
+            c) config_management_menu ;;
             0) clean_exit ;;
             "")
-                # ESC/Cancel on the main menu: confirm instead of quitting
-                # outright (ESC on the confirm dialog counts as "No").
                 if whiptail --title "Exit" --yesno "Exit $SCRIPT_NAME?" 8 40; then
                     clean_exit
                 fi
@@ -240,7 +250,7 @@ show_help() {
     help_text+="1. Select a USB device or image file (ISO, IMG, qcow2, VHD...)\n"
     help_text+="   Plain ISOs boot as a USB CD-ROM, everything else as a USB disk\n"
     help_text+="2. Configure boot mode (UEFI/BIOS/Auto)\n"
-    help_text+="3. Adjust system parameters if needed (RAM, CPU, VGA)\n"
+    help_text+="3. Choose a quick profile (Windows: 8 GiB / Generic: 2 GiB)\n"
     help_text+="4. Start the test (single mode or dual UEFI+BIOS)\n\n"
     help_text+="SNAPSHOT MODE (Advanced menu, default ON):\n"
     help_text+="• Guest writes go to a temporary overlay; the USB/image is\n"
@@ -249,6 +259,9 @@ show_help() {
     help_text+="• UEFI: Modern, requires OVMF\n"
     help_text+="• BIOS: Legacy, for older systems\n"
     help_text+="• Auto: EFI System Partition on disks, El Torito catalog on ISOs\n\n"
+    help_text+="DISPLAY: integrated mouse and fit-to-window by default.\n"
+    help_text+="Use Display & Mouse for native scale or fullscreen.\n"
+    help_text+="Tools contains the command preview and last run log.\n\n"
     help_text+="QEMU CONTROLS:\n"
     help_text+="• Ctrl+Alt+G: Release mouse\n"
     help_text+="• Ctrl+Alt+F: Fullscreen\n"
@@ -285,6 +298,10 @@ Boot mode:
                         exists; for plain ISOs, from the El Torito catalog
 
 Virtual hardware:
+  --profile windows|generic
+                        windows: 8192 MB, 4 cores, q35, USB 3.0, std VGA,
+                        integrated mouse and fit-to-window; generic: 2048 MB, VirtIO
+                        put individual overrides after the profile
   --ram MB              memory in MB                     (default: $MEMORY)
   --cores N             CPU cores                        (default: $CORES)
   --machine TYPE        q35 | pc | microvm               (default: $MACHINE_TYPE)
@@ -298,6 +315,13 @@ Virtual hardware:
   --net                 enable user-mode network (e1000)
   --sound               enable Intel HDA audio
   --ovmf PATH           OVMF firmware file (OVMF.fd or OVMF_CODE*.fd)
+
+Display and input (ignored with --vga none):
+  --mouse tablet|relative
+                        integrated pointer or legacy mouse (default: $MOUSE_MODE)
+  --scale fit|native    fit image to window or native size (default: $DISPLAY_SCALE)
+  --fullscreen          start fullscreen
+  --windowed            start in a window (default)
 
 Safety:
   --no-snapshot         let the guest write to TARGET (default: snapshot on,
@@ -319,6 +343,7 @@ Files:
 Examples:
   sudo $(basename "$0") /dev/sdb
   sudo $(basename "$0") --bios --ram 1024 /dev/sdb
+  sudo $(basename "$0") --profile windows /dev/sdb
   $(basename "$0") --vga none --dry-run ~/ventoy.img
 EOF
 }
@@ -335,6 +360,15 @@ parse_args() {
             --uefi) BIOS_MODE="uefi"; CLI_BOOT_SET=true ;;
             --bios) BIOS_MODE="bios"; CLI_BOOT_SET=true ;;
             --auto) BIOS_MODE="auto"; CLI_BOOT_SET=true ;;
+            --profile)
+                case "${2:-}" in windows|generic) ;; *) die "--profile must be windows or generic" ;; esac
+                apply_hardware_profile "$2"
+                shift
+                ;;
+            --mouse) MOUSE_MODE="${2:-}"; [[ $# -gt 1 ]] || die "--mouse requires tablet or relative"; shift ;;
+            --scale) DISPLAY_SCALE="${2:-}"; [[ $# -gt 1 ]] || die "--scale requires fit or native"; shift ;;
+            --fullscreen) FULLSCREEN=true ;;
+            --windowed) FULLSCREEN=false ;;
             --ram) MEMORY="${2:-}"; shift ;;
             --cores) CORES="${2:-}"; shift ;;
             --machine) MACHINE_TYPE="${2:-}"; shift ;;
@@ -376,6 +410,8 @@ parse_args() {
     case "$MACHINE_TYPE" in q35|pc|microvm) ;; *) die "--machine must be q35, pc or microvm" ;; esac
     case "$BIOS_MODE" in uefi|bios|auto) ;; *) die "boot mode must be uefi, bios or auto" ;; esac
     case "$MEDIA_MODE" in auto|disk|cdrom) ;; *) die "--media must be auto, disk or cdrom" ;; esac
+    case "$MOUSE_MODE" in tablet|relative) ;; *) die "--mouse must be tablet or relative" ;; esac
+    case "$DISPLAY_SCALE" in fit|native) ;; *) die "--scale must be fit or native" ;; esac
 }
 
 run_cli() {
@@ -475,6 +511,7 @@ main() {
         exit 1
     fi
     trap cleanup_run_artifacts EXIT INT TERM
+    ui_init
     initial_checks
     main_menu
 }

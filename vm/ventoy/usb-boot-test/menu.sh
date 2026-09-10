@@ -87,7 +87,7 @@ system_config_menu() {
         local choice
         choice=$(whiptail --title "System Configuration" \
             --menu "Virtual hardware configuration:" \
-            18 70 8 \
+            19 70 9 \
             "1" "RAM: ${MEMORY}MB" \
             "2" "CPU Cores: $CORES" \
             "3" "CPU Threads/core: $THREADS" \
@@ -95,11 +95,12 @@ system_config_menu() {
             "5" "Machine Type: $MACHINE_TYPE" \
             "6" "Disk Format: $FORMAT" \
             "7" "USB Version: $USB_VERSION" \
-            "8" "Back to main menu" \
+            "8" "Quick profiles (Windows / Generic)" \
+            "9" "Back to main menu" \
             3>&1 1>&2 2>&3) || true
 
         case $choice in
-            1) prompt_number MEMORY "RAM Configuration" "RAM in MB (recommended: 1024-4096):" 128 262144 ;;
+            1) prompt_number MEMORY "RAM Configuration" "RAM in MB (Windows profile: 8192):" 128 262144 ;;
             2) prompt_number CORES "CPU Cores" "Number of CPU cores (1-$(nproc)):" 1 "$(nproc)" ;;
             3) prompt_number THREADS "CPU Threads" "Threads per core (1-2):" 1 2 ;;
             4) prompt_number SOCKETS "CPU Sockets" "Number of CPU sockets (usually 1):" 1 4 ;;
@@ -123,7 +124,8 @@ system_config_menu() {
                     "2.0" "USB 2.0 (EHCI)" \
                     "3.0" "USB 3.0 (xHCI)"
                 ;;
-            8|"") break ;;
+            8) profile_menu ;;
+            9|"") break ;;
         esac
     done
 }
@@ -188,7 +190,7 @@ advanced_menu() {
         local choice
         choice=$(whiptail --title "Advanced Options" \
             --menu "Additional configurations:" \
-            18 70 8 \
+            19 70 9 \
             "1" "VGA: $VGA_MODE" \
             "2" "Network: $network_status" \
             "3" "Audio: $sound_status" \
@@ -196,7 +198,8 @@ advanced_menu() {
             "5" "Media: $media_status" \
             "6" "QEMU Monitor info" \
             "7" "OVMF Management" \
-            "8" "Back to main menu" \
+            "8" "Display and mouse: $DISPLAY_SCALE / $MOUSE_MODE" \
+            "9" "Back to main menu" \
             3>&1 1>&2 2>&3) || true
 
         case $choice in
@@ -235,7 +238,36 @@ advanced_menu() {
                     14 72 || true
                 ;;
             7) ovmf_management_menu ;;
-            8|"") break ;;
+            8) display_menu ;;
+            9|"") break ;;
+        esac
+    done
+}
+
+# --- Display and pointer --------------------------------------------------
+display_menu() {
+    while true; do
+        local choice
+        choice=$(whiptail --title "Display and Mouse" \
+            --menu "Display options (ignored in headless mode):" 15 72 4 \
+            "1" "Mouse: $MOUSE_MODE" \
+            "2" "Image scaling: $DISPLAY_SCALE" \
+            "3" "Start fullscreen: $FULLSCREEN" \
+            "4" "Back" 3>&1 1>&2 2>&3) || true
+        case "$choice" in
+            1)
+                prompt_choice MOUSE_MODE "Mouse" "Select pointer mode:" 12 70 2 \
+                    "tablet" "Integrated pointer (recommended)" \
+                    "relative" "Legacy mouse (Ctrl+Alt+G releases capture)"
+                ;;
+            2)
+                prompt_choice DISPLAY_SCALE "Image Scaling" \
+                    "Scale the image; guest resolution is configured inside the VM." 12 76 2 \
+                    "fit" "Fit image to window (recommended)" \
+                    "native" "Native image size"
+                ;;
+            3) [[ "$FULLSCREEN" == true ]] && FULLSCREEN=false || FULLSCREEN=true ;;
+            4|"") break ;;
         esac
     done
 }

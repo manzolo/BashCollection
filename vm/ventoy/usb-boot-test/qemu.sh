@@ -30,7 +30,7 @@ build_qemu_command() {
 
     # USB controller based on version
     case "$USB_VERSION" in
-        "1.1") qemu_cmd+=(-usb -device usb-storage,drive=usb-drive) ;;
+        "1.1") qemu_cmd+=(-device piix3-usb-uhci,id=uhci -device usb-storage,bus=uhci.0,drive=usb-drive) ;;
         "2.0") qemu_cmd+=(-device ich9-usb-ehci1,id=ehci -device usb-storage,bus=ehci.0,drive=usb-drive) ;;
         "3.0") qemu_cmd+=(-device qemu-xhci,id=xhci -device usb-storage,bus=xhci.0,drive=usb-drive) ;;
     esac
@@ -50,7 +50,7 @@ build_qemu_command() {
     qemu_cmd+=(-drive "$drive")
 
     # KVM if available
-    if [[ -c /dev/kvm && -r /dev/kvm ]]; then
+    if [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]]; then
         qemu_cmd+=(-enable-kvm -cpu host,kvm=on)
     else
         qemu_cmd+=(-cpu qemu64)
@@ -70,7 +70,21 @@ build_qemu_command() {
     # devices").
     if [[ "$VGA_MODE" != "none" ]]; then
         qemu_cmd+=(-vga "$VGA_MODE")
-        qemu_cmd+=(-display gtk,show-cursor=on)
+        local display="gtk,show-cursor=on"
+        [[ "$DISPLAY_SCALE" == fit ]] && display+=",zoom-to-fit=on" || display+=",zoom-to-fit=off"
+        [[ "$FULLSCREEN" == true ]] && display+=",full-screen=on" || display+=",full-screen=off"
+        qemu_cmd+=(-display "$display")
+        if [[ "$MOUSE_MODE" == tablet ]]; then
+            case "$USB_VERSION" in
+                "1.1") qemu_cmd+=(-device usb-tablet,bus=uhci.0) ;;
+                "2.0")
+                    # The tablet is full-speed: EHCI alone cannot serve it.
+                    # Keep the tested storage on EHCI and provide a UHCI bus.
+                    qemu_cmd+=(-device piix3-usb-uhci,id=tablet-usb -device usb-tablet,bus=tablet-usb.0)
+                    ;;
+                "3.0") qemu_cmd+=(-device usb-tablet,bus=xhci.0) ;;
+            esac
+        fi
     else
         qemu_cmd+=(-display none)
     fi
@@ -237,11 +251,14 @@ confirm_and_run() {
     summary+="• CPU: ${CORES}c/${THREADS}t/${SOCKETS}s\n"
     summary+="• USB: $USB_VERSION\n"
     summary+="• VGA: $VGA_MODE\n"
+    if [[ "$VGA_MODE" != none ]]; then
+        summary+="• Mouse: $MOUSE_MODE / Scale: $DISPLAY_SCALE / Fullscreen: $FULLSCREEN\n"
+    fi
     summary+="• Network: $([[ $NETWORK == true ]] && echo "Yes" || echo "No")\n"
     summary+="• Audio: $([[ $SOUND == true ]] && echo "Yes" || echo "No")\n\n"
     summary+="Press Ctrl+C in the terminal to terminate QEMU."
 
-    if ! whiptail --title "Confirm and Start" --yesno "$summary" 21 64; then
+    if ! whiptail --title "Confirm and Start" --yesno "$summary" 23 78; then
         return
     fi
 

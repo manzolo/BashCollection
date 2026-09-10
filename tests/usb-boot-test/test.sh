@@ -83,13 +83,57 @@ expect_not "-bios"
 expect_not "4444"
 
 echo "→ USB controller variants"
-run 0 --dry-run --bios --usb 1.1 "$WORK/mbr.img"; expect " -usb "
+run 0 --dry-run --bios --usb 1.1 "$WORK/mbr.img"; expect "usb-storage,bus=uhci.0"
 run 0 --dry-run --bios --usb 3.0 "$WORK/mbr.img"; expect "qemu-xhci"
 
 echo "→ --no-snapshot"
 run 0 --dry-run --bios --no-snapshot "$WORK/mbr.img"
 expect "# snapshot:  false"
 expect_not "snapshot=on"
+
+echo "→ desktop defaults and USB tablet routing"
+run 0 --dry-run --bios "$WORK/mbr.img"
+expect "zoom-to-fit=on"
+expect "full-screen=off"
+expect "usb-tablet,bus=xhci.0"
+run 0 --dry-run --bios --usb 2.0 "$WORK/mbr.img"
+expect "usb-storage,bus=ehci.0"
+expect "piix3-usb-uhci,id=tablet-usb"
+expect "usb-tablet,bus=tablet-usb.0"
+run 0 --dry-run --bios --usb 1.1 "$WORK/mbr.img"
+expect "-device usb-tablet,bus=uhci.0"
+expect_not "tablet-usb"
+
+echo "→ display overrides and headless isolation"
+run 0 --dry-run --bios --mouse relative --scale native --fullscreen "$WORK/mbr.img"
+expect_not "usb-tablet"
+expect "zoom-to-fit=off"
+expect "full-screen=on"
+run 0 --dry-run --bios --fullscreen --windowed "$WORK/mbr.img"
+expect "full-screen=off"
+run 0 --dry-run --bios --vga none --fullscreen --usb 2.0 "$WORK/mbr.img"
+expect "-display none"
+expect_not "usb-tablet"
+expect_not "tablet-usb"
+expect_not "gtk"
+
+echo "→ Windows profile, explicit overrides and protection"
+run 0 --dry-run --bios --profile windows "$WORK/mbr.img"
+expect "-m 8192"
+expect "cores=4,threads=1,sockets=1"
+expect "-vga std"
+expect "snapshot=on"
+expect "usb-storage,bus=xhci.0"
+expect "-nic none"
+expect_not "audiodev"
+run 0 --dry-run --bios --no-snapshot --profile windows --ram 4096 --cores 2 --vga none "$WORK/mbr.img"
+expect "-m 4096"
+expect "cores=2,"
+expect "# snapshot:  false"
+expect_not "gtk"
+run 0 --dry-run --bios --profile windows --profile generic "$WORK/mbr.img"
+expect "-m 2048"
+expect "-vga virtio"
 
 echo "→ boot-mode auto-detection"
 run 0 --dry-run --auto --vga none "$WORK/gpt.img";    expect "# boot-mode: uefi"
@@ -135,7 +179,17 @@ run 2 --bogus-option
 run 2 --dry-run --ram abc "$WORK/mbr.img"
 run 2 --dry-run --usb 4.0 "$WORK/mbr.img"
 run 2 --dry-run --media dvd "$WORK/mbr.img"
+run 2 --profile linux
+run 2 --profile
+run 2 --mouse
+run 2 --scale
+run 2 --dry-run --mouse broken "$WORK/mbr.img"
+run 2 --dry-run --scale broken "$WORK/mbr.img"
 run 2 --dry-run "$WORK/mbr.img" "$WORK/gpt.img"
 run 2 --dry-run   # target required
 
 echo "usb-boot-test functional test: PASS"
+
+# The TUI/configuration regressions use the repository modules and temp files.
+TEST_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+bash "$TEST_DIR/ui-test.sh"

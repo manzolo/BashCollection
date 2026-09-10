@@ -79,7 +79,7 @@ each tool lives under one of seven domain directories.
 - **vm-disk-manager**: Interactive VM disk operations (resize, partition, NBD mounting, QEMU testing)
 - **vm-create-disk**, **vm-clone**, **vm-iso-manager**, **compress-qemu-hd**
 - **manzolo-chroot (mchroot)** [`vm/chroot/`]: Chroot into physical/virtual disks with NBD, LUKS, LVM
-- **usb-boot-test (ventoy-usb-test)** [`vm/ventoy/`]: Test bootable USB/disks in QEMU (UEFI/BIOS)
+- **usb-boot-test (ventoy-usb-test)** [`vm/ventoy/`]: Test USB/disks in QEMU with Windows/Generic profiles, integrated mouse, display controls and an interactive dashboard (UEFI/BIOS)
 
 ### [disk/](disk/) — Disk & storage operations
 - **manzolo-disk-clone** [`disk/disk-cloner/`]: Clone disks with UUID preservation, LUKS, dry-run

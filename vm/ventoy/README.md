@@ -8,6 +8,7 @@ scriptable CLI. Formerly `ventoy-usb-test`; the old name still works.
 sudo usb-boot-test /dev/sdb                  # boot the stick, auto-detect UEFI/BIOS
 usb-boot-test ~/Downloads/ubuntu-24.04.iso   # boot an ISO, no root needed
 usb-boot-test --dry-run --bios ventoy.img    # just print the QEMU command line
+sudo usb-boot-test --profile windows /dev/sdb # Windows: 8 GiB, integrated mouse
 sudo usb-boot-test                           # interactive TUI
 ```
 
@@ -37,6 +38,12 @@ sudo usb-boot-test                           # interactive TUI
 - **Reproducible**: `--dry-run` prints the exact QEMU command line, every run
   writes a log, the QEMU monitor listens on a per-run unix socket so several
   instances can coexist.
+
+- **Desktop controls**: integrated USB tablet and fit-to-window scaling by
+  default, optional native scaling and fullscreen. Windows and Generic quick
+  profiles are available in both the CLI and TUI.
+- **Dashboard**: muted blue/grey theme with emoji navigation, visible snapshot
+  status, command preview and the last run log. Existing newt themes are honoured.
 
 ## Installation
 
@@ -75,6 +82,10 @@ usb-boot-test --dry-run [OPTIONS] TARGET
 |--------|---------|---------|
 | `--uefi` / `--bios` / `--auto` | boot mode | `auto` |
 | `--media auto\|disk\|cdrom` | present TARGET as a USB disk or a USB CD-ROM | `auto` |
+| `--profile windows\|generic` | apply hardware defaults; later flags override them | no preset |
+| `--mouse tablet\|relative` | integrated pointer or legacy capture | `tablet` |
+| `--scale fit\|native` | fit the image to the window or use native size | `fit` |
+| `--fullscreen` / `--windowed` | initial window state | windowed |
 | `--ram MB` | guest memory | 2048 |
 | `--cores N` | guest CPU cores | 4 |
 | `--machine q35\|pc\|microvm` | QEMU machine type | `q35` |
@@ -91,6 +102,24 @@ usb-boot-test --dry-run [OPTIONS] TARGET
 Exit status: QEMU's when a VM was run, `2` for usage or precondition errors
 (target missing, OVMF missing, mounted partitions, ...).
 
+### Desktop profiles
+
+`--profile windows` applies 8192 MB RAM, 4 cores (one thread/core, one
+socket), q35, USB 3.0, standard VGA, integrated mouse and fit-to-window.
+`--profile generic` applies the same CPU, USB and input defaults with
+2048 MB and VirtIO video. They preserve the target, boot mode, snapshot,
+network, audio and fullscreen choice.
+
+Options are applied from left to right: `--profile windows --ram 4096`
+uses the Windows preset with 4 GiB. The CLI starts from built-in defaults;
+the saved configuration is loaded by the interactive TUI.
+
+Scaling enlarges the displayed image; it does not guarantee that the guest
+changes its desktop resolution. Adjust resolution inside Windows if needed.
+Black bars can remain when the guest and window have different aspect ratios.
+The tablet needs a guest USB driver; `--mouse relative` restores legacy input.
+Headless mode (`--vga none`) ignores all display and mouse options.
+
 ### Examples
 
 ```bash
@@ -98,8 +127,11 @@ Exit status: QEMU's when a VM was run, `2` for usage or precondition errors
 sudo usb-boot-test --uefi --net /dev/sdb
 sudo usb-boot-test --bios --net /dev/sdb
 
-# Windows installer USB: more RAM, unmount whatever the desktop auto-mounted
-sudo usb-boot-test --uefi --ram 4096 --unmount /dev/sdc
+# Windows USB: desktop preset, unmount auto-mounted partitions
+sudo usb-boot-test --profile windows --uefi --unmount /dev/sdc
+
+# Windows preset with custom RAM and fullscreen
+sudo usb-boot-test --profile windows --ram 4096 --fullscreen /dev/sdc
 
 # Rescue ISO, headless, guest serial console on the terminal (Ctrl+C quits)
 usb-boot-test --vga none ~/iso/systemrescue.iso
@@ -136,14 +168,22 @@ on exit).
 
 | Menu | What you set |
 |------|--------------|
-| **Disk/USB** | pick a removable device from the detected list, browse for an image file, or type a path. Format and media type are detected on selection. |
-| **Boot** | `uefi`, `bios`, or `auto` (runs detection on the selected target and tells you why it chose what it chose). |
-| **System** | RAM, cores, threads, sockets, machine type. |
-| **Advanced** | VGA, network, audio, snapshot on/off, media type (auto/disk/cdrom), USB controller version, QEMU monitor info, OVMF management. |
-| **Diagnostics** | hardware info, KVM test, dependency check. |
-| **Configuration** | save / load / reset. Saved automatically before each run. |
-| **START SINGLE TEST** | summary, confirmation, unmount check, run. |
-| **DUAL TEST** | UEFI run, then BIOS run, on the same target. |
+| **Start boot test** | choose a target if needed, then review the configuration and run. |
+| **Select USB / image** | removable devices, image browser or a custom path. |
+| **Quick profiles** | Windows (8 GiB, standard VGA) or Generic (2 GiB, VirtIO); keeps the selected target and snapshot setting. |
+| **Hardware** | RAM, cores, threads, sockets, machine type, disk format and USB version. |
+| **Display & mouse** | integrated/relative pointer, fit/native scaling and fullscreen. |
+| **Boot mode** | UEFI, BIOS, or detection from the selected target. |
+| **Advanced** | VGA, network, audio, snapshot, media type, monitor info and OVMF. |
+| **Dual test** | UEFI then BIOS on the same target. |
+| **Tools** | preview the QEMU command without booting, read the last run log in this session, diagnostics and help. |
+| **Configuration** | save, load or reset; saved automatically before a single test. |
+
+The dashboard shows target, protection status, boot mode, RAM, CPU topology
+and KVM availability. It fits an 80×24 terminal and grows up to 100 columns;
+the selected menu item is retained when returning from a submenu. For the
+new theme, leave `NEWT_COLORS` and `NEWT_COLORS_FILE` unset; set either to
+keep your preferred newt palette.
 
 ESC on the main menu asks before quitting; ESC in a sub-dialog just goes back
 without changing anything.
@@ -183,6 +223,9 @@ DISK="/dev/sdb"
 FORMAT="raw"
 BIOS_MODE="uefi"
 VGA_MODE="virtio"
+MOUSE_MODE="tablet"
+DISPLAY_SCALE="fit"
+FULLSCREEN=false
 NETWORK=false
 SOUND=false
 USB_VERSION="3.0"
@@ -271,6 +314,7 @@ vm/ventoy/
     ├── menu.sh                  # whiptail menus
     ├── ovmf.sh                  # OVMF discovery, pflash/-bios args, install/compile
     ├── qemu.sh                  # QEMU command line, target safety, run
+    ├── ui.sh                    # dashboard theme, profiles, command preview and logs
     ├── utils.sh                 # dual test, KVM test
     └── x11.sh                   # X11 access for root under sudo
 ```
@@ -281,9 +325,16 @@ The functional test in `tests/usb-boot-test/test.sh` exercises the CLI in
 
 ```bash
 PKG_BIN=./vm/ventoy/ventoy-usb-test.sh tests/usb-boot-test/test.sh
+bash tests/usb-boot-test/ui-test.sh
+./menage_scripts.sh build usb-boot-test
 ```
 
 ## Changelog
+
+- **2.6.0** — desktop controls (USB tablet, fit/native scaling, fullscreen);
+  Windows/Generic profiles; muted blue/grey dashboard with emoji navigation, protection
+  status, command preview and session log viewer; saved display preferences;
+  explicit UHCI controller for USB 1.1 tests, including q35 machines.
 
 - **2.5.0** — plain ISO 9660 images boot as a USB CD-ROM (they never booted
   as a disk); boot-mode auto-detection reads the El Torito catalog;

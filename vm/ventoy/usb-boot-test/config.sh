@@ -14,6 +14,9 @@ DISK:path
 FORMAT:word
 BIOS_MODE:word
 VGA_MODE:word
+MOUSE_MODE:mouse
+DISPLAY_SCALE:scale
+FULLSCREEN:bool
 NETWORK:bool
 SOUND:bool
 USB_VERSION:word
@@ -27,6 +30,8 @@ _config_value_ok() {
     case "$kind" in
         number) [[ "$value" =~ ^[0-9]+$ ]] ;;
         bool)   [[ "$value" == true || "$value" == false ]] ;;
+        mouse)  [[ "$value" == tablet || "$value" == relative ]] ;;
+        scale)  [[ "$value" == fit || "$value" == native ]] ;;
         word)   [[ "$value" =~ ^[A-Za-z0-9._-]+$ ]] ;;
         path)   [[ "$value" != *$'\n'* ]] ;;
         *)      return 1 ;;
@@ -90,6 +95,9 @@ load_config() {
         DISK=""
     fi
     case "$MEDIA_MODE" in auto|disk|cdrom) ;; *) MEDIA_MODE="auto" ;; esac
+    case "$MOUSE_MODE" in tablet|relative) ;; *) MOUSE_MODE="tablet" ;; esac
+    case "$DISPLAY_SCALE" in fit|native) ;; *) DISPLAY_SCALE="fit" ;; esac
+    case "$FULLSCREEN" in true|false) ;; *) FULLSCREEN=false ;; esac
     refresh_media_type
 }
 
@@ -104,10 +112,32 @@ reset_to_defaults() {
     FORMAT="raw"
     BIOS_MODE="uefi"
     VGA_MODE="virtio"
+    MOUSE_MODE="tablet"
+    DISPLAY_SCALE="fit"
+    FULLSCREEN=false
     NETWORK=false
     SOUND=false
     USB_VERSION="3.0"
     SNAPSHOT=true
     MEDIA_MODE="auto"
     MEDIA="disk"
+}
+
+# Apply only hardware/display defaults. Preserve the target, firmware choice,
+# media, snapshot protection, network and audio settings.
+# shellcheck disable=SC2034
+apply_hardware_profile() {
+    MEMORY="8192"
+    CORES="4"
+    THREADS="1"
+    SOCKETS="1"
+    MACHINE_TYPE="q35"
+    USB_VERSION="3.0"
+    VGA_MODE="std"
+    MOUSE_MODE="tablet"
+    DISPLAY_SCALE="fit"
+    if [[ "${1:-windows}" == generic ]]; then
+        MEMORY="2048"
+        VGA_MODE="virtio"
+    fi
 }
