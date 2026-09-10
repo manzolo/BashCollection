@@ -92,7 +92,7 @@ usb-boot-test --dry-run [OPTIONS] TARGET
 | `--usb 1.1\|2.0\|3.0` | USB controller the drive hangs off | `3.0` |
 | `--vga virtio\|std\|cirrus\|qxl\|none` | video; `none` is headless with the guest serial console on the terminal | `virtio` |
 | `--format FMT` | force the disk format (raw, qcow2, vpc, vdi, vmdk) | detected |
-| `--net` / `--sound` | user-mode e1000 network / Intel HDA audio | off |
+| `--net` / `--sound` (`--audio`) | user-mode e1000 network / Intel HDA audio | off |
 | `--ovmf PATH` | OVMF firmware (`OVMF.fd` or `OVMF_CODE*.fd`) | auto-detected |
 | `--no-snapshot` | let the guest write to TARGET | snapshot on |
 | `--unmount` | unmount auto-mounted partitions of TARGET before booting | refuse |
@@ -330,6 +330,11 @@ bash tests/usb-boot-test/ui-test.sh
 ```
 
 ## Changelog
+
+- **2.6.2** — `--sound` under `sudo` uses the invoking user's PulseAudio/PipeWire
+  socket (`/run/user/<uid>/pulse/native`) instead of failing with
+  "XDG_RUNTIME_DIR not set"; with no server audio is muted, not fatal;
+  `--audio` is an alias for `--sound`.
 
 - **2.6.1** — softer TUI palette: light grey text on blue with grey
   highlights, no red selection bar or bright cyan borders.

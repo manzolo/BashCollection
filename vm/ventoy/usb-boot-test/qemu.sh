@@ -19,6 +19,37 @@ shell_join() {
 
 # Build the QEMU argument list for the current configuration, one token per
 # line so callers can `readarray -t` it into an array.
+# PulseAudio/PipeWire server for QEMU's pa backend. Under sudo root has no
+# XDG_RUNTIME_DIR, so QEMU refuses to start ("XDG_RUNTIME_DIR not set",
+# exit 1): borrow the invoking user's runtime directory (and pulse cookie)
+# and point the backend at the socket explicitly. Without any server the
+# audio device stays but is muted (-audiodev none) instead of aborting.
+audio_server_socket() {
+    local dir="${XDG_RUNTIME_DIR:-}"
+    if [[ -z "$dir" && "$EUID" -eq 0 && -n "${SUDO_UID:-}" ]]; then
+        dir="/run/user/$SUDO_UID"
+        if [[ -z "${PULSE_COOKIE:-}" && -n "${SUDO_USER:-}" ]]; then
+            local cookie
+            cookie="$(getent passwd "$SUDO_USER" | cut -d: -f6)/.config/pulse/cookie"
+            [[ -r "$cookie" ]] && export PULSE_COOKIE="$cookie"
+        fi
+    fi
+    [[ -n "$dir" && -S "$dir/pulse/native" ]] || return 1
+    printf '%s' "$dir/pulse/native"
+}
+
+audio_backend() {
+    local socket
+    if socket=$(audio_server_socket); then
+        printf 'pa,id=audio0,server=unix:%s' "$socket"
+    elif [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+        printf 'pa,id=audio0'   # let libpulse find the server itself
+    else
+        log_warn "No PulseAudio/PipeWire server found (XDG_RUNTIME_DIR unset, no /run/user/<uid>/pulse/native): audio disabled" >&2
+        printf 'none,id=audio0'
+    fi
+}
+
 build_qemu_command() {
     local qemu_cmd=(
         qemu-system-x86_64
@@ -98,7 +129,7 @@ build_qemu_command() {
 
     # Audio
     if [[ "$SOUND" == true ]]; then
-        qemu_cmd+=(-audiodev pa,id=audio0 -device intel-hda -device hda-duplex,audiodev=audio0)
+        qemu_cmd+=(-audiodev "$(audio_backend)" -device intel-hda -device hda-duplex,audiodev=audio0)
     fi
 
     # Monitor on a per-run unix socket (no fixed TCP port, so several instances

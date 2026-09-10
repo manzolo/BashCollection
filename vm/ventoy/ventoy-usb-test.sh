@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: usb-boot-test
-# PKG_VERSION: 2.6.1
+# PKG_VERSION: 2.6.2
 # PKG_SECTION: utils
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -35,6 +35,9 @@
 # PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 #
 # Changelog:
+#   2.6.2 - --sound under sudo: use the invoking user's PulseAudio/PipeWire
+#           socket instead of failing with "XDG_RUNTIME_DIR not set"; without
+#           a server audio is muted, not fatal; --audio alias for --sound
 #   2.6.1 - Softer TUI palette: light grey on blue with grey highlights, no
 #           red selection bar or bright cyan borders
 #   2.6.0 - Integrated USB tablet, fit-to-window/fullscreen controls,
@@ -56,7 +59,7 @@
 set -euo pipefail
 
 readonly SCRIPT_NAME="USB Boot Tester"
-readonly VERSION="2.6.1"
+readonly VERSION="2.6.2"
 
 # Determine the directory where the script is located (resolving symlinks)
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
@@ -315,7 +318,8 @@ Virtual hardware:
                         (default: auto — plain ISO 9660 images without a
                         partition table become a CD-ROM, the rest a disk)
   --net                 enable user-mode network (e1000)
-  --sound               enable Intel HDA audio
+  --sound, --audio      enable Intel HDA audio (PulseAudio/PipeWire; under sudo
+                        the invoking user's server is used)
   --ovmf PATH           OVMF firmware file (OVMF.fd or OVMF_CODE*.fd)
 
 Display and input (ignored with --vga none):
@@ -380,7 +384,7 @@ parse_args() {
             --media) MEDIA_MODE="${2:-}"; shift ;;
             --ovmf) DEFAULT_BIOS="${2:-}"; shift ;;
             --net) NETWORK=true ;;
-            --sound) SOUND=true ;;
+            --sound|--audio) SOUND=true ;;
             --no-snapshot) SNAPSHOT=false ;;
             --snapshot) SNAPSHOT=true ;;
             --unmount) CLI_UNMOUNT=true ;;
