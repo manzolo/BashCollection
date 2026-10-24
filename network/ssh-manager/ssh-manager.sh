@@ -1,6 +1,6 @@
 #!/bin/bash
 # PKG_NAME: ssh-manager
-# PKG_VERSION: 2.8.0
+# PKG_VERSION: 2.8.1
 # PKG_SECTION: admin
 # PKG_PRIORITY: optional
 # PKG_ARCHITECTURE: all
@@ -24,7 +24,7 @@
 # PKG_HOMEPAGE: https://github.com/manzolo/BashCollection
 
 # Enhanced SSH Manager
-# Version: 2.8.0 - Add "sshfs CONNECTION-NAME" command (SSHFS + Midnight Commander from CLI)
+# Version: 2.8.1 - Fix arithmetic error on fuzzy lookup with no match ("ssh-manager <unknown>")
 
 # Get script directory for module loading
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -36,7 +36,7 @@ export CONFIG_FILE="$CONFIG_DIR/config.json"
 # shellcheck disable=SC2034
 export LOG_FILE="$CONFIG_DIR/ssh-manager.log"
 # shellcheck disable=SC2034
-export VERSION="2.8.0"
+export VERSION="2.8.1"
 
 # Source all modules
 for module in "$SCRIPT_DIR/ssh-manager/"*.sh; do

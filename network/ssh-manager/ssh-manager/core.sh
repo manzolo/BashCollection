@@ -519,7 +519,8 @@ find_server_fuzzy() {
         .key' "$CONFIG_FILE")
 
     local count
-    count=$(echo "$matches" | grep -c '[0-9]' 2>/dev/null || echo 0)
+    # grep -c already prints 0 on no match (exit 1): "|| echo 0" would yield "0\n0"
+    count=$(grep -c '[0-9]' <<<"$matches")
 
     if [[ "$count" -eq 0 ]]; then
         return 1
